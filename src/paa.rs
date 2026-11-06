@@ -245,9 +245,9 @@ impl Paa {
             // LZO compress large mipmaps like the engine's own tools do.
             if compression != "RGBA" && w > 128 {
                 let compressed = lzo1x::compress(&mipmap, lzo1x::CompressLevel::default());
+                // The stream already ends with the LZO end marker (11 00 00); a byte after it makes the
+                // game reject the mipmap.
                 if compressed.len() < mipmap.len() {
-                    let mut compressed = compressed;
-                    compressed.push(0); // LZO terminator
                     mipmap = compressed;
                 }
             }
@@ -333,7 +333,15 @@ impl Paa {
         let mut current_height = self.height;
         for mipmap in &self.mipmaps {
             let mut w = current_width;
-            if self.compression != "RGBA" && current_width > 128 {
+            // Only mipmaps that are smaller than their uncompressed size are LZO streams; the others
+            // (LZO did not help) are stored raw and must not be marked.
+            let raw = match self.compression.as_str() {
+                "DXT1" => Some(Format::Bc1.compressed_size(current_width as usize, current_height as usize)),
+                "DXT2" | "DXT3" => Some(Format::Bc2.compressed_size(current_width as usize, current_height as usize)),
+                "DXT4" | "DXT5" => Some(Format::Bc3.compressed_size(current_width as usize, current_height as usize)),
+                _ => None,
+            };
+            if current_width > 128 && raw.map_or(false, |raw| mipmap.len() < raw) {
                 w |= 0x8000; // LZO compressed
             }
             output.write_u16::<LittleEndian>(w)?;
