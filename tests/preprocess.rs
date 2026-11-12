@@ -4,7 +4,7 @@ use std::path::{PathBuf};
 
 use tempfile::{tempdir};
 
-use armake2::preprocess::*;
+use dayzmake::preprocess::*;
 
 #[test]
 fn test_preprocess_macros() {

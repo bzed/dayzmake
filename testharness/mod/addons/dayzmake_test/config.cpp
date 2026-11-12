@@ -1,9 +1,9 @@
-#define ARMAKE2_TEST_NAME "armake2 test"
-#define ARMAKE2_TEST_VERSION 1.0
+#define DAYZMAKE_TEST_NAME "dayzmake test"
+#define DAYZMAKE_TEST_VERSION 1.0
 
 class CfgPatches
 {
-	class armake2_test
+	class dayzmake_test
 	{
 		units[] = {};
 		weapons[] = {};
@@ -17,16 +17,16 @@ class CfgPatches
 
 class CfgMods
 {
-	class armake2_test
+	class dayzmake_test
 	{
-		dir = "armake2_test";
+		dir = "dayzmake_test";
 		picture = "";
 		action = "";
 		hideName = 1;
 		hidePicture = 1;
-		name = ARMAKE2_TEST_NAME;
-		credits = "armake2 test harness";
-		author = "armake2 test harness";
+		name = DAYZMAKE_TEST_NAME;
+		credits = "dayzmake test harness";
+		author = "dayzmake test harness";
 		authorID = "0";
 		version = "1.0";
 		extra = 0;
@@ -41,7 +41,7 @@ class CfgMods
 				value = "";
 				files[] =
 				{
-					"armake2_test/scripts/5_Mission"
+					"dayzmake_test/scripts/5_Mission"
 				};
 			};
 		};

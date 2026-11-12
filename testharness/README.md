@@ -1,23 +1,23 @@
-# armake2 DayZ test harness
+# dayzmake DayZ test harness
 
-End-to-end test for armake2 against the current DayZ server (1.29 stable and
+End-to-end test for dayzmake against the current DayZ server (1.29 stable and
 1.30 experimental): builds a small test mod, binarizes its config, packs it
 into a PBO, signs it, and boots a real DayZ server with the mod loaded to
 prove the PBO loads, the scripts compile and the code runs.
 
 ## What it does
 
-1. `cargo build --release` (or uses `$ARMAKE2_BIN`)
-2. `armake2 keygen` - generates `.biprivatekey` / `.bikey`
-3. `armake2 build` - preprocesses, rapifies `config.cpp` to `config.bin`
+1. `cargo build --release` (or uses `$DAYZMAKE_BIN`)
+2. `dayzmake keygen` - generates `.biprivatekey` / `.bikey`
+3. `dayzmake build` - preprocesses, rapifies `config.cpp` to `config.bin`
    (binarization), packs the addon into a PBO with `prefix=` header from the
    `$PREFIX$` file
-4. `armake2 sign` - V3 signature (`.bisign`)
-5. `armake2 verify` - checks the signature against the public key
-6. `armake2 unpack` round-trip check of the packed files
+4. `dayzmake sign` - V3 signature (`.bisign`)
+5. `dayzmake verify` - checks the signature against the public key
+6. `dayzmake unpack` round-trip check of the packed files
 7. Boots the local DayZ server (Steam app 223350, and app 1042420 with
    `--experimental`/`--both`) twice from a disposable symlink tree:
-   vanilla baseline, then with `-servermod=@armake2_test`
+   vanilla baseline, then with `-servermod=@dayzmake_test`
 8. Fails unless the Mission script module grows by exactly one file, the
    test mod's `Print` marker appears in `script_*.log`, there are no script
    compile errors for the mod, and no signature errors in the RPT
@@ -40,7 +40,7 @@ game/query/RCon ports, and cleans up after itself.
 
 ## Test mod
 
-`mod/addons/armake2_test/` is a minimal script-only DayZ mod: a
+`mod/addons/dayzmake_test/` is a minimal script-only DayZ mod: a
 `config.cpp` (`CfgPatches` + `CfgMods` with a `missionScriptModule`), a
 `$PREFIX$` file and one Enforce script that overrides
 `MissionServer.OnMissionStart()` to print a marker. It uses only APIs
@@ -51,6 +51,6 @@ present in both 1.29 and 1.30, so the same PBO loads on both versions.
 - On 1.30 experimental the server ends with a vanilla shutdown assertion
   (`Leaked 'BunkerBroadcastManager'`); that is vanilla noise, not caused by
   the test mod, and does not fail the harness.
-- The engine logs `Can't load @armake2_test/Anims/cfg/skeletons.anim.xml`
+- The engine logs `Can't load @dayzmake_test/Anims/cfg/skeletons.anim.xml`
   style lines while probing each loaded mod folder for animation configs;
   expected for a script-only mod.

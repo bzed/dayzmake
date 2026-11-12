@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use armake2::config::Config;
+use dayzmake::config::Config;
 
 fn golden(name: &str) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/cfgconvert");

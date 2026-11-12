@@ -1,11 +1,11 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use armake2::pbo::PBO;
-use armake2::sign::{cmd_sign, cmd_verify, BISignVersion};
+use dayzmake::pbo::PBO;
+use dayzmake::sign::{cmd_sign, cmd_verify, BISignVersion};
 
-fn run_armake2(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_armake2")).args(args).current_dir(cwd).output().unwrap();
+fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dayzmake")).args(args).current_dir(cwd).output().unwrap();
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
@@ -55,7 +55,7 @@ fn roundtrip_non_utf8_name() {
 fn cli_unpack_non_utf8_name() {
     let tmp = tempfile::tempdir().unwrap();
     let pbo = sign_dir().join("nonutf8.pbo");
-    let (code, err) = run_armake2(&["unpack", pbo.to_str().unwrap(), "out"], tmp.path());
+    let (code, err) = run_dayzmake(&["unpack", pbo.to_str().unwrap(), "out"], tmp.path());
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("non-utf8-filename"), "{}", err);
     assert!(Path::new(&tmp.path().join("out/data/a\u{2014}b.txt")).exists());

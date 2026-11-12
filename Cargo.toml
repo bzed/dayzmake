@@ -1,17 +1,17 @@
 [package]
-name = "armake2"
+name = "dayzmake"
 version = "0.3.0"
-description = "Arma 3 modding tools"
+description = "DayZ modding tools"
 license = "GPL-2.0-or-later"
 categories = ["command-line-utilities"]
 authors = ["KoffeinFlummi <koffeinflummi@protonmail.com>"]
-homepage = "https://github.com/KoffeinFlummi/armake2"
-repository = "https://github.com/KoffeinFlummi/armake2"
+homepage = "https://github.com/bzed/dayzmake"
+repository = "https://github.com/bzed/dayzmake"
 readme = "README.md"
 edition = "2021"
 
 [lib]
-name = "armake2"
+name = "dayzmake"
 
 [[bench]]
 name = "preprocess"

@@ -30,28 +30,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
-name = "armake2"
-version = "0.3.0"
-dependencies = [
- "byteorder",
- "colored",
- "criterion",
- "docopt",
- "encoding_rs",
- "image",
- "linked-hash-map",
- "lzo1x",
- "once_cell",
- "openssl",
- "peg",
- "regex",
- "serde",
- "tempfile",
- "texpresso",
- "winreg",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -264,6 +242,28 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
+
+[[package]]
+name = "dayzmake"
+version = "0.3.0"
+dependencies = [
+ "byteorder",
+ "colored",
+ "criterion",
+ "docopt",
+ "encoding_rs",
+ "image",
+ "linked-hash-map",
+ "lzo1x",
+ "once_cell",
+ "openssl",
+ "peg",
+ "regex",
+ "serde",
+ "tempfile",
+ "texpresso",
+ "winreg",
+]
 
 [[package]]
 name = "docopt"

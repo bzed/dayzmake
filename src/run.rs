@@ -18,25 +18,25 @@ use crate::sign;
 use serde::Deserialize;
 
 pub const USAGE: &str = "
-armake2
+dayzmake
 
 Usage:
-    armake2 rapify [-v] [-f] [-w <wname>]... [-i <includefolder>]... [<source> [<target>]]
-    armake2 preprocess [-v] [-f] [-w <wname>]... [-i <includefolder>]... [<source> [<target>]]
-    armake2 derapify [-v] [-f] [-d <indentation>] [<source> [<target>]]
-    armake2 binarize [-v] [-f] [-w <wname>]... <source> <target>
-    armake2 build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    armake2 pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    armake2 inspect [-v] [<source>]
-    armake2 unpack [-v] [-f] <source> <targetfolder>
-    armake2 cat [-v] <source> <filename> [<target>]
-    armake2 keygen [-v] [-f] <keyname>
-    armake2 sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
-    armake2 paa2img [-v] [-f] <source> <target>
-    armake2 img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
-    armake2 verify [-v] <publickey> <pbo> [<signature>]
-    armake2 (-h | --help)
-    armake2 --version
+    dayzmake rapify [-v] [-f] [-w <wname>]... [-i <includefolder>]... [<source> [<target>]]
+    dayzmake preprocess [-v] [-f] [-w <wname>]... [-i <includefolder>]... [<source> [<target>]]
+    dayzmake derapify [-v] [-f] [-d <indentation>] [<source> [<target>]]
+    dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
+    dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
+    dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
+    dayzmake inspect [-v] [<source>]
+    dayzmake unpack [-v] [-f] <source> <targetfolder>
+    dayzmake cat [-v] <source> <filename> [<target>]
+    dayzmake keygen [-v] [-f] <keyname>
+    dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
+    dayzmake paa2img [-v] [-f] <source> <target>
+    dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
+    dayzmake verify [-v] <publickey> <pbo> [<signature>]
+    dayzmake (-h | --help)
+    dayzmake --version
 
 Commands:
     rapify      Preprocess and rapify a config file.

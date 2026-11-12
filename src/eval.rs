@@ -26,7 +26,7 @@ enum Tok {
 }
 
 fn unsupported(expr: &str) -> Error {
-    error!("__EVAL expression not supported by armake2: {}", expr)
+    error!("__EVAL expression not supported by dayzmake: {}", expr)
 }
 
 fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
@@ -175,10 +175,10 @@ pub fn exec(stmts: &str, vars: &mut HashMap<String, EvalValue>) -> Result<(), Er
     parts.push(current);
 
     for stmt in parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let eq = stmt.find('=').ok_or_else(|| error!("__EXEC statement not supported by armake2: {}", stmt))?;
+        let eq = stmt.find('=').ok_or_else(|| error!("__EXEC statement not supported by dayzmake: {}", stmt))?;
         let name = stmt[..eq].trim();
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(error!("__EXEC statement not supported by armake2: {}", stmt));
+            return Err(error!("__EXEC statement not supported by dayzmake: {}", stmt));
         }
         let value = eval(stmt[eq + 1..].trim(), vars)?;
         vars.insert(name.to_string(), value);

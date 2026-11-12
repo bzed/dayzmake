@@ -1,6 +1,6 @@
 use std::io::{Cursor, Seek, SeekFrom};
 
-use armake2::config::*;
+use dayzmake::config::*;
 
 #[test]
 fn config_read() {

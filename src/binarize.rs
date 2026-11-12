@@ -54,7 +54,7 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 
     let mut path;
     loop {
-        path = dir.join(format!("armake_{}_{}", name, i));
+        path = dir.join(format!("dayzmake_{}_{}", name, i));
         if !path.exists() { break; }
 
         i += 1;
@@ -127,7 +127,7 @@ pub fn binarize(input: &PathBuf, _addon_root: &Path, _prefix: &str) -> Result<Cu
     Ok(Cursor::new(buffer.into_boxed_slice()))
 }
 
-/// For `armake2 binarize` there is no PBO: the model's folder is the addon (and its name the
+/// For `dayzmake binarize` there is no PBO: the model's folder is the addon (and its name the
 /// prefix). Returns the input and that folder, with the input inside it.
 fn cli_addon(input: PathBuf) -> (PathBuf, PathBuf) {
     // a bare file name ("model.p3d") has the empty parent; make it "./model.p3d" so the addon is "."
@@ -172,7 +172,7 @@ pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), 
         return Ok(());
     }
 
-    // on unix, `armake2 binarize` always goes through Proton
+    // on unix, `dayzmake binarize` always goes through Proton
     set_proton(true);
     let (input, addon_root) = cli_addon(input);
     let prefix = addon_root.canonicalize().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
@@ -357,7 +357,7 @@ mod proton {
         });
 
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-        let root = std::env::temp_dir().join(format!("armake2-binarize-{}-{}", std::process::id(), nanos));
+        let root = std::env::temp_dir().join(format!("dayzmake-binarize-{}-{}", std::process::id(), nanos));
         std::fs::create_dir(&root).prepend_error("Failed to create sandbox directory:")?;
         let mut sb = Sandbox { root, proton_dir, steam_root, counter: 0 };
 
@@ -514,7 +514,7 @@ mod proton {
 
         #[test]
         fn win_path_is_relative_to_sandbox() {
-            let root = Path::new("/tmp/armake2-binarize-1-2");
+            let root = Path::new("/tmp/dayzmake-binarize-1-2");
             assert_eq!(win_path(root, &root.join("in/3")), "Z:\\in\\3");
             assert_eq!(win_path(root, &root.join("Binarize")), "Z:\\Binarize");
         }

@@ -6,7 +6,7 @@ FROM rust:latest AS builder
 # - pkg-config is used by the `openssl` crate's build script.
 RUN apt-get update && apt-get install -y libssl-dev pkg-config
 
-WORKDIR /usr/src/armake2
+WORKDIR /usr/src/dayzmake
 
 # --- Build the actual application ---
 # Now, copy the rest of the application's source code.

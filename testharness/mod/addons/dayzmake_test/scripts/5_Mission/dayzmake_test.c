@@ -4,6 +4,6 @@ modded class MissionServer
 	{
 		super.OnMissionStart();
 
-		Print("[armake2_test] scripts loaded, compiled and running");
+		Print("[dayzmake_test] scripts loaded, compiled and running");
 	}
 };

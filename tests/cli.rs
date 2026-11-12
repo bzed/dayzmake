@@ -1,21 +1,21 @@
-//! Tests that drive the built `armake2` binary.
+//! Tests that drive the built `dayzmake` binary.
 #![allow(dead_code)]
 use std::path::Path;
 use std::process::Command;
 
-/// Runs armake2 in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
-pub fn armake2(args: &[&str], cwd: &Path) -> (i32, String, String) {
-    let (code, out, err) = armake2_raw(args, cwd);
+/// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
+pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
+    let (code, out, err) = dayzmake_raw(args, cwd);
     (code, String::from_utf8_lossy(&out).into_owned(), err)
 }
 
-/// Like `armake2`, but stdout as raw bytes.
-pub fn armake2_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_armake2"))
+/// Like `dayzmake`, but stdout as raw bytes.
+pub fn dayzmake_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
         .current_dir(cwd)
         .output()
-        .expect("failed to run armake2");
+        .expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
         out.stdout,
@@ -26,7 +26,7 @@ pub fn armake2_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
 #[test]
 fn cli_version_runs() {
     let dir = tempfile::tempdir().unwrap();
-    let (code, out, _) = armake2(&["--version"], dir.path());
+    let (code, out, _) = dayzmake(&["--version"], dir.path());
     assert_eq!(code, 0);
     assert!(out.starts_with("v"), "{}", out);
 }
@@ -41,9 +41,9 @@ fn write(dir: &Path, name: &str, content: &str) {
 fn unquoted_before_brace() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "c.cpp", "\nclass A { x = foo };\n"); // leading newline: line-1 warnings are fixed in a later task
-    let (code, _, err) = armake2(&["rapify", "c.cpp", "c.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
     assert_eq!(code, 0, "{}", err);
-    let (code, out, _) = armake2(&["derapify", "c.bin"], dir.path());
+    let (code, out, _) = dayzmake(&["derapify", "c.bin"], dir.path());
     assert_eq!(code, 0);
     assert!(out.contains("x = \"foo\";"), "{}", out);
 }
@@ -51,7 +51,7 @@ fn unquoted_before_brace() {
 fn rapify_str(src: &str) -> (i32, String) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "config.cpp", src);
-    let (code, _, err) = armake2(&["rapify", "config.cpp", "c.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
     (code, err)
 }
 
@@ -78,7 +78,7 @@ fn warning_printed_once() {
 fn prerapified_mod() -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "src.cpp", "class A { x = 1; };\n");
-    let (code, _, err) = armake2(&["rapify", "src.cpp", "src.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "src.cpp", "src.bin"], dir.path());
     assert_eq!(code, 0, "{}", err);
     let bin = std::fs::read(dir.path().join("src.bin")).unwrap();
     (dir, bin)
@@ -90,9 +90,9 @@ fn build_keeps_prerapified_rvmat() {
     write(dir.path(), "m/config.cpp", "class B { y = 2; };\n");
     std::fs::create_dir_all(dir.path().join("m/data")).unwrap();
     std::fs::write(dir.path().join("m/data/x.rvmat"), &bin).unwrap();
-    let (code, _, err) = armake2(&["build", "m", "out.pbo"], dir.path());
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{}", err);
-    let (code, out, err) = armake2_raw(&["cat", "out.pbo", "data\\x.rvmat"], dir.path());
+    let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", "data\\x.rvmat"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert_eq!(out, bin);
 }
@@ -102,9 +102,9 @@ fn build_keeps_prerapified_config_cpp() {
     let (dir, bin) = prerapified_mod();
     std::fs::create_dir_all(dir.path().join("m")).unwrap();
     std::fs::write(dir.path().join("m/config.cpp"), &bin).unwrap();
-    let (code, _, err) = armake2(&["build", "m", "out.pbo"], dir.path());
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{}", err);
-    let (code, out, err) = armake2_raw(&["cat", "out.pbo", "config.bin"], dir.path());
+    let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", "config.bin"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert_eq!(out, bin);
 }
@@ -150,7 +150,7 @@ fn object_like_macro_no_arity_warning() {
 #[test]
 fn cli_include_case_warns() {
     let dir = tempdir_with(&[("config.cpp", "#include \"INC.hpp\"\n"), ("inc.hpp", "x = 1;\n")]);
-    let (code, _, err) = armake2(&["rapify", "config.cpp", "c.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("include-case"), "{}", err);
 }
@@ -158,7 +158,7 @@ fn cli_include_case_warns() {
 #[test]
 fn cli_missing_include_folder() {
     let dir = tempdir_with(&[("config.cpp", "x = 1;\n")]);
-    let (code, _, err) = armake2(&["rapify", "-i", "nonexist", "config.cpp", "c.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "-i", "nonexist", "config.cpp", "c.bin"], dir.path());
     assert!(code != 0 && code != 101, "code {} {}", code, err);
     assert!(err.contains("nonexist"), "{}", err);
 }
@@ -166,7 +166,7 @@ fn cli_missing_include_folder() {
 #[test]
 fn include_not_found_has_line() {
     let dir = tempdir_with(&[("config.cpp", "x = 1;\n#include \"missing.hpp\"\n")]);
-    let (code, _, err) = armake2(&["rapify", "config.cpp", "c.bin"], dir.path());
+    let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
     assert!(code != 0, "{}", err);
     assert!(err.contains("config.cpp:2"), "{}", err);
 }
@@ -177,14 +177,14 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     dir
 }
 
-/// Runs armake2 with DayZ Tools unreachable, so any attempt to start binarize.exe is an error.
-fn armake2_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_armake2"))
+/// Runs dayzmake with DayZ Tools unreachable, so any attempt to start binarize.exe is an error.
+fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
         .current_dir(cwd)
         .env("DAYZ_TOOLS", "/nonexistent/dayz-tools")
         .output()
-        .expect("failed to run armake2");
+        .expect("failed to run dayzmake");
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
@@ -194,11 +194,11 @@ fn prebinarized_build(file: &str, magic: &[u8]) {
     std::fs::create_dir_all(&src).unwrap();
     let body = [magic, b"\x38\0\0\0 not a real model"].concat();
     std::fs::write(src.join(file), &body).unwrap();
-    let (code, err) = armake2_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
+    let (code, err) = dayzmake_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("prebinarized-file"), "{}", err);
     assert!(err.contains(&format!("{} v56", String::from_utf8_lossy(magic))), "{}", err);
-    let (code, out, err) = armake2_raw(&["cat", "out.pbo", file], dir.path());
+    let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", file], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert_eq!(out, body);
 }
@@ -219,7 +219,7 @@ fn build_still_binarizes_mlod() {
     let src = dir.path().join("src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
-    let (code, err) = armake2_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
+    let (code, err) = dayzmake_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
     assert_ne!(code, 0, "an MLOD must reach binarize.exe: {}", err);
 }
 
@@ -228,7 +228,7 @@ fn binarize_copies_prebinarized_p3d() {
     let dir = tempfile::tempdir().unwrap();
     let body = b"ODOL\x38\0\0\0 not a real model";
     std::fs::write(dir.path().join("m.p3d"), body).unwrap();
-    let (code, err) = armake2_no_tools(&["binarize", "m.p3d", "out.p3d"], dir.path());
+    let (code, err) = dayzmake_no_tools(&["binarize", "m.p3d", "out.p3d"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("prebinarized-file"), "{}", err);
     assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
@@ -240,7 +240,7 @@ fn binarize_reports_older_odol_versions_instead_of_failing() {
     for version in [53u8, 54, 55] {
         let body = [b"ODOL".as_slice(), &[version, 0, 0, 0], b" not a real model"].concat();
         std::fs::write(dir.path().join("m.p3d"), &body).unwrap();
-        let (code, err) = armake2_no_tools(&["binarize", "-f", "m.p3d", "out.p3d"], dir.path());
+        let (code, err) = dayzmake_no_tools(&["binarize", "-f", "m.p3d", "out.p3d"], dir.path());
         assert_eq!(code, 0, "{}", err);
         assert!(err.contains(&format!("ODOL v{}", version)), "{}", err);
         assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);

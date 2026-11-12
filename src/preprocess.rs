@@ -711,7 +711,7 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
 /// # Examples
 ///
 /// ```
-/// # use armake2::preprocess::preprocess;
+/// # use dayzmake::preprocess::preprocess;
 /// let input = String::from("
 /// #define QUOTE(x) #x
 /// #define DOUBLES(x,y) x##_##y

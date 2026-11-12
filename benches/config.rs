@@ -2,7 +2,7 @@ use std::io::{Cursor};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use armake2::config::*;
+use dayzmake::config::*;
 
 fn bench_config(c: &mut Criterion) {
     c.bench_function("config", |b| b.iter(|| {

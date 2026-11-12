@@ -2,9 +2,9 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Runs armake2 in `cwd`; returns (exit code, stderr).
+/// Runs dayzmake in `cwd`; returns (exit code, stderr).
 fn run(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_armake2"))
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
         .current_dir(cwd)
         .output()

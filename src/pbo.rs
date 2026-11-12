@@ -73,7 +73,7 @@ fn parse_prefix_file(content: &str, header_extensions: &mut HashMap<String, Stri
 ///
 /// ```
 /// # use std::path::PathBuf;
-/// # use armake2::pbo::PBO;
+/// # use dayzmake::pbo::PBO;
 /// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new()).expect("Failed to create PBO");
 ///
 /// assert!(pbo.files.iter().any(|(name, _data)| name == "main.rs"));

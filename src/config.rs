@@ -212,7 +212,7 @@ pub fn is_rapified(data: &[u8]) -> bool {
 /// # Examples
 ///
 /// ```
-/// # use armake2::config::Config;
+/// # use dayzmake::config::Config;
 /// let input = String::from("
 /// #define bar 42
 ///

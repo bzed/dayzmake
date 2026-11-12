@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use armake2::preprocess::*;
+use dayzmake::preprocess::*;
 
 fn bench_preprocess_short(c: &mut Criterion) {
     c.bench_function("preprocess", |b| b.iter(|| {

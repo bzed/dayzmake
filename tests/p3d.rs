@@ -2,14 +2,14 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use armake2::p3d::P3D;
+use dayzmake::p3d::P3D;
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mlod/small.p3d")
 }
 
-fn armake2(args: &[&str], cwd: &Path) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_armake2")).args(args).current_dir(cwd).output().unwrap();
+fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake")).args(args).current_dir(cwd).output().unwrap();
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
@@ -30,13 +30,13 @@ fn mlod_round_trips_byte_for_byte() {
     assert!(written == original, "MLOD round trip changed the file");
 }
 
-/// Set ARMAKE2_P3D_CORPUS to a folder of real models to check them all.
+/// Set DAYZMAKE_P3D_CORPUS to a folder of real models to check them all.
 #[test]
 #[ignore]
 fn real_models_round_trip() {
-    let dir = match std::env::var_os("ARMAKE2_P3D_CORPUS") {
+    let dir = match std::env::var_os("DAYZMAKE_P3D_CORPUS") {
         Some(d) => PathBuf::from(d),
-        None => { eprintln!("skipped: set ARMAKE2_P3D_CORPUS"); return; }
+        None => { eprintln!("skipped: set DAYZMAKE_P3D_CORPUS"); return; }
     };
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()) {
@@ -66,21 +66,21 @@ fn damaged_models_are_errors_not_panics() {
     // every truncation, and a few corruptions of the counts
     for len in (0..original.len()).step_by(37).chain([original.len() - 1]) {
         std::fs::write(dir.path().join("m.p3d"), &original[..len]).unwrap();
-        let (code, _, err) = armake2(&["inspect", "m.p3d"], dir.path());
+        let (code, _, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
         assert_ne!(code, 101, "panic at length {}: {}", len, err);
     }
     for at in [8, 12, 16, 20, 24, 28, 32, 36, 40] {
         let mut bad = original.clone();
         bad[at..at + 4].copy_from_slice(&[0xff; 4]);
         std::fs::write(dir.path().join("m.p3d"), &bad).unwrap();
-        let (code, _, err) = armake2(&["inspect", "m.p3d"], dir.path());
+        let (code, _, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
         assert_ne!(code, 101, "panic with 0xff at {}: {}", at, err);
     }
 }
 
 #[test]
 fn inspect_mlod() {
-    let (code, out, err) = armake2(&["inspect", fixture().to_str().unwrap()], Path::new("."));
+    let (code, out, err) = dayzmake(&["inspect", fixture().to_str().unwrap()], Path::new("."));
     assert_eq!(code, 0, "{}", err);
     assert!(out.contains("MLOD"), "{}", out);
     assert!(out.contains("Version: 257"), "{}", out);
@@ -101,7 +101,7 @@ fn inspect_odol_reports_version_for_every_version() {
         data.extend_from_slice(&version.to_le_bytes());
         data.extend_from_slice(b"not a real model");
         std::fs::write(dir.path().join("m.p3d"), &data).unwrap();
-        let (code, out, err) = armake2(&["inspect", "m.p3d"], dir.path());
+        let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
         assert_eq!(code, 0, "{}", err);
         assert!(out.contains("ODOL"), "{}", out);
         assert!(out.contains(&format!("Version: {}", version)), "{}", out);
@@ -119,7 +119,7 @@ fn build_warns_about_missing_textures_without_proton() {
     std::fs::write(src.join("data/m.rvmat"), "class StageTI {};\n").unwrap();
     std::fs::copy(fixture(), src.join("model.p3d")).unwrap();
 
-    let (code, _, err) = armake2(&["build", "src", "out.pbo"], dir.path());
+    let (code, _, err) = dayzmake(&["build", "src", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("missing-texture"), "{}", err);
     assert!(err.contains("gone_co.paa"), "{}", err);
@@ -130,7 +130,7 @@ fn build_warns_about_missing_textures_without_proton() {
     // the case of the file name doesn't matter, and the warning can be muted
     std::fs::rename(src.join("data/m.rvmat"), src.join("data/M.RVMAT")).unwrap();
     std::fs::remove_file(src.join("data/a_co.paa")).unwrap();
-    let (code, _, err) = armake2(&["build", "-f", "-w", "missing-texture", "src", "out.pbo"], dir.path());
+    let (code, _, err) = dayzmake(&["build", "-f", "-w", "missing-texture", "src", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{}", err);
     assert!(!err.contains("missing-texture"), "{}", err);
     assert!(!err.contains("missing-material"), "{}", err);

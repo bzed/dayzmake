@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# armake2 DayZ test harness.
+# dayzmake DayZ test harness.
 #
-# Builds the armake2 test mod, binarizes it (rapify), packs it into a PBO,
+# Builds the dayzmake test mod, binarizes it (rapify), packs it into a PBO,
 # signs it, verifies the signature, then boots a local DayZ server with the
 # PBO loaded and checks the script logs for proof that the mod loaded,
 # compiled and ran.
@@ -9,8 +9,8 @@
 # Usage: testharness/run.sh [--no-server] [--experimental] [--both] [--keep]
 #
 # Environment:
-#   ARMAKE2_BIN       use this armake2 binary instead of building one
-#   DAYZ_SERVER_DIR   DayZ server install to use (default: auto-detected)
+#   DAYZMAKE_BIN       use this dayzmake binary instead of building one
+#   DAYZ_SERVER_DIR    DayZ server install to use (default: auto-detected)
 #
 # Exits 0 if every step passed.
 
@@ -19,8 +19,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HARNESS="$ROOT/testharness"
 BUILD="$HARNESS/build"
-MODNAME="armake2_test"
-MARKER="[armake2_test] scripts loaded, compiled and running"
+MODNAME="dayzmake_test"
+MARKER="[dayzmake_test] scripts loaded, compiled and running"
 
 RUN_SERVER=1
 RUN_EXPERIMENTAL=0
@@ -42,17 +42,17 @@ fail() { printf '   FAIL: %s\n' "$*"; FAILED=1; }
 FAILED=0
 
 # ---------------------------------------------------------------------------
-# 1. armake2 binary
+# 1. dayzmake binary
 # ---------------------------------------------------------------------------
-if [[ -n "${ARMAKE2_BIN:-}" ]]; then
-    ARMAKE2="$ARMAKE2_BIN"
+if [[ -n "${DAYZMAKE_BIN:-}" ]]; then
+    DAYZMAKE="$DAYZMAKE_BIN"
 else
-    say "Building armake2 (cargo build --release)"
+    say "Building dayzmake (cargo build --release)"
     (cd "$ROOT" && cargo build --release) >&2
-    ARMAKE2="$ROOT/target/release/armake2"
+    DAYZMAKE="$ROOT/target/release/dayzmake"
 fi
-[[ -x "$ARMAKE2" ]] || { echo "armake2 binary not found: $ARMAKE2" >&2; exit 1; }
-pass "armake2 available: $ARMAKE2 ($("$ARMAKE2" --version))"
+[[ -x "$DAYZMAKE" ]] || { echo "dayzmake binary not found: $DAYZMAKE" >&2; exit 1; }
+pass "dayzmake available: $DAYZMAKE ($("$DAYZMAKE" --version))"
 
 # ---------------------------------------------------------------------------
 # 2. Build the test mod
@@ -65,14 +65,14 @@ mkdir -p "$BUILD/keys" "$BUILD/@$MODNAME/addons"
 cp -r "$HARNESS/mod/addons/$MODNAME" "$BUILD/modsrc"
 cp "$HARNESS/mod/mod.cpp" "$BUILD/@$MODNAME/mod.cpp"
 
-"$ARMAKE2" keygen -f "$BUILD/keys/$MODNAME"
+"$DAYZMAKE" keygen -f "$BUILD/keys/$MODNAME"
 
 # build = preprocess + rapify (binarize) config.cpp -> config.bin, then pack
-"$ARMAKE2" build -f -e "product=dayz" \
+"$DAYZMAKE" build -f -e "product=dayz" \
     "$BUILD/modsrc" "$BUILD/@$MODNAME/addons/$MODNAME.pbo"
 
 # sign with the key generated above (v3 signature)
-"$ARMAKE2" sign -f "$BUILD/keys/$MODNAME.biprivatekey" \
+"$DAYZMAKE" sign -f "$BUILD/keys/$MODNAME.biprivatekey" \
     "$BUILD/@$MODNAME/addons/$MODNAME.pbo"
 
 PBO="$BUILD/@$MODNAME/addons/$MODNAME.pbo"
@@ -83,7 +83,7 @@ SIG="$PBO.$MODNAME.bisign"
 # 3. Check the PBO
 # ---------------------------------------------------------------------------
 say "Checking PBO contents"
-INSPECT="$("$ARMAKE2" inspect "$PBO")"
+INSPECT="$("$DAYZMAKE" inspect "$PBO")"
 echo "$INSPECT"
 echo "$INSPECT" | grep -q "prefix=$MODNAME" \
     && pass "PBO prefix header is $MODNAME" \
@@ -96,12 +96,12 @@ echo "$INSPECT" | grep -q "scripts\\\\5_Mission\\\\$MODNAME.c" \
     || fail "script file missing from PBO"
 
 say "Verifying signature"
-"$ARMAKE2" verify "$BUILD/keys/$MODNAME.bikey" "$PBO" "$SIG" \
+"$DAYZMAKE" verify "$BUILD/keys/$MODNAME.bikey" "$PBO" "$SIG" \
     && pass "signature verifies against public key" \
     || fail "signature verification failed"
 
 say "Unpack round-trip"
-"$ARMAKE2" unpack -f "$PBO" "$BUILD/unpacked"
+"$DAYZMAKE" unpack -f "$PBO" "$BUILD/unpacked"
 cmp -s "$BUILD/modsrc/scripts/5_Mission/$MODNAME.c" \
         "$BUILD/unpacked/scripts/5_Mission/$MODNAME.c" \
     && pass "script file survived pack/unpack unchanged" \

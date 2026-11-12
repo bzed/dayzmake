@@ -26,10 +26,10 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name=armake2-${GITHUB_REF_NAME//\//-}-debian-trixie-x86_64
+          name=dayzmake-${GITHUB_REF_NAME//\//-}-debian-trixie-x86_64
           mkdir "$name"
-          cp target/release/armake2 LICENSE README.md "$name/"
-          strip "$name/armake2"
+          cp target/release/dayzmake LICENSE README.md "$name/"
+          strip "$name/dayzmake"
           tar czf "$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
@@ -53,9 +53,9 @@ jobs:
         run: cargo build --release --locked
       - name: Package
         run: |
-          $name = "armake2-$($env:GITHUB_REF_NAME -replace '/', '-')-windows-x86_64"
+          $name = "dayzmake-$($env:GITHUB_REF_NAME -replace '/', '-')-windows-x86_64"
           New-Item -ItemType Directory $name
-          Copy-Item target\release\armake2.exe, LICENSE, README.md $name
+          Copy-Item target\release\dayzmake.exe, LICENSE, README.md $name
           Compress-Archive $name "$name.zip"
       - uses: actions/upload-artifact@v4
         with:
