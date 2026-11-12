@@ -115,9 +115,9 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Files:** Modify: `src/p3d.rs`, `src/paa.rs`.
 
-- [ ] **Step 1: Fix**: the ~45 cast findings live mostly here (`as u32`/`as f32`/`as usize`) → `TryFrom` + `error!` context or checked arithmetic; indexing → `get`; unwraps → errors; missing rustdoc.
-- [ ] **Step 2: Verify**: no clippy findings for these files; `cargo test` green; `tests/p3d.rs` round-trip and PAA golden tests unchanged and passing.
-- [ ] **Step 3: Commit** `lint: p3d, paa to the full standard`
+- [x] **Step 1: Fix**: the ~45 cast findings live mostly here (`as u32`/`as f32`/`as usize`) → `TryFrom` + `error!` context or checked arithmetic; indexing → `get`; unwraps → errors; missing rustdoc.
+- [x] **Step 2: Verify**: no clippy findings for these files; `cargo test` green; `tests/p3d.rs` round-trip and PAA golden tests unchanged and passing.
+- [x] **Step 3: Commit** `lint: p3d, paa to the full standard`
 
 ### Task 8: Full lint set — pbo, binarize, sign; enable CI lint job
 
