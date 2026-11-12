@@ -78,11 +78,11 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Interfaces:** Produces `make check` as the pre-push gate later tasks must satisfy.
 
-- [ ] **Step 1: Write `clippy.toml`, `deny.toml` (GPL-2.0 allow list incl. lzo1x GPL-2.0 exception), `Makefile`, `codeql.yml` (languages `rust`+`actions`, build-mode `none`, weekly + push/PR on `master`).**
-- [ ] **Step 2: Add `[lints]` and release `overflow-checks = true` to `Cargo.toml`.**
-- [ ] **Step 3: Run `cargo fmt --all` once** (tree-wide mechanical reformat, its own commit).
-- [ ] **Step 4: Verify**: `cargo deny check` passes (fix advisories via `cargo update -p` if flagged); `make fmt-check` and `make deny` pass. `cargo clippy` still warns (fixes come next) — acceptable here.
-- [ ] **Step 5: Commit** `build: naves-style lint/security infrastructure` + `fmt: cargo fmt`
+- [x] **Step 1: Write `clippy.toml`, `deny.toml` (GPL-2.0 allow list incl. lzo1x GPL-2.0 exception), `Makefile`, `codeql.yml` (languages `rust`+`actions`, build-mode `none`, weekly + push/PR on `master`).**
+- [x] **Step 2: Add `[lints]` and release `overflow-checks = true` to `Cargo.toml`.**
+- [x] **Step 3: Run `cargo fmt --all` once** (tree-wide mechanical reformat, its own commit).
+- [x] **Step 4: Verify**: `cargo deny check` passes (fix advisories via `cargo update -p` if flagged); `make fmt-check` and `make deny` pass. `cargo clippy` still warns (fixes come next) — acceptable here.
+- [x] **Step 5: Commit** `build: naves-style lint/security infrastructure` + `fmt: cargo fmt`
 
 ### Task 4: Fix clippy::all warnings
 
