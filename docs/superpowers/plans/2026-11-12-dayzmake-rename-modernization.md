@@ -130,7 +130,7 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 ### Task 9: Final verification and README consistency
 
-- [ ] **Step 1: `make check`** (fmt-check, lint, doc, deny, test) passes.
-- [ ] **Step 2: `testharness/run.sh --no-server`** passes with the renamed binary and `@dayzmake_test` mod.
-- [ ] **Step 3: README usage block matches `dayzmake --help` output exactly** (diff the two); badges resolve (CI, CodeQL, license).
-- [ ] **Step 4: `grep -ri armake` outside `docs/superpowers/plans/` is empty**; push or report.
+- [x] **Step 1: `make check`** (fmt-check, lint, doc, deny, test) passes.
+- [x] **Step 2: `testharness/run.sh --no-server`** passes with the renamed binary and `@dayzmake_test` mod.
+- [x] **Step 3: README usage block matches `dayzmake --help` output exactly** (diff the two); badges resolve (CI, CodeQL, license).
+- [x] **Step 4: `grep -ri armake` outside `docs/superpowers/plans/` is empty**; push or report.

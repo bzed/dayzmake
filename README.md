@@ -73,17 +73,54 @@ Usage:
     dayzmake derapify [-v] [-f] [-d <indentation>] [<source> [<target>]]
     dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    dayzmake pack [-v] [-f] <sourcefolder> [<target>]
+    dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
     dayzmake unpack [-v] [-f] <source> <targetfolder>
     dayzmake cat [-v] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
-    dayzmake verify [-v] <publickey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
+    dayzmake verify [-v] <publickey> <pbo> [<signature>]
     dayzmake (-h | --help)
     dayzmake --version
+
+Commands:
+    rapify      Preprocess and rapify a config file.
+    preprocess  Preprocess a file.
+    derapify    Derapify a config.
+    binarize    Binarize a file using BI's binarize.exe (Windows; on Linux through Proton).
+                The model's folder is the addon and its name the prefix; use build
+                for models whose textures are referenced by a longer prefix.
+    build       Build a PBO from a folder.
+    pack        Pack a folder into a PBO without any binarization or rapification.
+    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
+                show its format, version, LODs, textures, materials and selections.
+    unpack      Unpack a PBO into a folder.
+    cat         Read the named file from the target PBO to stdout.
+    keygen      Generate a keypair with the specified path (extensions are added).
+    sign        Sign a PBO with the given private key.
+    verify      Verify a PBO's signature with the given public key.
+    paa2img     Convert a PAA file to a standard image format (e.g. PNG).
+    img2paa     Convert a standard image file to PAA.
+
+Options:
+    -v --verbose                Enable verbose output.
+    -f --force                  Overwrite the target file/folder if it already exists.
+    -w --warning <wname>        Warning to disable
+    -i --include <includefolder>    Folder to search for includes, defaults to CWD.
+    -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
+                                      For unpack: pattern to exclude from output folder.
+    -d --indent <indentation>   String to use for indentation. 4 spaces by default.
+    -e --headerext <headerext>  Extension to add to PBO header as "key=value".
+    -k --key <privatekey>       Sign the PBO with the given private key.
+    -c --compress               Compress the output PAA file.
+    -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
+    -s --signature <signature>  Signature path to use when signing the PBO.
+    --v2                     Generate an older v2 signature.
+    --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
+    -h --help                   Show usage information and exit.
+       --version                Print the version number and exit.
 ```
 
 See `dayzmake --help` for more.
