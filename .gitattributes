@@ -1,0 +1,14 @@
+* text=auto
+
+# Fixture files are byte-exact test data: never convert line endings or
+# normalize them on any platform (golden tests compare against them).
+tests/fixtures/** -text
+
+# DayZ/Arma file formats are binary, keep git from ever touching them.
+*.pbo binary
+*.paa binary
+*.p3d binary
+*.rtm binary
+*.bikey binary
+*.biprivatekey binary
+*.bisign binary
