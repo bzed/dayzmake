@@ -466,6 +466,20 @@ fn names_equal(a: &OsStr, b: &OsStr, ci: bool) -> bool {
     }
 }
 
+/// Whether two paths to the same file differ in the case of any component.
+/// A case-insensitive filesystem (Windows) can open a path whose case does not
+/// match the file on disk; comparing the components byte-wise detects that.
+fn differs_in_case(a: &Path, b: &Path) -> bool {
+    let (mut a, mut b) = (a.components(), b.components());
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return false,
+            (Some(x), Some(y)) if x.as_os_str() == y.as_os_str() => {}
+            _ => return true,
+        }
+    }
+}
+
 /// Resolves `relative` below `base`, comparing each component ASCII-case-insensitively.
 /// An exact match is preferred over a case-insensitive one at every level.
 fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
@@ -564,7 +578,18 @@ fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<Pa
     let direct_pathbuf = if ci {
         resolve_case_insensitive(directory, &relative)?
     } else {
-        directory.join(&relative)
+        // A case-insensitive filesystem (Windows) opens the joined path even
+        // when the case does not match; leave such matches to the ci pass,
+        // which reports them, instead of returning them silently.
+        let joined = directory.join(&relative);
+        if !joined.is_file() {
+            return None;
+        }
+        match resolve_case_insensitive(directory, &relative) {
+            Some(found) if differs_in_case(&joined, &found) => return None,
+            // the directories cannot be read, so the case cannot be checked
+            _ => return Some(joined),
+        }
     };
 
     if direct_pathbuf.is_file() {
@@ -663,12 +688,6 @@ fn find_include_file(
         }
 
         let absolute = canonicalize(&path);
-
-        if absolute.is_file() {
-            return Ok(absolute);
-        }
-
-        // case-insensitive fallback, like on Windows
         let root: PathBuf = absolute
             .components()
             .take_while(|c| !matches!(c, Component::Normal(_)))
@@ -677,6 +696,20 @@ fn find_include_file(
             .components()
             .skip_while(|c| !matches!(c, Component::Normal(_)))
             .collect();
+
+        if absolute.is_file() {
+            // A case-insensitive filesystem (Windows) opens the probe even when
+            // the case does not match the file on disk; check the components
+            // against the directory entries so the warning fires there too.
+            if let Some(found) = resolve_case_insensitive(&root, &relative)
+                && differs_in_case(&absolute, &found)
+            {
+                warn_include_case(include_path, &found);
+            }
+            return Ok(absolute);
+        }
+
+        // case-insensitive fallback for case-sensitive filesystems
         match resolve_case_insensitive(&root, &relative) {
             Some(found) if found.is_file() => {
                 warn_include_case(include_path, &found);
