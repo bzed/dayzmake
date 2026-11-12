@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use dayzmake::config::Config;
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn golden(name: &str) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/cfgconvert");
     let src = dir.join(format!("{name}.cpp"));

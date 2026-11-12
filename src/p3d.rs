@@ -1,6 +1,6 @@
 //! Reading, writing and inspecting P3D models.
 //!
-//! [`P3D`] handles the editable MLOD format and keeps everything the file holds, so that
+//! [`P3D`](crate::p3d::P3D) handles the editable MLOD format and keeps everything the file holds, so that
 //! `write(read(x))` reproduces `x` byte for byte. Binarized ODOL models are only recognised
 //! (format and version); they are produced by BI's binarize.exe, not by this crate.
 

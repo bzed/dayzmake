@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Runs dayzmake in `cwd`; returns (exit code, stderr).
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn run(args: &[&str], cwd: &Path) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -16,6 +17,7 @@ fn run(args: &[&str], cwd: &Path) -> (i32, String) {
 }
 
 /// A PNG of `size` x `size` pixels; `noisy` gives a picture that LZO cannot make smaller.
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn png(dir: &Path, name: &str, size: u32, noisy: bool) -> std::path::PathBuf {
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
     let img = image::RgbImage::from_fn(size, size, |x, y| {
@@ -23,9 +25,14 @@ fn png(dir: &Path, name: &str, size: u32, noisy: bool) -> std::path::PathBuf {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
-            image::Rgb([state as u8, (state >> 8) as u8, (state >> 16) as u8])
+            let bytes = state.to_le_bytes();
+            image::Rgb([bytes[0], bytes[1], bytes[2]])
         } else {
-            image::Rgb([(x / 4) as u8, (y / 4) as u8, 90])
+            image::Rgb([
+                u8::try_from(x / 4).unwrap_or(255),
+                u8::try_from(y / 4).unwrap_or(255),
+                90,
+            ])
         }
     });
     let path = dir.join(name);
@@ -34,6 +41,11 @@ fn png(dir: &Path, name: &str, size: u32, noisy: bool) -> std::path::PathBuf {
 }
 
 /// The mipmaps of a PAA without palette: (width with the LZO bit, height, body).
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helper parsing output the test itself created"
+)]
 fn mipmaps(paa: &[u8]) -> Vec<(u16, u16, Vec<u8>)> {
     let mut pos = 2;
     while &paa[pos..pos + 4] == b"GGAT" {
@@ -56,6 +68,7 @@ fn mipmaps(paa: &[u8]) -> Vec<(u16, u16, Vec<u8>)> {
     }
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn convert(name: &str, noisy: bool) -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     let source = png(dir.path(), "in.png", 512, noisy);

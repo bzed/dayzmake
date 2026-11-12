@@ -1,3 +1,5 @@
+//! The dayzmake binary: CLI entry point.
+
 use dayzmake::run;
 use docopt::Docopt;
 

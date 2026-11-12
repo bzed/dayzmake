@@ -1,8 +1,12 @@
+//! Benchmark for preprocessing.
+#![expect(missing_docs, reason = "criterion's generated bench group has no docs")]
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use dayzmake::preprocess::preprocess;
 
+/// Benchmark: preprocessing a mid-sized config.
 fn bench_preprocess_short(c: &mut Criterion) {
+    #[expect(clippy::unwrap_used, reason = "benchmark setup")]
     c.bench_function("preprocess", |b| {
         b.iter(|| {
             let input = String::from(

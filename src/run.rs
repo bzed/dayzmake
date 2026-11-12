@@ -166,7 +166,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
     if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
-        binarize::cmd_binarize(source, target, args.flag_force)
+        binarize::cmd_binarize(source, &target, args.flag_force)
     } else if args.cmd_rapify {
         config::cmd_rapify(
             &mut get_input(args)?,
@@ -236,7 +236,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
     } else if args.cmd_unpack {
         pbo::cmd_unpack(
             &mut get_input(args)?,
-            PathBuf::from(&args.arg_targetfolder),
+            &PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
         )
     } else if args.cmd_keygen {

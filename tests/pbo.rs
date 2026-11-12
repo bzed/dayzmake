@@ -1,9 +1,11 @@
+//! PBO packing, unpacking, signing and verification tests.
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use dayzmake::pbo::PBO;
 use dayzmake::sign::{BISignVersion, cmd_sign, cmd_verify};
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -21,6 +23,7 @@ fn sign_dir() -> PathBuf {
 }
 
 /// Signs `<pbo>` with the fixture key; returns the produced bisign bytes.
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn sign_fixture(pbo: &str) -> Vec<u8> {
     let tmp = tempfile::tempdir().unwrap();
     let sig = tmp.path().join("out.bisign");
@@ -90,6 +93,7 @@ fn cli_unpack_non_utf8_name() {
     assert!(Path::new(&tmp.path().join("out/data/a\u{2014}b.txt")).exists());
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn prefix_of(content: &str) -> PBO {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("mod");
@@ -133,4 +137,27 @@ fn roundtrip_non_utf8_prefix() {
     pbo.write(&mut out).unwrap();
     // everything but the SHA-1 trailer, which the edit made stale
     assert_eq!(out[..out.len() - 20], original[..original.len() - 20]);
+}
+
+/// Truncated PBOs and garbage must error out, not panic.
+#[test]
+fn garbage_is_an_error_not_a_panic() {
+    let original = fs::read(sign_dir().join("testsig.pbo")).unwrap();
+
+    // no truncation of a valid PBO may panic
+    for len in 0..original.len() {
+        let _ = PBO::read(&mut &original[..len]);
+    }
+
+    // garbage without headers is an error or at least not a panic; an empty
+    // header list reads as an empty PBO, so use data that claims huge sizes
+    let mut garbage = Vec::new();
+    garbage.extend_from_slice(b"bigfile\0"); // entry name
+    garbage.extend_from_slice(&0u32.to_le_bytes()); // packing method
+    garbage.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // original size
+    garbage.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    garbage.extend_from_slice(&0u32.to_le_bytes()); // timestamp
+    garbage.extend_from_slice(&0xffff_ffffu32.to_le_bytes()); // data size
+    let result = PBO::read(&mut &garbage[..]);
+    assert!(result.is_err(), "huge entry sizes must be rejected");
 }

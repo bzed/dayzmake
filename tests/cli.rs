@@ -1,9 +1,12 @@
 //! Tests that drive the built `dayzmake` binary.
-#![allow(dead_code)]
 use std::path::Path;
 use std::process::Command;
 
 /// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
+///
+/// # Panics
+///
+/// Panics if the binary cannot be spawned.
 #[must_use]
 pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
     let (code, out, err) = dayzmake_raw(args, cwd);
@@ -11,7 +14,12 @@ pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
 }
 
 /// Like `dayzmake`, but stdout as raw bytes.
+///
+/// # Panics
+///
+/// Panics if the binary cannot be spawned.
 #[must_use]
+#[expect(clippy::expect_used, reason = "test helper")]
 pub fn dayzmake_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -33,6 +41,7 @@ fn cli_version_runs() {
     assert!(out.starts_with('v'), "{}", out);
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn write(dir: &Path, name: &str, content: &str) {
     let p = dir.join(name);
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -50,6 +59,7 @@ fn unquoted_before_brace() {
     assert!(out.contains("x = \"foo\";"), "{}", out);
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn rapify_str(src: &str) -> (i32, String) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "config.cpp", src);
@@ -81,6 +91,7 @@ fn warning_printed_once() {
     assert_eq!(err.matches("unquoted-string").count(), 1, "{err}");
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn prerapified_mod() -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "src.cpp", "class A { x = 1; };\n");
@@ -192,6 +203,7 @@ fn include_not_found_has_line() {
     assert!(err.contains("config.cpp:2"), "{}", err);
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     for (n, c) in files {
@@ -201,6 +213,12 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 /// Runs dayzmake with DayZ Tools unreachable, so any attempt to start binarize.exe is an error.
+///
+/// # Panics
+///
+/// Panics if the binary cannot be spawned.
+#[must_use]
+#[expect(clippy::expect_used, reason = "test helper")]
 fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -214,6 +232,7 @@ fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
     )
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn prebinarized_build(file: &str, magic: &[u8]) {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");

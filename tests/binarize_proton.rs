@@ -2,6 +2,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn run(args: &[&str], cwd: &std::path::Path) -> (i32, Vec<u8>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -16,7 +17,8 @@ fn run(args: &[&str], cwd: &std::path::Path) -> (i32, Vec<u8>, String) {
 }
 
 #[test]
-#[ignore]
+#[ignore = "needs DayZ Tools and Proton; set DAYZMAKE_PROTON_TESTS=1"]
+#[expect(clippy::print_stderr, reason = "skip notice")]
 fn proton_binarize_sets_alpha_flags() {
     if std::env::var("DAYZMAKE_PROTON_TESTS").as_deref() != Ok("1") {
         eprintln!("skipped: set DAYZMAKE_PROTON_TESTS=1");

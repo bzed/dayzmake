@@ -72,6 +72,10 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 /// `addon_root` is the folder the addon is built from and `prefix` its PBO prefix: binarize.exe
 /// resolves texture references (`prefix\data\x.paa`) relative to its current directory, so the
 /// addon is made available at `P:\<prefix>`.
+///
+/// # Errors
+///
+/// Returns an error if Proton or binarize.exe fails.
 #[cfg(unix)]
 pub fn binarize(input: &Path, addon_root: &Path, prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
     if !PROTON_ENABLED.load(Ordering::SeqCst) {
@@ -175,32 +179,46 @@ fn cli_addon(input: PathBuf) -> (PathBuf, PathBuf) {
 }
 
 /// Whether the file is already binarized (ODOL model or BMTR animation), judged by its magic.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
 pub fn is_binarized(path: &Path) -> Result<bool, Error> {
     Ok(binarized_description(path)?.is_some())
 }
 
 /// For an already binarized file, e.g. "ODOL v56" or "BMTR v1" (the version is left out if the
 /// file is too short to have one). The version is only reported: any version is copied as-is.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
 pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
     let mut header = Vec::with_capacity(8);
     File::open(path)?.take(8).read_to_end(&mut header)?;
-    if header.len() < 4 || !(&header[..4] == b"ODOL" || &header[..4] == b"BMTR") {
+    let Some(magic) = header.get(..4) else {
+        return Ok(None);
+    };
+    if magic != b"ODOL" && magic != b"BMTR" {
         return Ok(None);
     }
-    let format = String::from_utf8_lossy(&header[..4]).into_owned();
-    Ok(Some(if header.len() == 8 {
-        format!(
-            "{} v{}",
-            format,
-            u32::from_le_bytes([header[4], header[5], header[6], header[7]])
-        )
-    } else {
-        format
-    }))
+    let format = String::from_utf8_lossy(magic).into_owned();
+    Ok(Some(
+        match header.get(4..8).and_then(|b| <[u8; 4]>::try_from(b).ok()) {
+            Some(bytes) if header.len() == 8 => {
+                format!("{} v{}", format, u32::from_le_bytes(bytes))
+            }
+            _ => format,
+        },
+    ))
 }
 
 /// Binarizes the given path using BI's binarize.exe and writes it to the output.
-pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), Error> {
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be binarized or the output exists without `force`.
+pub fn cmd_binarize(input: PathBuf, output: &Path, force: bool) -> Result<(), Error> {
     if !force && output.exists() {
         return Err(error!(
             "Target file \"{}\" already exists. Use --force to overwrite.",
@@ -214,7 +232,7 @@ pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), 
             Some("prebinarized-file"),
             (Some(input.to_string_lossy().into_owned()), None),
         );
-        std::fs::copy(&input, &output).prepend_error("Failed to write result to file:")?;
+        std::fs::copy(&input, output).prepend_error("Failed to write result to file:")?;
         return Ok(());
     }
 
@@ -227,7 +245,7 @@ pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), 
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let cursor = binarize(&input, &addon_root, &prefix)?;
-    let mut file = File::create(&output).prepend_error("Failed to open output:")?;
+    let mut file = File::create(output).prepend_error("Failed to open output:")?;
     file.write_all(cursor.get_ref())
         .prepend_error("Failed to write result to file:")?;
 
@@ -404,7 +422,8 @@ mod proton {
     fn tail(path: &Path, lines: usize) -> String {
         let text = read_to_string(path).unwrap_or_default();
         let all: Vec<&str> = text.lines().collect();
-        all[all.len().saturating_sub(lines)..].join("\n")
+        let start = all.len().saturating_sub(lines);
+        all.get(start..).unwrap_or(&[]).join("\n")
     }
 
     /// Runs a proton command with output captured in `log`; kills it after `timeout`.
@@ -449,7 +468,10 @@ mod proton {
         };
 
         if super::var("BIOUTPUT").unwrap_or_else(|_| "0".to_string()) == "1" {
-            eprintln!("{}", read_to_string(log).unwrap_or_default());
+            #[expect(clippy::print_stderr, reason = "BIOUTPUT=1 shows binarize.exe output")]
+            {
+                eprintln!("{}", read_to_string(log).unwrap_or_default());
+            }
         }
 
         if !status.success() {
@@ -510,7 +532,12 @@ mod proton {
             copy_dir(&tools.join("Bin/Binarize"), &sb.root.join("Binarize"))
                 .prepend_error("Failed to copy Binarize:")?;
 
-            eprintln!("Creating a Wine prefix for binarize.exe (the first run takes a while)...");
+            #[expect(clippy::print_stderr, reason = "progress message on stderr")]
+            {
+                eprintln!(
+                    "Creating a Wine prefix for binarize.exe (the first run takes a while)..."
+                );
+            }
             let log = sb.root.join("prefix-init.log");
             run_proton(
                 &sb,
@@ -543,13 +570,13 @@ mod proton {
             Ok(()) => Ok(sb),
             Err(e) => {
                 sb.counter = 0;
-                destroy(sb);
+                destroy(&sb);
                 Err(e)
             }
         }
     }
 
-    fn destroy(sb: Sandbox) {
+    fn destroy(sb: &Sandbox) {
         // wineserver keeps the prefix busy after the last run; stop it before deleting
         let _ = Command::new(sb.proton_dir.join("files/bin/wineserver"))
             .arg("-k")
@@ -560,14 +587,17 @@ mod proton {
             .status();
         sleep(Duration::from_secs(1));
         if let Err(e) = remove_dir_all(&sb.root) {
-            eprintln!("Warning: failed to remove \"{}\": {}", sb.root.display(), e);
+            #[expect(clippy::print_stderr, reason = "warning on stderr")]
+            {
+                eprintln!("Warning: failed to remove \"{}\": {}", sb.root.display(), e);
+            }
         }
     }
 
     pub fn cleanup() {
         let sb = SANDBOX.lock().ok().and_then(|mut g| g.take());
         if let Some(sb) = sb {
-            destroy(sb);
+            destroy(&sb);
         }
     }
 
@@ -613,7 +643,9 @@ mod proton {
         if guard.is_none() {
             *guard = Some(create_sandbox()?);
         }
-        let sb = guard.as_mut().unwrap();
+        let sb = guard
+            .as_mut()
+            .ok_or_else(|| error!("Binarize sandbox not initialized."))?;
 
         let name = input
             .file_name()

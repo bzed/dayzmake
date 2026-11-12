@@ -1,3 +1,4 @@
+//! Config parsing, rapification and derapification tests.
 use std::io::{Cursor, Seek, SeekFrom};
 
 use dayzmake::config::*;

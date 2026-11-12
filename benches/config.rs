@@ -1,10 +1,14 @@
+//! Benchmark for config parsing and rapification.
+#![expect(missing_docs, reason = "criterion's generated bench group has no docs")]
 use std::io::Cursor;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use dayzmake::config::Config;
 
+/// Benchmark: parsing and rapifying a mid-sized config.
 fn bench_config(c: &mut Criterion) {
+    #[expect(clippy::unwrap_used, reason = "benchmark setup")]
     c.bench_function("config", |b| {
         b.iter(|| {
             let input = String::from(

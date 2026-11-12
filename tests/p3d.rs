@@ -8,6 +8,7 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mlod/small.p3d")
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -47,14 +48,9 @@ fn mlod_round_trips_byte_for_byte() {
 
 /// Set `DAYZMAKE_P3D_CORPUS` to a folder of real models to check them all.
 #[test]
-#[ignore]
+#[ignore = "set DAYZMAKE_P3D_CORPUS to a folder of real models"]
+#[expect(clippy::print_stderr, reason = "skip notice")]
 fn real_models_round_trip() {
-    let dir = if let Some(d) = std::env::var_os("DAYZMAKE_P3D_CORPUS") {
-        PathBuf::from(d)
-    } else {
-        eprintln!("skipped: set DAYZMAKE_P3D_CORPUS");
-        return;
-    };
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir)
             .unwrap()
@@ -68,6 +64,12 @@ fn real_models_round_trip() {
             }
         }
     }
+    let dir = if let Some(d) = std::env::var_os("DAYZMAKE_P3D_CORPUS") {
+        PathBuf::from(d)
+    } else {
+        eprintln!("skipped: set DAYZMAKE_P3D_CORPUS");
+        return;
+    };
     let mut files = Vec::new();
     walk(&dir, &mut files);
     let mut checked = 0;

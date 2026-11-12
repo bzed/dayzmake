@@ -1,3 +1,4 @@
+//! Preprocessor tests.
 use std::fs::{File, create_dir};
 use std::io::Write;
 use std::path::PathBuf;

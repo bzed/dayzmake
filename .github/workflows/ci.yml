@@ -11,6 +11,26 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Lint (fmt, clippy, doc, deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Rustdoc
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+      - name: cargo deny
+        run: cargo deny check
+
   linux:
     name: Linux (Debian trixie)
     runs-on: ubuntu-latest
