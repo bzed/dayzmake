@@ -255,7 +255,6 @@ dependencies = [
  "image",
  "linked-hash-map",
  "lzo1x",
- "once_cell",
  "openssl",
  "peg",
  "regex",
