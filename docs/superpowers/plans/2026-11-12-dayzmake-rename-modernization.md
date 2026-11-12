@@ -88,9 +88,9 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Files:** Modify: whichever files the 88 findings live in (all of `src/`, `benches/`, `tests/`).
 
-- [ ] **Step 1: `cargo clippy --fix --all-targets --allow-dirty`** then fix the rest by hand (notably: regex compiled in a loop → `LazyLock`, `.bytes()` on in-memory data, `&PathBuf`→`&Path` params, needless `vec!`).
-- [ ] **Step 2: Verify**: `cargo clippy --all-targets -- -D clippy::all` clean; `cargo test` green; byte-identity tests untouched.
-- [ ] **Step 3: Commit** `fix: clippy::all warnings`
+- [x] **Step 1: `cargo clippy --fix --all-targets --allow-dirty`** then fix the rest by hand (notably: regex compiled in a loop → `LazyLock`, `.bytes()` on in-memory data, `&PathBuf`→`&Path` params, needless `vec!`).
+- [x] **Step 2: Verify**: `cargo clippy --all-targets -- -D clippy::all` clean; `cargo test` green; byte-identity tests untouched.
+- [x] **Step 3: Commit** `fix: clippy::all warnings`
 
 ### Task 5: Full lint set — error, io, eval, run, main, lib
 
