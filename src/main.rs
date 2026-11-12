@@ -1,4 +1,4 @@
-use dayzmake::*;
+use dayzmake::run;
 use docopt::Docopt;
 
 use crate::run::{Args, USAGE};

@@ -4,12 +4,14 @@ use std::path::Path;
 use std::process::Command;
 
 /// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
+#[must_use]
 pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
     let (code, out, err) = dayzmake_raw(args, cwd);
     (code, String::from_utf8_lossy(&out).into_owned(), err)
 }
 
 /// Like `dayzmake`, but stdout as raw bytes.
+#[must_use]
 pub fn dayzmake_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
         .args(args)
@@ -28,7 +30,7 @@ fn cli_version_runs() {
     let dir = tempfile::tempdir().unwrap();
     let (code, out, _) = dayzmake(&["--version"], dir.path());
     assert_eq!(code, 0);
-    assert!(out.starts_with("v"), "{}", out);
+    assert!(out.starts_with('v'), "{}", out);
 }
 
 fn write(dir: &Path, name: &str, content: &str) {
@@ -42,7 +44,7 @@ fn unquoted_before_brace() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "c.cpp", "\nclass A { x = foo };\n"); // leading newline: line-1 warnings are fixed in a later task
     let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let (code, out, _) = dayzmake(&["derapify", "c.bin"], dir.path());
     assert_eq!(code, 0);
     assert!(out.contains("x = \"foo\";"), "{}", out);
@@ -58,7 +60,7 @@ fn rapify_str(src: &str) -> (i32, String) {
 #[test]
 fn warning_on_line_one_no_panic() {
     let (code, err) = rapify_str("class A { x = foo; };\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(
         err.contains(":1:") && err.contains("unquoted-string"),
         "{}",
@@ -69,21 +71,21 @@ fn warning_on_line_one_no_panic() {
 #[test]
 fn warning_on_line_two_location() {
     let (code, err) = rapify_str("\nclass A { x = foo; };\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains(":2:"), "{}", err);
 }
 
 #[test]
 fn warning_printed_once() {
     let (_, err) = rapify_str("class A { x = foo; };\n");
-    assert_eq!(err.matches("unquoted-string").count(), 1, "{}", err);
+    assert_eq!(err.matches("unquoted-string").count(), 1, "{err}");
 }
 
 fn prerapified_mod() -> (tempfile::TempDir, Vec<u8>) {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "src.cpp", "class A { x = 1; };\n");
     let (code, _, err) = dayzmake(&["rapify", "src.cpp", "src.bin"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let bin = std::fs::read(dir.path().join("src.bin")).unwrap();
     (dir, bin)
 }
@@ -95,9 +97,9 @@ fn build_keeps_prerapified_rvmat() {
     std::fs::create_dir_all(dir.path().join("m/data")).unwrap();
     std::fs::write(dir.path().join("m/data/x.rvmat"), &bin).unwrap();
     let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", "data\\x.rvmat"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert_eq!(out, bin);
 }
 
@@ -107,16 +109,16 @@ fn build_keeps_prerapified_config_cpp() {
     std::fs::create_dir_all(dir.path().join("m")).unwrap();
     std::fs::write(dir.path().join("m/config.cpp"), &bin).unwrap();
     let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", "config.bin"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert_eq!(out, bin);
 }
 
 #[test]
 fn macro_arity_warns() {
     let (code, err) = rapify_str("#define QUOTE(x) #x\nclass A { t = QUOTE(a,b); };\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(
         err.contains("macro-arg-count") && err.contains("QUOTE"),
         "{}",
@@ -127,7 +129,7 @@ fn macro_arity_warns() {
 #[test]
 fn macro_arity_warning_has_location() {
     let (code, err) = rapify_str("#define QUOTE(x) #x\n\nclass A { t = QUOTE(a,b); };\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(
         err.contains("config.cpp:3") && err.contains("macro-arg-count"),
         "{}",
@@ -141,14 +143,14 @@ fn macro_arity_warning_has_location() {
 fn macro_arity_in_inactive_block_silent() {
     let (code, err) =
         rapify_str("#define QUOTE(x) #x\n#ifdef NOPE\nt = QUOTE(a,b);\n#endif\nx = 1;\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(!err.contains("macro-arg-count"), "{}", err);
 }
 
 #[test]
 fn eval_error_without_unquoted_warning() {
     let (code, err) = rapify_str("a = __EVAL(1 > 0);\n");
-    assert!(code != 0 && code != 101, "code {} {}", code, err);
+    assert!(code != 0 && code != 101, "code {code} {err}");
     assert!(err.contains("not supported"), "{}", err);
     assert!(!err.contains("unquoted-string"), "{}", err);
 }
@@ -156,7 +158,7 @@ fn eval_error_without_unquoted_warning() {
 #[test]
 fn object_like_macro_no_arity_warning() {
     let (code, err) = rapify_str("#define FOO bar\nclass A { t = FOO(1); };\n");
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(!err.contains("macro-arg-count"), "{}", err);
 }
 
@@ -167,7 +169,7 @@ fn cli_include_case_warns() {
         ("inc.hpp", "x = 1;\n"),
     ]);
     let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains("include-case"), "{}", err);
 }
 
@@ -178,7 +180,7 @@ fn cli_missing_include_folder() {
         &["rapify", "-i", "nonexist", "config.cpp", "c.bin"],
         dir.path(),
     );
-    assert!(code != 0 && code != 101, "code {} {}", code, err);
+    assert!(code != 0 && code != 101, "code {code} {err}");
     assert!(err.contains("nonexist"), "{}", err);
 }
 
@@ -222,7 +224,7 @@ fn prebinarized_build(file: &str, magic: &[u8]) {
         &["build", "--proton-binarize", "src", "out.pbo"],
         dir.path(),
     );
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains("prebinarized-file"), "{}", err);
     assert!(
         err.contains(&format!("{} v56", String::from_utf8_lossy(magic))),
@@ -230,7 +232,7 @@ fn prebinarized_build(file: &str, magic: &[u8]) {
         err
     );
     let (code, out, err) = dayzmake_raw(&["cat", "out.pbo", file], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert_eq!(out, body);
 }
 
@@ -254,7 +256,7 @@ fn build_still_binarizes_mlod() {
         &["build", "--proton-binarize", "src", "out.pbo"],
         dir.path(),
     );
-    assert_ne!(code, 0, "an MLOD must reach binarize.exe: {}", err);
+    assert_ne!(code, 0, "an MLOD must reach binarize.exe: {err}");
 }
 
 #[test]
@@ -263,7 +265,7 @@ fn binarize_copies_prebinarized_p3d() {
     let body = b"ODOL\x38\0\0\0 not a real model";
     std::fs::write(dir.path().join("m.p3d"), body).unwrap();
     let (code, err) = dayzmake_no_tools(&["binarize", "m.p3d", "out.p3d"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains("prebinarized-file"), "{}", err);
     assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
 }
@@ -280,8 +282,8 @@ fn binarize_reports_older_odol_versions_instead_of_failing() {
         .concat();
         std::fs::write(dir.path().join("m.p3d"), &body).unwrap();
         let (code, err) = dayzmake_no_tools(&["binarize", "-f", "m.p3d", "out.p3d"], dir.path());
-        assert_eq!(code, 0, "{}", err);
-        assert!(err.contains(&format!("ODOL v{}", version)), "{}", err);
+        assert_eq!(code, 0, "{err}");
+        assert!(err.contains(&format!("ODOL v{version}")), "{}", err);
         assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
     }
 }

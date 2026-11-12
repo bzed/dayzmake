@@ -37,7 +37,7 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
         if c.is_whitespace() {
             i += 1;
         } else if c.is_ascii_digit()
-            || (c == '.' && chars.get(i + 1).map_or(false, |d| d.is_ascii_digit()))
+            || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
         {
             let start = i;
             while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
@@ -89,7 +89,7 @@ struct Parser<'a> {
     vars: &'a HashMap<String, EvalValue>,
 }
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     fn peek_op(&self) -> Option<char> {
         match self.toks.get(self.pos) {
             Some(Tok::Op(c)) => Some(*c),

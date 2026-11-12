@@ -1,6 +1,6 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use dayzmake::preprocess::*;
+use dayzmake::preprocess::preprocess;
 
 fn bench_preprocess_short(c: &mut Criterion) {
     c.bench_function("preprocess", |b| {
@@ -27,7 +27,7 @@ class CfgPatches {
             );
 
             preprocess(input, None, &Vec::new()).unwrap();
-        })
+        });
     });
 }
 

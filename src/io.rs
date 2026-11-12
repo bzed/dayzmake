@@ -60,13 +60,13 @@ impl<T: Read> ReadExt for T {
 
     fn read_cstring_bytes(&mut self) -> io::Result<Vec<u8>> {
         let mut bytes: Vec<u8> = Vec::new();
-        for byte in self.bytes() {
-            let b = byte?;
-            if b == 0 {
+        let mut buf = [0u8; 1];
+        loop {
+            self.read_exact(&mut buf)?;
+            if buf[0] == 0 {
                 break;
-            } else {
-                bytes.push(b);
             }
+            bytes.push(buf[0]);
         }
 
         Ok(bytes)
@@ -75,16 +75,21 @@ impl<T: Read> ReadExt for T {
     fn read_compressed_int(&mut self) -> io::Result<u32> {
         let mut result: u32 = 0;
 
-        for (i, byte) in self.bytes().enumerate() {
-            let b: u32 = byte?.into();
+        let mut buf = [0u8; 1];
+        for i in 0..5 {
+            self.read_exact(&mut buf)?;
+            let b: u32 = buf[0].into();
             result |= (b & 0x7f) << (i * 7);
 
             if b < 0x80 {
-                break;
+                return Ok(result);
             }
         }
 
-        Ok(result)
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid compressed integer",
+        ))
     }
 }
 
@@ -116,6 +121,7 @@ impl<T: Write> WriteExt for T {
     }
 }
 
+#[must_use]
 pub fn compressed_int_len(x: u32) -> usize {
     let mut temp = x;
     let mut len = 0;

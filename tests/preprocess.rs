@@ -105,9 +105,7 @@ bar_foo\n",
         .write_all(prefix.as_bytes())
         .unwrap();
 
-    let includepath = PathBuf::from(addondir.join("include.h"))
-        .canonicalize()
-        .unwrap();
+    let includepath = addondir.join("include.h").canonicalize().unwrap();
 
     let includefolders = vec![PathBuf::from(includedir.path())];
     let (output, info) = preprocess(input, Some(PathBuf::from("myfile")), &includefolders).unwrap();
@@ -166,11 +164,11 @@ y=Y;
     let (output, _) = preprocess(
         input,
         Some(dir.path().join("f.cpp")),
-        &vec![dir.path().to_path_buf()],
+        &[dir.path().to_path_buf()],
     )
     .unwrap();
-    assert!(output.contains("inc"), "{:?}", output);
-    assert!(output.contains("y=1"), "{:?}", output); // trailing spaces from the #define value are kept
+    assert!(output.contains("inc"), "{output:?}");
+    assert!(output.contains("y=1"), "{output:?}"); // trailing spaces from the #define value are kept
 }
 
 #[test]
@@ -183,8 +181,8 @@ fn include_case_insensitive_absolute() {
         .write_all(b"found\n")
         .unwrap();
     let input = String::from("#include \"\\z\\mod\\Foo.hpp\"\n");
-    let (output, _) = preprocess(input, None, &vec![dir.path().to_path_buf()]).unwrap();
-    assert!(output.contains("found"), "{:?}", output);
+    let (output, _) = preprocess(input, None, &[dir.path().to_path_buf()]).unwrap();
+    assert!(output.contains("found"), "{output:?}");
 }
 
 #[test]
@@ -203,9 +201,9 @@ fn include_exact_case_wins() {
     let (output, _) = preprocess(
         input,
         Some(dir.path().join("f.cpp")),
-        &vec![dir.path().to_path_buf()],
+        &[dir.path().to_path_buf()],
     )
     .unwrap();
-    assert!(output.contains("a=2;"), "{:?}", output);
-    assert!(!output.contains("a=1;"), "{:?}", output);
+    assert!(output.contains("a=2;"), "{output:?}");
+    assert!(!output.contains("a=1;"), "{output:?}");
 }

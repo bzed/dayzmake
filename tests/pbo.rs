@@ -85,7 +85,7 @@ fn cli_unpack_non_utf8_name() {
     let tmp = tempfile::tempdir().unwrap();
     let pbo = sign_dir().join("nonutf8.pbo");
     let (code, err) = run_dayzmake(&["unpack", pbo.to_str().unwrap(), "out"], tmp.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains("non-utf8-filename"), "{}", err);
     assert!(Path::new(&tmp.path().join("out/data/a\u{2014}b.txt")).exists());
 }

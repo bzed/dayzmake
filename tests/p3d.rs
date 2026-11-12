@@ -45,26 +45,25 @@ fn mlod_round_trips_byte_for_byte() {
     assert!(written == original, "MLOD round trip changed the file");
 }
 
-/// Set DAYZMAKE_P3D_CORPUS to a folder of real models to check them all.
+/// Set `DAYZMAKE_P3D_CORPUS` to a folder of real models to check them all.
 #[test]
 #[ignore]
 fn real_models_round_trip() {
-    let dir = match std::env::var_os("DAYZMAKE_P3D_CORPUS") {
-        Some(d) => PathBuf::from(d),
-        None => {
-            eprintln!("skipped: set DAYZMAKE_P3D_CORPUS");
-            return;
-        }
+    let dir = if let Some(d) = std::env::var_os("DAYZMAKE_P3D_CORPUS") {
+        PathBuf::from(d)
+    } else {
+        eprintln!("skipped: set DAYZMAKE_P3D_CORPUS");
+        return;
     };
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for e in std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()) {
+        for e in std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+        {
             let p = e.path();
             if p.is_dir() {
                 walk(&p, out);
-            } else if p
-                .extension()
-                .map_or(false, |x| x.eq_ignore_ascii_case("p3d"))
-            {
+            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("p3d")) {
                 out.push(p);
             }
         }
@@ -83,7 +82,7 @@ fn real_models_round_trip() {
         assert!(out == data, "{} does not round-trip", f.display());
         checked += 1;
     }
-    eprintln!("{} models round-trip", checked);
+    eprintln!("{checked} models round-trip");
 }
 
 #[test]
@@ -94,21 +93,21 @@ fn damaged_models_are_errors_not_panics() {
     for len in (0..original.len()).step_by(37).chain([original.len() - 1]) {
         std::fs::write(dir.path().join("m.p3d"), &original[..len]).unwrap();
         let (code, _, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
-        assert_ne!(code, 101, "panic at length {}: {}", len, err);
+        assert_ne!(code, 101, "panic at length {len}: {err}");
     }
     for at in [8, 12, 16, 20, 24, 28, 32, 36, 40] {
         let mut bad = original.clone();
         bad[at..at + 4].copy_from_slice(&[0xff; 4]);
         std::fs::write(dir.path().join("m.p3d"), &bad).unwrap();
         let (code, _, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
-        assert_ne!(code, 101, "panic with 0xff at {}: {}", at, err);
+        assert_ne!(code, 101, "panic with 0xff at {at}: {err}");
     }
 }
 
 #[test]
 fn inspect_mlod() {
     let (code, out, err) = dayzmake(&["inspect", fixture().to_str().unwrap()], Path::new("."));
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(out.contains("MLOD"), "{}", out);
     assert!(out.contains("Version: 257"), "{}", out);
     assert!(out.contains("LODs:    2"), "{}", out);
@@ -129,9 +128,9 @@ fn inspect_odol_reports_version_for_every_version() {
         data.extend_from_slice(b"not a real model");
         std::fs::write(dir.path().join("m.p3d"), &data).unwrap();
         let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
-        assert_eq!(code, 0, "{}", err);
+        assert_eq!(code, 0, "{err}");
         assert!(out.contains("ODOL"), "{}", out);
-        assert!(out.contains(&format!("Version: {}", version)), "{}", out);
+        assert!(out.contains(&format!("Version: {version}")), "{}", out);
     }
 }
 
@@ -147,18 +146,16 @@ fn build_warns_about_missing_textures_without_proton() {
     std::fs::copy(fixture(), src.join("model.p3d")).unwrap();
 
     let (code, _, err) = dayzmake(&["build", "src", "out.pbo"], dir.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(err.contains("missing-texture"), "{}", err);
     assert!(err.contains("gone_co.paa"), "{}", err);
     assert!(
         !err.contains("a_co.paa"),
-        "an existing texture was reported: {}",
-        err
+        "an existing texture was reported: {err}"
     );
     assert!(
         !err.contains("argb"),
-        "a procedural texture was reported: {}",
-        err
+        "a procedural texture was reported: {err}"
     );
     assert!(!err.contains("missing-material"), "{}", err);
 
@@ -169,7 +166,7 @@ fn build_warns_about_missing_textures_without_proton() {
         &["build", "-f", "-w", "missing-texture", "src", "out.pbo"],
         dir.path(),
     );
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     assert!(!err.contains("missing-texture"), "{}", err);
     assert!(!err.contains("missing-material"), "{}", err);
 }

@@ -9,7 +9,7 @@ use std::io::{Error, Read, Write};
 use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::*;
+use crate::error::{ErrorExt, PreprocessParseErrorExt, warning};
 
 peg::parser! {
     pub grammar preprocess_grammar() for str {
@@ -195,7 +195,7 @@ pub struct PreprocessInfo {
 
 thread_local! {
     /// Argument-count mismatches found while resolving the current line, reported with its location.
-    static ARG_COUNT_MISMATCHES: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    static ARG_COUNT_MISMATCHES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn parse_macro(input: &str) -> Macro {
@@ -254,19 +254,21 @@ impl Definition {
         let mut stack_new: Vec<Definition> = stack.to_vec();
         stack_new.push(self.clone());
 
-        if !params.is_empty() {
+        if params.is_empty() {
+            tokens = Macro::resolve_all(&tokens, def_map, &stack_new)?;
+        } else {
             let mut local_map: HashMap<String, Definition> = HashMap::new();
 
-            for (key, value) in def_map.iter() {
+            for (key, value) in def_map {
                 local_map.insert(key.clone(), value.clone());
             }
 
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
                 let mut tokens =
-                    preprocess_grammar::tokens(&arg).expect("Failed to parse macro argument");
+                    preprocess_grammar::tokens(arg).expect("Failed to parse macro argument");
                 let stack: Vec<Definition> = Vec::new();
-                tokens = Macro::resolve_all(&tokens, &def_map, &stack)
+                tokens = Macro::resolve_all(&tokens, def_map, &stack)
                     .expect("Failed to resolve macro arguments");
 
                 local_map.insert(
@@ -281,8 +283,6 @@ impl Definition {
             }
 
             tokens = Macro::resolve_all(&tokens, &local_map, &stack_new)?;
-        } else {
-            tokens = Macro::resolve_all(&tokens, &def_map, &stack_new)?;
         }
 
         Ok(Some(tokens))
@@ -304,9 +304,9 @@ impl Macro {
 
         let (_, without_name) = self.original.split_at(self.name.len());
         let mut arg_tokens =
-            preprocess_grammar::tokens(&without_name).expect("Failed to parse macro arguments.");
+            preprocess_grammar::tokens(without_name).expect("Failed to parse macro arguments.");
 
-        arg_tokens = Macro::resolve_all(&arg_tokens, &def_map, &stack)?;
+        arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack)?;
         for t in arg_tokens {
             tokens.push(t);
         }
@@ -333,7 +333,7 @@ impl Macro {
                         return Ok(tokens);
                     }
 
-                    let expected = def.parameters.as_ref().map_or(0, |p| p.len());
+                    let expected = def.parameters.as_ref().map_or(0, std::vec::Vec::len);
                     let got = if expected == 0 && args.len() == 1 && args[0].trim().is_empty() {
                         0
                     } else {
@@ -412,10 +412,10 @@ impl Token {
         for token in tokens {
             match token {
                 Token::RegularToken(s) => {
-                    output += &s;
+                    output += s;
                 }
                 Token::NewlineToken(s, n) => {
-                    output += &s;
+                    output += s;
                     newlines += n;
                 }
                 Token::MacroToken(m) => {
@@ -439,10 +439,11 @@ fn read_prefix(prefix_path: &Path) -> String {
         .read_to_string(&mut content)
         .unwrap();
 
-    content.lines().nth(0).unwrap().to_string()
+    content.lines().next().unwrap().to_string()
 }
 
 /// Returns the path seperator used on the current operating system
+#[must_use]
 pub fn pathsep() -> &'static str {
     if cfg!(windows) { "\\" } else { "/" }
 }
@@ -472,7 +473,7 @@ fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
         }
         let found = read_dir(&current)
             .ok()?
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .find(|e| names_equal(&e.file_name(), name, true))?;
         current = found.path();
     }
@@ -480,7 +481,7 @@ fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
 }
 
 fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
-    let include_pathbuf = PathBuf::from(&include_path.replace("\\", pathsep()));
+    let include_pathbuf = PathBuf::from(&include_path.replace('\\', pathsep()));
 
     match (path.file_name(), include_pathbuf.file_name()) {
         (Some(a), Some(b)) if names_equal(a, b, ci) => {}
@@ -499,13 +500,13 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
 
         let mut prefix = read_prefix(&prefixpath);
 
-        prefix = if !prefix.is_empty() && prefix.chars().nth(0).unwrap() != '\\' {
-            format!("\\{}", prefix)
+        prefix = if !prefix.is_empty() && !prefix.starts_with('\\') {
+            format!("\\{prefix}")
         } else {
             prefix
         };
 
-        let prefix_pathbuf = PathBuf::from(prefix.replace("\\", pathsep()));
+        let prefix_pathbuf = PathBuf::from(prefix.replace('\\', pathsep()));
 
         let relative = path.strip_prefix(parent).unwrap();
         let test_path = prefix_pathbuf.join(relative);
@@ -526,7 +527,7 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
 fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<PathBuf> {
     // unreadable directories are skipped
     if let Ok(entries) = read_dir(directory) {
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(std::result::Result::ok) {
             let path = entry.path();
             if path.is_dir() {
                 if path.file_name() == Some(OsStr::new(".git")) {
@@ -545,7 +546,7 @@ fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<Pa
     let relative = PathBuf::from(
         include_path
             .trim_start_matches('\\')
-            .replace("\\", pathsep()),
+            .replace('\\', pathsep()),
     );
     let direct_pathbuf = if ci {
         resolve_case_insensitive(directory, &relative)?
@@ -608,8 +609,32 @@ fn find_include_file(
     search_paths: &[PathBuf],
     line: u32,
 ) -> Result<PathBuf, Error> {
-    if include_path.chars().nth(0) != Some('\\') {
-        let mut path = PathBuf::from(include_path.replace("\\", pathsep()));
+    if include_path.starts_with('\\') {
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for search_path in search_paths {
+            roots.push(search_path.canonicalize().map_err(|e| {
+                error!(
+                    "Include folder \"{}\" is not usable: {}",
+                    search_path.display(),
+                    e
+                )
+            })?);
+        }
+
+        for ci in [false, true] {
+            for root in &roots {
+                if let Some(file_path) = search_directory(include_path, root, ci) {
+                    if ci {
+                        warn_include_case(include_path, &file_path);
+                    }
+                    return Ok(file_path);
+                }
+            }
+        }
+
+        Err(include_not_found(include_path, origin, line))
+    } else {
+        let mut path = PathBuf::from(include_path.replace('\\', pathsep()));
 
         if let Some(origin_path) = origin {
             let absolute = PathBuf::from(&origin_path).canonicalize()?;
@@ -641,30 +666,6 @@ fn find_include_file(
             }
             _ => Err(include_not_found(include_path, origin, line)),
         }
-    } else {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for search_path in search_paths {
-            roots.push(search_path.canonicalize().map_err(|e| {
-                error!(
-                    "Include folder \"{}\" is not usable: {}",
-                    search_path.display(),
-                    e
-                )
-            })?);
-        }
-
-        for ci in [false, true] {
-            for root in &roots {
-                if let Some(file_path) = search_directory(include_path, root, ci) {
-                    if ci {
-                        warn_include_case(include_path, &file_path);
-                    }
-                    return Ok(file_path);
-                }
-            }
-        }
-
-        Err(include_not_found(include_path, origin, line))
     }
 }
 
@@ -679,7 +680,7 @@ fn preprocess_rec(
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
     let lines =
         PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), &origin, &input)?;
-    let mut output = String::from("");
+    let mut output = String::new();
     let mut original_lineno = 1;
     let mut level = 0;
     let mut level_true = 0;
@@ -719,7 +720,7 @@ fn preprocess_rec(
                             info,
                             includefolders,
                         )
-                        .prepend_error(format!("Failed to preprocess include \"{}\":", path))?;
+                        .prepend_error(format!("Failed to preprocess include \"{path}\":"))?;
 
                         info.import_stack.pop();
 
@@ -750,20 +751,13 @@ fn preprocess_rec(
                         definition_map.remove(&name);
                     }
                     Directive::IfDefDirective(name) => {
-                        level_true += if level_true == level && definition_map.contains_key(&name) {
-                            1
-                        } else {
-                            0
-                        };
+                        level_true +=
+                            i32::from(level_true == level && definition_map.contains_key(&name));
                         level += 1;
                     }
                     Directive::IfNDefDirective(name) => {
-                        level_true += if level_true == level && !definition_map.contains_key(&name)
-                        {
-                            1
-                        } else {
-                            0
-                        };
+                        level_true +=
+                            i32::from(level_true == level && !definition_map.contains_key(&name));
                         level += 1;
                     }
                     Directive::ElseDirective => {
@@ -784,7 +778,7 @@ fn preprocess_rec(
             }
             Line::TokenLine(tokens) => {
                 let stack: Vec<Definition> = Vec::new();
-                let resolved = Macro::resolve_all(&tokens, &definition_map, &stack)
+                let resolved = Macro::resolve_all(&tokens, definition_map, &stack)
                     .prepend_error("Failed to resolve macros:");
                 let mismatches =
                     ARG_COUNT_MISMATCHES.with(|m| std::mem::take(&mut *m.borrow_mut()));

@@ -6,14 +6,14 @@ use std::path::PathBuf;
 
 use crate::binarize;
 use crate::config;
-use crate::error::*;
+use crate::error;
+use crate::error::{ErrorExt, print_warning_summary};
 use crate::io::{Input, Output};
 use crate::p3d;
 use crate::paa;
 use crate::pbo;
 use crate::preprocess;
 use crate::sign;
-use crate::*;
 
 use serde::Deserialize;
 
@@ -160,17 +160,17 @@ fn run_command(args: &Args) -> Result<(), Error> {
         )
     } else if args.cmd_rapify {
         config::cmd_rapify(
-            &mut get_input(&args)?,
-            &mut get_output(&args)?,
+            &mut get_input(args)?,
+            &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
         )
     } else if args.cmd_derapify {
-        config::cmd_derapify(&mut get_input(&args)?, &mut get_output(&args)?)
+        config::cmd_derapify(&mut get_input(args)?, &mut get_output(args)?)
     } else if args.cmd_preprocess {
         preprocess::cmd_preprocess(
-            &mut get_input(&args)?,
-            &mut get_output(&args)?,
+            &mut get_input(args)?,
+            &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
         )
@@ -185,7 +185,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
         if args.cmd_build {
             pbo::cmd_build(
                 PathBuf::from(&args.arg_sourcefolder),
-                &mut get_output(&args)?,
+                &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &includefolders,
@@ -193,7 +193,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
         } else {
             pbo::cmd_pack(
                 PathBuf::from(&args.arg_sourcefolder),
-                &mut get_output(&args)?,
+                &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
             )?;
@@ -211,7 +211,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
 
         Ok(())
     } else if args.cmd_inspect {
-        let mut input = get_input(&args)?;
+        let mut input = get_input(args)?;
         if p3d::model_magic(&mut input)?.is_some() {
             p3d::cmd_inspect(&mut input)
         } else {
@@ -219,13 +219,13 @@ fn run_command(args: &Args) -> Result<(), Error> {
         }
     } else if args.cmd_cat {
         pbo::cmd_cat(
-            &mut get_input(&args)?,
-            &mut get_output(&args)?,
+            &mut get_input(args)?,
+            &mut get_output(args)?,
             &args.arg_filename,
         )
     } else if args.cmd_unpack {
         pbo::cmd_unpack(
-            &mut get_input(&args)?,
+            &mut get_input(args)?,
             PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
         )
@@ -277,7 +277,7 @@ pub fn args(args: &mut Args) {
     //println!("{:?}", args);
 
     if args.flag_version {
-        println!("v{}", VERSION);
+        println!("v{VERSION}");
         std::process::exit(0);
     }
 
@@ -286,7 +286,7 @@ pub fn args(args: &mut Args) {
         HashSet::from_iter(args.flag_warning.clone()),
         args.flag_verbose,
     );
-    let result = run_command(&args);
+    let result = run_command(args);
     binarize::cleanup(); // must happen before print_error, which exits on error
     result.print_error(true);
 

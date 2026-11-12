@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{Error, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
-use crate::error::*;
+use crate::error::ErrorExt;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use image::{DynamicImage, ImageBuffer, Rgba};
 use linked_hash_map::LinkedHashMap;
@@ -274,7 +274,7 @@ impl Paa {
         let mut mipmaps = Vec::new();
         for level in &levels {
             let (w, h) = level.dimensions();
-            let data = level.as_raw().to_vec();
+            let data = level.as_raw().clone();
             let mut mipmap = match compression.as_str() {
                 "DXT1" => {
                     let mut out = vec![0; Format::Bc1.compressed_size(w as usize, h as usize)];
@@ -388,7 +388,7 @@ impl Paa {
 
         // Palette size. The zero doubles as the tagg section terminator.
         output
-            .write_u16::<LittleEndian>(self.palette.as_ref().map(|p| p.len()).unwrap_or(0) as u16)?;
+            .write_u16::<LittleEndian>(self.palette.as_ref().map_or(0, std::vec::Vec::len) as u16)?;
         if let Some(palette) = &self.palette {
             output.write_all(palette)?;
         }
@@ -412,7 +412,7 @@ impl Paa {
                 ),
                 _ => None,
             };
-            if current_width > 128 && raw.map_or(false, |raw| mipmap.len() < raw) {
+            if current_width > 128 && raw.is_some_and(|raw| mipmap.len() < raw) {
                 w |= 0x8000; // LZO compressed
             }
             output.write_u16::<LittleEndian>(w)?;

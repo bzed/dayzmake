@@ -8,11 +8,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use colored::Colorize;
-use once_cell::sync::Lazy;
 use peg::error::ParseError;
 use peg::str::LineCol;
 
-use crate::preprocess::*;
+use crate::preprocess::PreprocessInfo;
 
 struct WarningState {
     max: u32,
@@ -20,7 +19,7 @@ struct WarningState {
     raised: HashMap<String, u32>,
 }
 
-static WARNING_STATE: Lazy<Mutex<WarningState>> = Lazy::new(|| {
+static WARNING_STATE: std::sync::LazyLock<Mutex<WarningState>> = std::sync::LazyLock::new(|| {
     Mutex::new(WarningState {
         max: 10,
         muted: HashSet::new(),
@@ -69,8 +68,8 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
             Err(pe) => {
                 let line_origin = pe.location.line - 1;
                 let file_origin = match origin {
-                    Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
-                    None => "".to_string(),
+                    Some(path) => format!("{}:", path.to_str().unwrap()),
+                    None => String::new(),
                 };
 
                 let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
@@ -102,8 +101,8 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                     [min(pe.location.line, info.line_origins.len()) - 1]
                     .1
                 {
-                    Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
-                    None => "".to_string(),
+                    Some(path) => format!("{}:", path.to_str().unwrap()),
+                    None => String::new(),
                 };
 
                 let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
@@ -150,19 +149,16 @@ fn print_warning_message<M: AsRef<[u8]> + Display>(
     name: Option<&'static str>,
     location: (Option<M>, Option<u32>),
 ) {
-    let loc_str = if location.0.is_some() && location.1.is_some() {
-        format!("In file {}:{}: ", location.0.unwrap(), location.1.unwrap())
-    } else if location.0.is_some() {
-        format!("In file {}: ", location.0.unwrap())
-    } else if location.1.is_some() {
-        format!("In line {}: ", location.1.unwrap())
-    } else {
-        "".to_string()
+    let loc_str = match (&location.0, &location.1) {
+        (Some(file), Some(line)) => format!("In file {file}:{line}: "),
+        (Some(file), None) => format!("In file {file}: "),
+        (None, Some(line)) => format!("In line {line}: "),
+        (None, None) => String::new(),
     };
 
     let name_str = match name {
-        Some(name) => format!(" [{}]", name),
-        None => "".to_string(),
+        Some(name) => format!(" [{name}]"),
+        None => String::new(),
     };
 
     eprintln!(
@@ -214,7 +210,7 @@ pub fn warning_suppressed(name: Option<&'static str>) -> bool {
     if let Some(raised) = state.raised.get(name) {
         raised >= &state.max
     } else {
-        return false;
+        false
     }
 }
 
@@ -222,7 +218,7 @@ pub fn print_warning_summary() {
     let state = WARNING_STATE.lock().unwrap();
     let mut summary_warnings = Vec::new();
 
-    for (name, raised) in state.raised.iter() {
+    for (name, raised) in &state.raised {
         if state.muted.contains(name) {
             continue;
         }
@@ -231,13 +227,11 @@ pub fn print_warning_summary() {
             let excess = *raised - state.max;
             let msg = if excess > 1 {
                 format!(
-                    "{} warnings of type \"{}\" were suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.",
-                    excess, name, name
+                    "{excess} warnings of type \"{name}\" were suppressed to prevent spam. Use \"-w {name}\" to disable these warnings entirely."
                 )
             } else {
                 format!(
-                    "{} warning of type \"{}\" was suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.",
-                    excess, name, name
+                    "{excess} warning of type \"{name}\" was suppressed to prevent spam. Use \"-w {name}\" to disable these warnings entirely."
                 )
             };
             summary_warnings.push(msg);

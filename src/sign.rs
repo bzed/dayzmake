@@ -9,8 +9,8 @@ use openssl::bn::{BigNum, BigNumContext};
 use openssl::hash::{DigestBytes, Hasher, MessageDigest};
 use openssl::rsa::Rsa;
 
-use crate::io::*;
-use crate::pbo::*;
+use crate::io::{ReadExt, WriteExt};
+use crate::pbo::PBO;
 
 /// BI private key (.biprivatekey)
 pub struct BIPrivateKey {
@@ -57,14 +57,17 @@ pub struct BISign {
 
 fn write_bignum<O: Write>(output: &mut O, bn: &BigNum, size: usize) -> Result<(), Error> {
     let mut vec: Vec<u8> = bn.to_vec();
-    vec = vec.iter().rev().cloned().collect();
+    vec = vec.iter().rev().copied().collect();
     vec.resize(size, 0);
 
-    Ok(output.write_all(&vec)?)
+    output.write_all(&vec)
 }
 
+/// A PBO entry's lowercased raw name bytes paired with its contents.
+type NameFilePair<'a> = (Vec<u8>, &'a Cursor<Box<[u8]>>);
+
 fn namehash(pbo: &PBO) -> DigestBytes {
-    let mut files_sorted: Vec<(Vec<u8>, &Cursor<Box<[u8]>>)> = pbo
+    let mut files_sorted: Vec<NameFilePair<'_>> = pbo
         .files
         .iter()
         .map(|(a, b)| (pbo.name_bytes(a).to_ascii_lowercase(), b))
@@ -74,7 +77,7 @@ fn namehash(pbo: &PBO) -> DigestBytes {
     let mut h = Hasher::new(MessageDigest::sha1()).unwrap();
 
     for (name, data) in &files_sorted {
-        if data.get_ref().len() == 0 {
+        if data.get_ref().is_empty() {
             continue;
         }
 
@@ -88,8 +91,8 @@ fn filehash(pbo: &PBO, version: BISignVersion) -> DigestBytes {
     let mut h = Hasher::new(MessageDigest::sha1()).unwrap();
     let mut nothing = true;
 
-    for (name, cursor) in pbo.files.iter() {
-        let ext = name.split('.').last().unwrap();
+    for (name, cursor) in &pbo.files {
+        let ext = name.split('.').next_back().unwrap();
 
         match version {
             BISignVersion::V2 => {
@@ -156,7 +159,7 @@ fn generate_hashes(pbo: &PBO, version: BISignVersion, length: u32) -> (BigNum, B
 
     let mut h = Hasher::new(MessageDigest::sha1()).unwrap();
     h.update(hash1).unwrap();
-    h.update(&*namehash(pbo)).unwrap();
+    h.update(&namehash(pbo)).unwrap();
     if let Some(prefix) = pbo.header_extensions.get("prefix") {
         h.update(&pbo.extension_bytes(prefix)).unwrap();
         if !prefix.ends_with('\\') {
@@ -166,8 +169,8 @@ fn generate_hashes(pbo: &PBO, version: BISignVersion, length: u32) -> (BigNum, B
     let hash2 = &*h.finish().unwrap();
 
     h = Hasher::new(MessageDigest::sha1()).unwrap();
-    h.update(&*filehash(pbo, version)).unwrap();
-    h.update(&*namehash(pbo)).unwrap();
+    h.update(&filehash(pbo, version)).unwrap();
+    h.update(&namehash(pbo)).unwrap();
     if let Some(prefix) = pbo.header_extensions.get("prefix") {
         h.update(&pbo.extension_bytes(prefix)).unwrap();
         if !prefix.ends_with('\\') {
@@ -207,10 +210,10 @@ fn display_hashes(a: BigNum, b: BigNum) -> (String, String) {
     let (paddinga, hasha) = hexa.split_at(hexa.len() - 40);
     let (paddingb, hashb) = hexb.split_at(hexb.len() - 40);
 
-    if paddinga != paddingb {
-        (hexa, hexb)
-    } else {
+    if paddinga == paddingb {
         (hasha.to_string(), hashb.to_string())
+    } else {
+        (hexa, hexb)
     }
 }
 
@@ -229,37 +232,37 @@ impl BIPrivateKey {
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let n = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 16) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let p = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 16) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let q = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 16) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let dmp1 = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 16) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let dmq1 = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 16) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let iqmp = BigNum::from_slice(&buffer).unwrap();
 
         buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let d = BigNum::from_slice(&buffer).unwrap();
 
         Ok(BIPrivateKey {
@@ -279,6 +282,7 @@ impl BIPrivateKey {
     /// Generate a new private key with the given name and bitlength.
     ///
     /// Arma 3 uses 1024 bit keys.
+    #[must_use]
     pub fn generate(length: u32, name: String) -> BIPrivateKey {
         let rsa = Rsa::generate(length).expect("Failed to generate keypair");
 
@@ -297,6 +301,7 @@ impl BIPrivateKey {
     }
 
     /// Returns the public key for this private key.
+    #[must_use]
     pub fn to_public_key(&self) -> BIPublicKey {
         BIPublicKey {
             name: self.name.clone(),
@@ -307,6 +312,7 @@ impl BIPrivateKey {
     }
 
     /// Signs the given PBO with this private key.
+    #[must_use]
     pub fn sign(&self, pbo: &PBO, version: BISignVersion) -> BISign {
         let (hash1, hash2, hash3) = generate_hashes(pbo, version, self.length);
 
@@ -365,7 +371,7 @@ impl BIPublicKey {
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let n = BigNum::from_slice(&buffer).unwrap();
 
         Ok(BIPublicKey {
@@ -439,9 +445,9 @@ impl BIPublicKey {
     }
 }
 
-impl Into<u32> for BISignVersion {
-    fn into(self) -> u32 {
-        match self {
+impl From<BISignVersion> for u32 {
+    fn from(val: BISignVersion) -> Self {
+        match val {
             BISignVersion::V2 => 2,
             BISignVersion::V3 => 3,
         }
@@ -464,14 +470,14 @@ impl BISign {
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let n = BigNum::from_slice(&buffer).unwrap();
 
         input.read_u32::<LittleEndian>()?;
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let sig1 = BigNum::from_slice(&buffer).unwrap();
 
         let version = match input.read_u32::<LittleEndian>()? {
@@ -486,14 +492,14 @@ impl BISign {
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let sig2 = BigNum::from_slice(&buffer).unwrap();
 
         input.read_u32::<LittleEndian>()?;
 
         let mut buffer = vec![0; (length / 8) as usize];
         input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().cloned().collect();
+        buffer = buffer.iter().rev().copied().collect();
         let sig3 = BigNum::from_slice(&buffer).unwrap();
 
         Ok(BISign {
@@ -540,7 +546,7 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
     let name = keyname.file_name().unwrap().to_str().unwrap();
 
     let mut private_key_path = keyname.clone();
-    private_key_path.set_file_name(format!("{}.biprivatekey", name));
+    private_key_path.set_file_name(format!("{name}.biprivatekey"));
     if !force && private_key_path.exists() {
         return Err(error!(
             "Target file \"{}\" already exists. Use --force to overwrite.",
@@ -552,7 +558,7 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
         .expect("Failed to write private key");
 
     let mut public_key_path = keyname.clone();
-    public_key_path.set_file_name(format!("{}.bikey", name));
+    public_key_path.set_file_name(format!("{name}.bikey"));
     if !force && public_key_path.exists() {
         return Err(error!(
             "Target file \"{}\" already exists. Use --force to overwrite.",
@@ -582,13 +588,12 @@ pub fn cmd_sign(
     let pbo = PBO::read(&mut File::open(&pbo_path).expect("Failed to open PBO"))
         .expect("Failed to read PBO");
 
-    let sig_path = match signature_path {
-        Some(path) => path,
-        None => {
-            let mut path = pbo_path.clone();
-            path.set_extension(format!("pbo.{}.bisign", privatekey.name));
-            path
-        }
+    let sig_path = if let Some(path) = signature_path {
+        path
+    } else {
+        let mut path = pbo_path.clone();
+        path.set_extension(format!("pbo.{}.bisign", privatekey.name));
+        path
     };
 
     if !force && sig_path.exists() {
@@ -618,13 +623,12 @@ pub fn cmd_verify(
     let pbo = PBO::read(&mut File::open(&pbo_path).expect("Failed to open PBO"))
         .expect("Failed to read PBO");
 
-    let sig_path = match signature_path {
-        Some(path) => path,
-        None => {
-            let mut path = pbo_path.clone();
-            path.set_extension(format!("pbo.{}.bisign", publickey.name));
-            path
-        }
+    let sig_path = if let Some(path) = signature_path {
+        path
+    } else {
+        let mut path = pbo_path.clone();
+        path.set_extension(format!("pbo.{}.bisign", publickey.name));
+        path
     };
 
     let sig = BISign::read(&mut File::open(&sig_path).expect("Failed to open signature"))

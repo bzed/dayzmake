@@ -17,8 +17,8 @@ use winreg::RegKey;
 #[cfg(windows)]
 use winreg::enums::*;
 
-use crate::error::*;
-use crate::*;
+use crate::error;
+use crate::error::{ErrorExt, warning};
 
 #[cfg(windows)]
 fn find_binarize_exe() -> Result<PathBuf, Error> {
@@ -73,11 +73,7 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 /// resolves texture references (`prefix\data\x.paa`) relative to its current directory, so the
 /// addon is made available at `P:\<prefix>`.
 #[cfg(unix)]
-pub fn binarize(
-    input: &PathBuf,
-    addon_root: &Path,
-    prefix: &str,
-) -> Result<Cursor<Box<[u8]>>, Error> {
+pub fn binarize(input: &Path, addon_root: &Path, prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
     if !PROTON_ENABLED.load(Ordering::SeqCst) {
         return Err(error!(
             "binarize.exe is only available on Windows, or on Linux through Proton. Use --proton-binarize (see README) or rapify to binarize configs."
@@ -174,8 +170,7 @@ fn cli_addon(input: PathBuf) -> (PathBuf, PathBuf) {
     };
     let addon_root = input
         .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
     (input, addon_root)
 }
 
@@ -215,10 +210,7 @@ pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), 
 
     if let Some(description) = binarized_description(&input)? {
         warning(
-            format!(
-                "File is already binarized ({}); copying it as-is.",
-                description
-            ),
+            format!("File is already binarized ({description}); copying it as-is."),
             Some("prebinarized-file"),
             (Some(input.to_string_lossy().into_owned()), None),
         );
@@ -253,10 +245,8 @@ mod proton {
     use std::thread::sleep;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-    use once_cell::sync::Lazy;
-
-    use crate::error::*;
-    use crate::*;
+    use crate::error;
+    use crate::error::{ErrorExt, warning};
 
     const APP_ID: &str = "830640";
     const PREFIX_TIMEOUT: Duration = Duration::from_secs(300);
@@ -269,7 +259,8 @@ mod proton {
         counter: u32,
     }
 
-    static SANDBOX: Lazy<Mutex<Option<Sandbox>>> = Lazy::new(|| Mutex::new(None));
+    static SANDBOX: std::sync::LazyLock<Mutex<Option<Sandbox>>> =
+        std::sync::LazyLock::new(|| Mutex::new(None));
 
     /// The first candidate that has `steamapps/common`.
     pub fn find_steam_root(candidates: &[PathBuf]) -> Option<PathBuf> {
@@ -281,10 +272,10 @@ mod proton {
 
     fn steam_candidates() -> Vec<PathBuf> {
         let mut c: Vec<PathBuf> = Vec::new();
-        if let Some(r) = std::env::var_os("STEAM_ROOT") {
-            if !r.is_empty() {
-                c.push(PathBuf::from(r));
-            }
+        if let Some(r) = std::env::var_os("STEAM_ROOT")
+            && !r.is_empty()
+        {
+            c.push(PathBuf::from(r));
         }
         if let Some(home) = std::env::var_os("HOME") {
             let home = PathBuf::from(home);
@@ -295,7 +286,7 @@ mod proton {
         c
     }
 
-    /// `override_dir` is DAYZ_TOOLS; returns the directory holding Bin/Binarize/binarize.exe.
+    /// `override_dir` is `DAYZ_TOOLS`; returns the directory holding Bin/Binarize/binarize.exe.
     pub fn find_dayz_tools(
         steam_root: Option<&Path>,
         override_dir: Option<PathBuf>,
@@ -349,12 +340,12 @@ mod proton {
         }
         let mut others: Vec<PathBuf> = match std::fs::read_dir(&common) {
             Ok(rd) => rd
-                .filter_map(|e| e.ok())
+                .filter_map(std::result::Result::ok)
                 .map(|e| e.path())
                 .filter(|p| {
                     p.file_name()
                         .and_then(|n| n.to_str())
-                        .map_or(false, |n| n.starts_with("Proton"))
+                        .is_some_and(|n| n.starts_with("Proton"))
                         && p.join("proton").is_file()
                 })
                 .collect(),
@@ -463,7 +454,7 @@ mod proton {
 
         if !status.success() {
             let msg = match status.code() {
-                Some(code) => format!("proton terminated with exit code: {}", code),
+                Some(code) => format!("proton terminated with exit code: {code}"),
                 None => "proton terminated by signal.".to_string(),
             };
             return Err(error!("{}\n{}", msg, tail(log, 15)));
@@ -497,8 +488,7 @@ mod proton {
 
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.subsec_nanos());
         let root = std::env::temp_dir().join(format!(
             "dayzmake-binarize-{}-{}",
             std::process::id(),
@@ -584,10 +574,7 @@ mod proton {
     /// Makes the addon visible at `<sandbox>/P/<prefix>` (once per addon).
     pub fn stage_addon(root: &Path, prefix: &str, addon_root: &Path) -> Result<(), Error> {
         let mut link = root.join("P");
-        for part in prefix
-            .split(|c| c == '\\' || c == '/')
-            .filter(|p| !p.is_empty())
-        {
+        for part in prefix.split(['\\', '/']).filter(|p| !p.is_empty()) {
             link.push(part);
         }
         if link.symlink_metadata().is_ok() {
@@ -602,7 +589,7 @@ mod proton {
     /// Windows path on the P: drive of `relative_dir` inside the addon with the given prefix.
     pub fn p_win_path(prefix: &str, relative_dir: &Path) -> String {
         let mut parts: Vec<String> = prefix
-            .split(|c| c == '\\' || c == '/')
+            .split(['\\', '/'])
             .filter(|p| !p.is_empty())
             .map(String::from)
             .collect();
@@ -616,7 +603,7 @@ mod proton {
     }
 
     pub fn binarize(
-        input: &PathBuf,
+        input: &Path,
         addon_root: &Path,
         prefix: &str,
     ) -> Result<Cursor<Box<[u8]>>, Error> {
@@ -675,12 +662,9 @@ mod proton {
         warn_missing_textures(&log, &name);
 
         let mut buffer: Vec<u8> = Vec::new();
-        match File::open(out_dir.join(&name)) {
-            Ok(mut f) => {
-                f.read_to_end(&mut buffer)
-                    .prepend_error("Failed to read binarize.exe output:")?;
-            }
-            Err(_) => {}
+        if let Ok(mut f) = File::open(out_dir.join(&name)) {
+            f.read_to_end(&mut buffer)
+                .prepend_error("Failed to read binarize.exe output:")?;
         }
         if buffer.is_empty() {
             return Err(error!(
@@ -717,9 +701,7 @@ mod proton {
                 let (input, root) = super::super::cli_addon(PathBuf::from(input));
                 assert!(
                     input.parent().unwrap().strip_prefix(&root).is_ok(),
-                    "{:?} not in {:?}",
-                    input,
-                    root
+                    "{input:?} not in {root:?}"
                 );
                 assert_eq!(input.file_name().unwrap(), "model.p3d");
             }

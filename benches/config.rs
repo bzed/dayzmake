@@ -2,7 +2,7 @@ use std::io::Cursor;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use dayzmake::config::*;
+use dayzmake::config::Config;
 
 fn bench_config(c: &mut Criterion) {
     c.bench_function("config", |b| {
@@ -30,7 +30,7 @@ class CfgPatches {
             let mut cursor = Cursor::new(input);
 
             Config::read(&mut cursor, None, &Vec::new()).unwrap();
-        })
+        });
     });
 }
 

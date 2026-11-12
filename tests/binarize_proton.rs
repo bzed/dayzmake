@@ -34,9 +34,9 @@ fn proton_binarize_sets_alpha_flags() {
         ],
         tmp.path(),
     );
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let (code, model, err) = run(&["cat", "out.pbo", "model.p3d"], tmp.path());
-    assert_eq!(code, 0, "{}", err);
+    assert_eq!(code, 0, "{err}");
     let expected = std::fs::read(fixtures.join("model.expected.p3d")).unwrap();
     assert!(
         model == expected,

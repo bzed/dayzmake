@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::error::*;
-use crate::io::*;
+use crate::error::{ErrorExt, warning};
+use crate::io::{ReadExt, WriteExt};
 
 fn invalid<S: Into<String>>(msg: S) -> Error {
     Error::new(ErrorKind::InvalidData, msg.into())
@@ -76,6 +76,7 @@ pub struct P3D {
 
 impl Point {
     #[allow(dead_code)]
+    #[must_use]
     pub fn new() -> Point {
         Point {
             coords: (0.0, 0.0, 0.0),
@@ -105,6 +106,7 @@ impl Point {
 
 impl Vertex {
     #[allow(dead_code)]
+    #[must_use]
     pub fn new() -> Vertex {
         Vertex {
             point_index: 0,
@@ -135,6 +137,7 @@ impl Vertex {
 
 impl Face {
     #[allow(dead_code)]
+    #[must_use]
     pub fn new() -> Face {
         Face {
             vertices: Vec::with_capacity(4),
@@ -149,8 +152,7 @@ impl Face {
         let num_verts = input.read_u32::<LittleEndian>()?;
         if num_verts != 3 && num_verts != 4 {
             return Err(invalid(format!(
-                "face with {} vertices (expected 3 or 4)",
-                num_verts
+                "face with {num_verts} vertices (expected 3 or 4)"
             )));
         }
 
@@ -206,6 +208,7 @@ impl Face {
 
 impl Tagg {
     /// For `#Property#`: the (name, value) pair, two NUL-padded 64 byte strings.
+    #[must_use]
     pub fn property(&self) -> Option<(String, String)> {
         if self.name != "#Property#" || self.data.len() != 128 {
             return None;
@@ -218,12 +221,14 @@ impl Tagg {
     }
 
     /// Selections are the tags whose name isn't one of the `#...#` markers.
+    #[must_use]
     pub fn is_selection(&self) -> bool {
         !self.name.starts_with('#')
     }
 }
 
 /// Human readable name of a LOD resolution, for the values that are well known.
+#[must_use]
 pub fn lod_name(resolution: f32) -> Option<&'static str> {
     const NAMES: &[(f32, &str)] = &[
         (1.0e3, "View - Gunner"),
@@ -246,6 +251,7 @@ pub fn lod_name(resolution: f32) -> Option<&'static str> {
 }
 
 impl LOD {
+    #[must_use]
     pub fn name(&self) -> String {
         match lod_name(self.resolution) {
             Some(n) => n.to_string(),
@@ -258,6 +264,7 @@ impl LOD {
         self.taggs.iter().filter_map(Tagg::property).collect()
     }
 
+    #[must_use]
     pub fn selections(&self) -> Vec<&str> {
         self.taggs
             .iter()
@@ -266,6 +273,7 @@ impl LOD {
             .collect()
     }
 
+    #[must_use]
     pub fn uv_set_count(&self) -> usize {
         self.taggs.iter().filter(|t| t.name == "#UVSet#").count()
     }
@@ -317,11 +325,14 @@ impl LOD {
             let name = input.read_cstring()?;
             let size = input.read_u32::<LittleEndian>()?;
             let mut data = Vec::with_capacity(capacity(size));
-            let got = input.by_ref().take(size as u64).read_to_end(&mut data)?;
+            let got = input
+                .by_ref()
+                .take(u64::from(size))
+                .read_to_end(&mut data)?;
             if got != size as usize {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
-                    format!("tag \"{}\" is truncated", name),
+                    format!("tag \"{name}\" is truncated"),
                 ));
             }
 
@@ -409,7 +420,7 @@ impl P3D {
         let mut lods: Vec<LOD> = Vec::with_capacity(capacity(num_lods));
 
         for i in 0..num_lods {
-            lods.push(LOD::read(&mut reader).prepend_error(format!("Failed to read LOD {}:", i))?);
+            lods.push(LOD::read(&mut reader).prepend_error(format!("Failed to read LOD {i}:"))?);
         }
 
         Ok(P3D { version, lods })
@@ -431,10 +442,12 @@ impl P3D {
 
     /// Texture and material paths used by the faces of all LODs, with the number of faces using them.
     /// Empty names are left out.
+    #[must_use]
     pub fn textures(&self) -> BTreeMap<&str, usize> {
         self.count_faces(|f| &f.texture)
     }
 
+    #[must_use]
     pub fn materials(&self) -> BTreeMap<&str, usize> {
         self.count_faces(|f| &f.material)
     }
@@ -459,7 +472,7 @@ fn exists_ignore_case(root: &Path, rel: &str) -> bool {
     let mut dir = root.to_path_buf();
     for part in rel.split('\\').filter(|p| !p.is_empty()) {
         let found = std::fs::read_dir(&dir).ok().and_then(|rd| {
-            rd.filter_map(|e| e.ok())
+            rd.filter_map(std::result::Result::ok)
                 .find(|e| e.file_name().to_string_lossy().to_lowercase() == part)
                 .map(|e| e.path())
         });
@@ -502,13 +515,13 @@ pub fn check_dependencies(
     };
 
     let prefix = prefix.replace('/', "\\").trim_matches('\\').to_lowercase();
-    let own = format!("{}\\", prefix);
+    let own = format!("{prefix}\\");
 
     let kinds: [(&str, &'static str, BTreeMap<&str, usize>); 2] = [
         ("texture", "missing-texture", p3d.textures()),
         ("material", "missing-material", p3d.materials()),
     ];
-    for (kind, warning_name, refs) in kinds.iter() {
+    for (kind, warning_name, refs) in &kinds {
         for name in refs.keys().filter(|n| !n.starts_with('#')) {
             let normalized = name
                 .replace('/', "\\")
@@ -526,10 +539,7 @@ pub fn check_dependencies(
             };
             if exists == Some(false) {
                 warning(
-                    format!(
-                        "Model references {} \"{}\", which is not in the addon.",
-                        kind, name
-                    ),
+                    format!("Model references {kind} \"{name}\", which is not in the addon."),
                     Some(*warning_name),
                     (Some(display.to_string()), None),
                 );
@@ -541,7 +551,7 @@ pub fn check_dependencies(
 /// The 4 byte magic of a model file ("MLOD", "ODOL" or "BMTR"), if it is one. The reader is
 /// put back to where it was.
 pub fn model_magic<I: Read + Seek>(input: &mut I) -> Result<Option<[u8; 4]>, Error> {
-    let start = input.seek(SeekFrom::Current(0))?;
+    let start = input.stream_position()?;
     let mut magic = [0; 4];
     let complete = input.read_exact(&mut magic).is_ok();
     input.seek(SeekFrom::Start(start))?;
@@ -568,8 +578,8 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
             } else {
                 ("BMTR", "binarized animation")
             };
-            println!("Format:  {} ({})", name, what);
-            println!("Version: {}", version);
+            println!("Format:  {name} ({what})");
+            println!("Version: {version}");
             return Ok(());
         }
         None => return Err(error!("Not a P3D model (no MLOD, ODOL or BMTR header).")),
@@ -601,18 +611,18 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
     println!();
     println!("Textures:");
     for (name, count) in p3d.textures() {
-        println!("- {} ({} faces)", name, count);
+        println!("- {name} ({count} faces)");
     }
     println!("Materials:");
     for (name, count) in p3d.materials() {
-        println!("- {} ({} faces)", name, count);
+        println!("- {name} ({count} faces)");
     }
 
     println!();
     println!("Properties:");
     for (i, lod) in p3d.lods.iter().enumerate() {
         for (name, value) in lod.properties() {
-            println!("- LOD {}: {} = {}", i, name, value);
+            println!("- LOD {i}: {name} = {value}");
         }
     }
 
