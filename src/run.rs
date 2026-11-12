@@ -256,15 +256,15 @@ fn run_command(args: &Args) -> Result<(), Error> {
         )
     } else if args.cmd_paa2img {
         paa::cmd_paa2img(
-            required_source(args)?,
-            required_target(args)?,
+            &required_source(args)?,
+            &required_target(args)?,
             args.flag_force,
         )
     } else if args.cmd_img2paa {
         paa::cmd_img2paa(
-            required_source(args)?,
-            required_target(args)?,
-            args.flag_type.clone(),
+            &required_source(args)?,
+            &required_target(args)?,
+            &args.flag_type,
             args.flag_compress,
             args.flag_force,
         )

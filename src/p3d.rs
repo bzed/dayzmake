@@ -23,24 +23,36 @@ fn capacity(n: u32) -> usize {
     (n as usize).min(1 << 16)
 }
 
+/// A vertex position with its flags.
 #[derive(Debug, Default)]
 pub struct Point {
+    /// Position in model space.
     pub coords: (f32, f32, f32),
+    /// Point flags.
     pub flags: u32,
 }
 
+/// A face vertex: indices into the point and normal arrays plus a UV pair.
 #[derive(Debug, Default)]
 pub struct Vertex {
+    /// Index into the LOD's points.
     pub point_index: u32,
+    /// Index into the LOD's face normals.
     pub normal_index: u32,
+    /// Texture coordinates.
     pub uv: (f32, f32),
 }
 
+/// A face with its vertices, texture and material.
 #[derive(Debug, Default)]
 pub struct Face {
+    /// The face's vertices (3 for a triangle, 4 for a quad).
     pub vertices: Vec<Vertex>,
+    /// Face flags.
     pub flags: u32,
+    /// Texture path.
     pub texture: String,
+    /// Material (rvmat) path.
     pub material: String,
     /// Triangles are stored with a fourth, unused vertex; kept so the file round-trips.
     pub spare_vertex: Option<Vertex>,
@@ -50,32 +62,46 @@ pub struct Face {
 /// (`#Property#`, `#UVSet#`), so these are kept in file order in a `Vec`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tagg {
+    /// The tagg's active byte.
     pub active: u8,
+    /// The tagg's name (e.g. `#Property#` or a selection name).
     pub name: String,
+    /// The tagg's payload.
     pub data: Vec<u8>,
 }
 
+/// One level of detail of the model.
 #[derive(Debug)]
 pub struct LOD {
+    /// LOD format version, major part.
     pub version_major: u32,
+    /// LOD format version, minor part.
     pub version_minor: u32,
     /// The 4 bytes after the counts in the LOD header.
     pub flags: u32,
+    /// The LOD's resolution; special values name named LODs (geometry etc.).
     pub resolution: f32,
+    /// Positions.
     pub points: Vec<Point>,
+    /// Face normals.
     pub face_normals: Vec<(f32, f32, f32)>,
+    /// Faces.
     pub faces: Vec<Face>,
+    /// TAGG entries in file order.
     pub taggs: Vec<Tagg>,
 }
 
+/// An MLOD model.
 #[derive(Debug)]
 pub struct P3D {
+    /// MLOD format version.
     pub version: u32,
+    /// The model's LODs, in file order.
     pub lods: Vec<LOD>,
 }
 
 impl Point {
-    #[allow(dead_code)]
+    /// Creates an all-zero point.
     #[must_use]
     pub fn new() -> Point {
         Point {
@@ -105,7 +131,7 @@ impl Point {
 }
 
 impl Vertex {
-    #[allow(dead_code)]
+    /// Creates an all-zero vertex.
     #[must_use]
     pub fn new() -> Vertex {
         Vertex {
@@ -136,7 +162,7 @@ impl Vertex {
 }
 
 impl Face {
-    #[allow(dead_code)]
+    /// Creates an empty face.
     #[must_use]
     pub fn new() -> Face {
         Face {
@@ -187,7 +213,9 @@ impl Face {
                 self.vertices.len()
             )));
         }
-        output.write_u32::<LittleEndian>(self.vertices.len() as u32)?;
+        let num_verts =
+            u32::try_from(self.vertices.len()).map_err(|_| invalid("too many vertices in face"))?;
+        output.write_u32::<LittleEndian>(num_verts)?;
 
         for vert in &self.vertices {
             vert.write(output)?;
@@ -215,9 +243,12 @@ impl Tagg {
         }
         let field = |b: &[u8]| {
             let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-            String::from_utf8_lossy(&b[..end]).into_owned()
+            String::from_utf8_lossy(b.get(..end).unwrap_or(b)).into_owned()
         };
-        Some((field(&self.data[..64]), field(&self.data[64..])))
+        let (Some(low), Some(high)) = (self.data.get(..64), self.data.get(64..)) else {
+            return None;
+        };
+        Some((field(low), field(high)))
     }
 
     /// Selections are the tags whose name isn't one of the `#...#` markers.
@@ -251,6 +282,7 @@ pub fn lod_name(resolution: f32) -> Option<&'static str> {
 }
 
 impl LOD {
+    /// Human readable name of this LOD (e.g. "Geometry", or its resolution).
     #[must_use]
     pub fn name(&self) -> String {
         match lod_name(self.resolution) {
@@ -260,10 +292,13 @@ impl LOD {
         }
     }
 
+    /// The LOD's `#Property#` taggs as (name, value) pairs.
+    #[must_use]
     pub fn properties(&self) -> Vec<(String, String)> {
         self.taggs.iter().filter_map(Tagg::property).collect()
     }
 
+    /// Selections are the tags whose name isn't one of the `#...#` markers.
     #[must_use]
     pub fn selections(&self) -> Vec<&str> {
         self.taggs
@@ -273,6 +308,7 @@ impl LOD {
             .collect()
     }
 
+    /// Number of `#UVSet#` taggs.
     #[must_use]
     pub fn uv_set_count(&self) -> usize {
         self.taggs.iter().filter(|t| t.name == "#UVSet#").count()
@@ -358,12 +394,14 @@ impl LOD {
     }
 
     fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
+        let len32 =
+            |len: usize| u32::try_from(len).map_err(|_| invalid("LOD section count out of range"));
         output.write_all(b"P3DM")?;
         output.write_u32::<LittleEndian>(self.version_major)?;
         output.write_u32::<LittleEndian>(self.version_minor)?;
-        output.write_u32::<LittleEndian>(self.points.len() as u32)?;
-        output.write_u32::<LittleEndian>(self.face_normals.len() as u32)?;
-        output.write_u32::<LittleEndian>(self.faces.len() as u32)?;
+        output.write_u32::<LittleEndian>(len32(self.points.len())?)?;
+        output.write_u32::<LittleEndian>(len32(self.face_normals.len())?)?;
+        output.write_u32::<LittleEndian>(len32(self.faces.len())?)?;
         output.write_u32::<LittleEndian>(self.flags)?;
 
         for point in &self.points {
@@ -385,7 +423,8 @@ impl LOD {
         for tagg in &self.taggs {
             output.write_all(&[tagg.active])?;
             output.write_cstring(&tagg.name)?;
-            output.write_u32::<LittleEndian>(tagg.data.len() as u32)?;
+            let size = u32::try_from(tagg.data.len()).map_err(|_| invalid("tag data too large"))?;
+            output.write_u32::<LittleEndian>(size)?;
             output.write_all(&tagg.data)?;
         }
 
@@ -400,6 +439,11 @@ impl LOD {
 }
 
 impl P3D {
+    /// Reads an MLOD model.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not an MLOD model or is malformed.
     pub fn read<I: Read>(input: &mut I) -> Result<P3D, Error> {
         let mut reader = BufReader::new(input);
 
@@ -426,12 +470,18 @@ impl P3D {
         Ok(P3D { version, lods })
     }
 
+    /// Writes the model as MLOD.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         let mut writer = BufWriter::new(output);
 
         writer.write_all(b"MLOD")?;
         writer.write_u32::<LittleEndian>(self.version)?;
-        writer.write_u32::<LittleEndian>(self.lods.len() as u32)?;
+        let num_lods = u32::try_from(self.lods.len()).map_err(|_| invalid("too many LODs"))?;
+        writer.write_u32::<LittleEndian>(num_lods)?;
 
         for lod in &self.lods {
             lod.write(&mut writer)?;
@@ -447,6 +497,8 @@ impl P3D {
         self.count_faces(|f| &f.texture)
     }
 
+    /// Material (rvmat) paths used by the faces of all LODs, with the number of faces using them.
+    /// Empty names are left out.
     #[must_use]
     pub fn materials(&self) -> BTreeMap<&str, usize> {
         self.count_faces(|f| &f.material)
@@ -492,11 +544,11 @@ fn exists_ignore_case(root: &Path, rel: &str) -> bool {
 /// (vanilla `dz\...`, other mods) can only be checked if it is below one of `search_roots`;
 /// if it isn't, there is no way to know whether the reference is wrong, so it is not reported.
 /// Procedural textures (`#(argb,...)`) are skipped. A model that can't be read only gets a warning.
-pub fn check_dependencies(
+pub fn check_dependencies<S: std::hash::BuildHasher>(
     path: &Path,
     display: &str,
     prefix: &str,
-    addon_files: &HashSet<String>,
+    addon_files: &HashSet<String, S>,
     search_roots: &[PathBuf],
 ) {
     let p3d = match File::open(path).and_then(|f| P3D::read(&mut BufReader::new(f))) {
@@ -550,6 +602,10 @@ pub fn check_dependencies(
 
 /// The 4 byte magic of a model file ("MLOD", "ODOL" or "BMTR"), if it is one. The reader is
 /// put back to where it was.
+///
+/// # Errors
+///
+/// Returns an error if seeking or reading fails (a short read is not an error).
 pub fn model_magic<I: Read + Seek>(input: &mut I) -> Result<Option<[u8; 4]>, Error> {
     let start = input.stream_position()?;
     let mut magic = [0; 4];
@@ -565,6 +621,11 @@ pub fn model_magic<I: Read + Seek>(input: &mut I) -> Result<Option<[u8; 4]>, Err
 }
 
 /// Prints what is in a model. For ODOL (and BMTR) only the format and version are known.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a model or cannot be read.
+#[expect(clippy::print_stdout, reason = "CLI command output")]
 pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
     match model_magic(input)? {
         Some(ref m) if m == b"MLOD" => {}

@@ -17,7 +17,7 @@
 
 use std::fs::File;
 use std::io::{Error, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::Path;
 
 use crate::error::ErrorExt;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -28,17 +28,29 @@ use texpresso::{Algorithm, Format, Params};
 
 const OFFS_TAGG: &str = "GGATSFFO"; // mipmap offsets (16 u32, zero padded)
 
+/// A PAA texture.
 #[derive(Debug)]
 pub struct Paa {
+    /// Tagg sections in file order (name → data).
     pub taggs: LinkedHashMap<String, Vec<u8>>,
+    /// Palette data, if the texture is paletted.
     pub palette: Option<Vec<u8>>,
+    /// Mipmap data, largest first.
     pub mipmaps: Vec<Vec<u8>>,
+    /// Width of the largest mipmap.
     pub width: u16,
+    /// Height of the largest mipmap.
     pub height: u16,
+    /// Compression format name (e.g. "DXT5").
     pub compression: String,
 }
 
 impl Paa {
+    /// Reads a PAA texture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not a supported PAA file or is malformed.
     pub fn read<I: Read + Seek>(input: &mut I) -> Result<Paa, Error> {
         // The top-level read function. We seek to the beginning to ensure consistent state,
         // as this might be called on a stream that has been partially read (e.g. by another
@@ -163,21 +175,23 @@ impl Paa {
         })
     }
 
+    /// Decodes the largest mipmap into an image.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the PAA has no image data, the format is unsupported
+    /// or the data does not fit the declared dimensions.
     pub fn to_dynamic_image(&self) -> Result<DynamicImage, Error> {
-        if self.mipmaps.is_empty() {
+        let Some(main_mipmap) = self.mipmaps.first() else {
             return Err(error!("PAA has no image data"));
-        }
-
-        let main_mipmap = &self.mipmaps[0];
-        let width = self.width as usize;
-        let height = self.height as usize;
+        };
+        let width = usize::from(self.width);
+        let height = usize::from(self.height);
 
         let format = match self.compression.as_str() {
             "DXT1" => Format::Bc1,
-            "DXT2" => Format::Bc2,
-            "DXT3" => Format::Bc2,
-            "DXT4" => Format::Bc3,
-            "DXT5" => Format::Bc3,
+            "DXT2" | "DXT3" => Format::Bc2,
+            "DXT4" | "DXT5" => Format::Bc3,
             "PAL" => {
                 let palette = self
                     .palette
@@ -185,32 +199,22 @@ impl Paa {
                     .ok_or_else(|| error!("Paletted PAA without palette data"))?;
                 let mut rgba_data = Vec::with_capacity(width * height * 4);
                 for &index in main_mipmap {
-                    let i = index as usize * 4;
-                    if i + 3 >= palette.len() {
-                        return Err(error!("Palette index out of bounds"));
-                    }
+                    let i = usize::from(index) * 4;
                     // Palette is BGRA
-                    rgba_data.push(palette[i + 2]); // R
-                    rgba_data.push(palette[i + 1]); // G
-                    rgba_data.push(palette[i]); // B
-                    rgba_data.push(palette[i + 3]); // A
+                    let Some(&[blue, green, red, alpha]) = palette.get(i..i + 4) else {
+                        return Err(error!("Palette index out of bounds"));
+                    };
+                    rgba_data.push(red);
+                    rgba_data.push(green);
+                    rgba_data.push(blue);
+                    rgba_data.push(alpha);
                 }
-                let img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(
-                    width as u32,
-                    height as u32,
-                    rgba_data,
-                )
-                .unwrap();
+                let img = Self::rgba_image(width, height, rgba_data)?;
                 return Ok(DynamicImage::ImageRgba8(img));
             }
             "RGBA" => {
                 if main_mipmap.len() == width * height * 4 {
-                    let img = ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(
-                        width as u32,
-                        height as u32,
-                        main_mipmap.clone(),
-                    )
-                    .unwrap();
+                    let img = Self::rgba_image(width, height, main_mipmap.clone())?;
                     return Ok(DynamicImage::ImageRgba8(img));
                 }
                 return Err(error!("Invalid uncompressed RGBA data size"));
@@ -226,12 +230,33 @@ impl Paa {
         let mut decompressed = vec![0u8; width * height * 4];
         format.decompress(main_mipmap, width, height, &mut decompressed);
 
-        let img =
-            ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(width as u32, height as u32, decompressed)
-                .unwrap();
+        let img = Self::rgba_image(width, height, decompressed)?;
         Ok(DynamicImage::ImageRgba8(img))
     }
 
+    /// Builds an RGBA image, checking that the data fits the dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data` does not hold `width * height` pixels.
+    fn rgba_image(
+        width: usize,
+        height: usize,
+        data: Vec<u8>,
+    ) -> Result<ImageBuffer<Rgba<u8>, Vec<u8>>, Error> {
+        let dims = u32::try_from(width).ok().and_then(|w| {
+            u32::try_from(height)
+                .ok()
+                .and_then(|h| ImageBuffer::<Rgba<u8>, Vec<u8>>::from_raw(w, h, data))
+        });
+        dims.ok_or_else(|| error!("Image data does not match dimensions"))
+    }
+
+    /// Encodes an image as a PAA texture, building the mipmap chain down to 4x4.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported PAA types or images too large for the format.
     pub fn from_dynamic_image(
         img: &DynamicImage,
         paa_type: &str,
@@ -292,7 +317,11 @@ impl Paa {
                     out
                 }
                 "RGBA" => data,
-                _ => unreachable!(),
+                _ => {
+                    return Err(error!(
+                        "Unsupported PAA compression type for creation: {compression}"
+                    ));
+                }
             };
             // LZO compress large mipmaps like the engine's own tools do.
             if compression != "RGBA" && w > 128 {
@@ -306,18 +335,32 @@ impl Paa {
             mipmaps.push(mipmap);
         }
 
-        let (width, height) = levels[0].dimensions();
+        let Some(first) = levels.first() else {
+            return Err(error!("no mipmaps were built"));
+        };
+        let (width, height) = first.dimensions();
+        let to_u16 =
+            |dim: u32| u16::try_from(dim).map_err(|_| error!("image too large for PAA: {dim}px"));
 
         Ok(Paa {
             taggs: LinkedHashMap::new(),
             palette: None,
             mipmaps,
-            width: width as u16,
-            height: height as u16,
+            width: to_u16(width)?,
+            height: to_u16(height)?,
             compression,
         })
     }
 
+    /// Writes the PAA texture.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or an unsupported compression type.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one block per PAA section keeps the writer readable"
+    )]
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         let magic_number: u16 = match self.compression.as_str() {
             "DXT1" => 0xff01,
@@ -344,9 +387,12 @@ impl Paa {
                     String::from_utf8_lossy(name)
                 ));
             }
-            name_bytes[..name.len()].copy_from_slice(name);
+            let (name_part, _) = name_bytes.split_at_mut(name.len());
+            name_part.copy_from_slice(name);
             output.write_all(&name_bytes)?;
-            output.write_u32::<LittleEndian>(data.len() as u32)?;
+            let size = u32::try_from(data.len())
+                .map_err(|_| error!("tagg data too large: {} bytes", data.len()))?;
+            output.write_u32::<LittleEndian>(size)?;
             output.write_all(data)?;
         }
 
@@ -354,12 +400,16 @@ impl Paa {
         let num_mipmaps = self.mipmaps.len().min(16);
         let mut offset = 2u32; // magic
         for (_, data) in &self.taggs {
-            offset += 8 + 4 + data.len() as u32;
+            let size = u32::try_from(data.len())
+                .map_err(|_| error!("tagg data too large: {} bytes", data.len()))?;
+            offset += 8 + 4 + size;
         }
         offset += 8 + 4 + 64; // offset tagg itself (padded to 16 u32)
         offset += 2; // palette size
         if let Some(palette) = &self.palette {
-            offset += palette.len() as u32;
+            let size = u32::try_from(palette.len())
+                .map_err(|_| error!("palette too large: {} bytes", palette.len()))?;
+            offset += size;
         }
 
         let mut offsets: Vec<u32> = Vec::new();
@@ -368,7 +418,9 @@ impl Paa {
         let mut current_height = self.height;
         for mipmap in self.mipmaps.iter().take(num_mipmaps) {
             offsets.push(current_offset);
-            current_offset += mipmap.len() as u32 + 2 + 2 + 3;
+            let size = u32::try_from(mipmap.len())
+                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.len()))?;
+            current_offset += size + 2 + 2 + 3;
             if current_width > 1 {
                 current_width /= 2;
             }
@@ -387,8 +439,10 @@ impl Paa {
         }
 
         // Palette size. The zero doubles as the tagg section terminator.
-        output
-            .write_u16::<LittleEndian>(self.palette.as_ref().map_or(0, std::vec::Vec::len) as u16)?;
+        let palette_len = self.palette.as_ref().map_or(0, std::vec::Vec::len);
+        let palette_len = u16::try_from(palette_len)
+            .map_err(|_| error!("palette too large: {palette_len} bytes"))?;
+        output.write_u16::<LittleEndian>(palette_len)?;
         if let Some(palette) = &self.palette {
             output.write_all(palette)?;
         }
@@ -417,8 +471,10 @@ impl Paa {
             }
             output.write_u16::<LittleEndian>(w)?;
             output.write_u16::<LittleEndian>(current_height)?;
-            let len = mipmap.len() as u32;
-            output.write_all(&[len as u8, (len >> 8) as u8, (len >> 16) as u8])?;
+            let len = u32::try_from(mipmap.len())
+                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.len()))?;
+            // 3-byte little endian length
+            output.write_all(&len.to_le_bytes()[..3])?;
             output.write_all(mipmap)?;
 
             if current_width > 1 {
@@ -438,7 +494,12 @@ impl Paa {
     }
 }
 
-pub fn cmd_paa2img(input_path: PathBuf, output_path: PathBuf, force: bool) -> Result<(), Error> {
+/// Converts a PAA file to a standard image format.
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be read or converted, or the target exists.
+pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result<(), Error> {
     if !force && output_path.exists() {
         return Err(error!(
             "Target file \"{}\" already exists. Use --force to overwrite.",
@@ -446,23 +507,28 @@ pub fn cmd_paa2img(input_path: PathBuf, output_path: PathBuf, force: bool) -> Re
         ));
     }
 
-    let mut file = File::open(&input_path).prepend_error("Failed to open input PAA file:")?;
+    let mut file = File::open(input_path).prepend_error("Failed to open input PAA file:")?;
     let paa = Paa::read(&mut file).prepend_error("Failed to read PAA file:")?;
     let img = paa
         .to_dynamic_image()
         .prepend_error("Failed to convert PAA to image:")?;
 
-    img.save(&output_path)
+    img.save(output_path)
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to save output image:")?;
 
     Ok(())
 }
 
+/// Converts a standard image file to PAA.
+///
+/// # Errors
+///
+/// Returns an error if the input cannot be read or converted, or the target exists.
 pub fn cmd_img2paa(
-    input_path: PathBuf,
-    output_path: PathBuf,
-    paa_type: String,
+    input_path: &Path,
+    output_path: &Path,
+    paa_type: &str,
     compress: bool,
     force: bool,
 ) -> Result<(), Error> {
@@ -473,13 +539,13 @@ pub fn cmd_img2paa(
         ));
     }
 
-    let img = image::open(&input_path)
+    let img = image::open(input_path)
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to open input image file:")?;
-    let paa = Paa::from_dynamic_image(&img, &paa_type, compress)
+    let paa = Paa::from_dynamic_image(&img, paa_type, compress)
         .prepend_error("Failed to convert image to PAA:")?;
 
-    let mut file = File::create(&output_path).prepend_error("Failed to create output PAA file:")?;
+    let mut file = File::create(output_path).prepend_error("Failed to create output PAA file:")?;
     paa.write(&mut file)
         .prepend_error("Failed to write PAA file:")?;
 
