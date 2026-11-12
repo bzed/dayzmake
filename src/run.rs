@@ -1,7 +1,5 @@
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
-use std::iter::FromIterator;
 use std::path::PathBuf;
 
 use crate::binarize;
@@ -17,6 +15,7 @@ use crate::sign;
 
 use serde::Deserialize;
 
+/// The docopt usage string: the CLI's `--help` text and command grammar.
 pub const USAGE: &str = "
 dayzmake
 
@@ -77,8 +76,14 @@ Options:
 ";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Parsed command-line arguments (populated by docopt from [`USAGE`]).
 #[derive(Debug, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "docopt requires one bool field per CLI flag"
+)]
 pub struct Args {
+    /// Whether the `rapify` command was given.
     cmd_rapify: bool,
     cmd_preprocess: bool,
     cmd_derapify: bool,
@@ -126,7 +131,9 @@ fn get_input(args: &Args) -> Result<Input, Error> {
         ))
     } else {
         let mut buffer: Vec<u8> = Vec::new();
-        stdin().read_to_end(&mut buffer).unwrap();
+        stdin()
+            .read_to_end(&mut buffer)
+            .prepend_error("Failed to read from stdin:")?;
         Ok(Input::Cursor(Cursor::new(buffer.into_boxed_slice())))
     }
 }
@@ -148,16 +155,18 @@ fn get_output(args: &Args) -> Result<Output, Error> {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one branch per CLI command keeps the dispatch readable"
+)]
 fn run_command(args: &Args) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_binarize {
-        binarize::cmd_binarize(
-            PathBuf::from(args.arg_source.as_ref().unwrap()),
-            PathBuf::from(args.arg_target.as_ref().unwrap()),
-            args.flag_force,
-        )
+        let source = required_source(args)?;
+        let target = required_target(args)?;
+        binarize::cmd_binarize(source, target, args.flag_force)
     } else if args.cmd_rapify {
         config::cmd_rapify(
             &mut get_input(args)?,
@@ -200,9 +209,10 @@ fn run_command(args: &Args) -> Result<(), Error> {
         }
 
         if let Some(pkey) = flag_privatekey {
+            let target = required_target(args)?;
             sign::cmd_sign(
                 pkey,
-                PathBuf::from(args.arg_target.as_ref().unwrap()),
+                target,
                 flag_signature,
                 sign::BISignVersion::V3,
                 args.flag_force,
@@ -246,14 +256,14 @@ fn run_command(args: &Args) -> Result<(), Error> {
         )
     } else if args.cmd_paa2img {
         paa::cmd_paa2img(
-            PathBuf::from(args.arg_source.as_ref().unwrap()),
-            PathBuf::from(args.arg_target.as_ref().unwrap()),
+            required_source(args)?,
+            required_target(args)?,
             args.flag_force,
         )
     } else if args.cmd_img2paa {
         paa::cmd_img2paa(
-            PathBuf::from(args.arg_source.as_ref().unwrap()),
-            PathBuf::from(args.arg_target.as_ref().unwrap()),
+            required_source(args)?,
+            required_target(args)?,
             args.flag_type.clone(),
             args.flag_compress,
             args.flag_force,
@@ -265,27 +275,42 @@ fn run_command(args: &Args) -> Result<(), Error> {
             args.arg_signature.as_ref().map(PathBuf::from),
         )
     } else {
-        unreachable!()
+        Err(error!("no command given"))
     }
 }
 
+/// Returns the `<source>` argument, which docopt guarantees for these commands.
+fn required_source(args: &Args) -> Result<PathBuf, Error> {
+    args.arg_source
+        .as_ref()
+        .map(PathBuf::from)
+        .ok_or_else(|| error!("missing <source> argument"))
+}
+
+/// Returns the `<target>` argument, which docopt guarantees for these commands.
+fn required_target(args: &Args) -> Result<PathBuf, Error> {
+    args.arg_target
+        .as_ref()
+        .map(PathBuf::from)
+        .ok_or_else(|| error!("missing <target> argument"))
+}
+
+/// Entry point driving the CLI: handles `--version`, then dispatches to the command.
 pub fn args(args: &mut Args) {
     if args.flag_indent.is_none() {
         args.flag_indent = Some("    ".to_string());
     }
 
-    //println!("{:?}", args);
-
     if args.flag_version {
-        println!("v{VERSION}");
+        #[expect(clippy::print_stdout, reason = "CLI command output")]
+        {
+            println!("v{VERSION}");
+        }
         std::process::exit(0);
     }
 
     binarize::set_proton(args.flag_proton_binarize);
-    error::init_warnings(
-        HashSet::from_iter(args.flag_warning.clone()),
-        args.flag_verbose,
-    );
+    error::init_warnings(args.flag_warning.clone(), args.flag_verbose);
     let result = run_command(args);
     binarize::cleanup(); // must happen before print_error, which exits on error
     result.print_error(true);

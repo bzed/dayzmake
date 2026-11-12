@@ -4,7 +4,7 @@
 //! and variables. Anything else (SQF commands, comparisons) is rejected.
 
 use std::collections::HashMap;
-
+use std::hash::BuildHasher;
 use std::io::Error;
 
 /// Result of an `__EVAL`
@@ -25,25 +25,24 @@ enum Tok {
 }
 
 fn unsupported(expr: &str) -> Error {
-    error!("__EVAL expression not supported by dayzmake: {}", expr)
+    error!("__EVAL expression not supported by dayzmake: {expr}")
 }
 
 fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
     let chars: Vec<char> = expr.chars().collect();
     let mut toks = Vec::new();
     let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
+    while let Some(&c) = chars.get(i) {
         if c.is_whitespace() {
             i += 1;
         } else if c.is_ascii_digit()
             || (c == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit))
         {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+            while matches!(chars.get(i), Some(c) if c.is_ascii_digit() || *c == '.') {
                 i += 1;
             }
-            let text: String = chars[start..i].iter().collect();
+            let text: String = chars.get(start..i).unwrap_or(&[]).iter().collect();
             toks.push(Tok::Num(text.parse().map_err(|_| unsupported(expr))?));
         } else if c == '"' {
             i += 1;
@@ -68,10 +67,12 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
             toks.push(Tok::Str(s));
         } else if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+            while matches!(chars.get(i), Some(c) if c.is_ascii_alphanumeric() || *c == '_') {
                 i += 1;
             }
-            toks.push(Tok::Ident(chars[start..i].iter().collect()));
+            toks.push(Tok::Ident(
+                chars.get(start..i).unwrap_or(&[]).iter().collect(),
+            ));
         } else if "+-*/%^()".contains(c) {
             toks.push(Tok::Op(c));
             i += 1;
@@ -82,14 +83,14 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
     Ok(toks)
 }
 
-struct Parser<'a> {
+struct Parser<'a, S: BuildHasher> {
     toks: Vec<Tok>,
     pos: usize,
     expr: &'a str,
-    vars: &'a HashMap<String, EvalValue>,
+    vars: &'a HashMap<String, EvalValue, S>,
 }
 
-impl Parser<'_> {
+impl<S: BuildHasher> Parser<'_, S> {
     fn peek_op(&self) -> Option<char> {
         match self.toks.get(self.pos) {
             Some(Tok::Op(c)) => Some(*c),
@@ -138,7 +139,7 @@ impl Parser<'_> {
                 .ok_or_else(|| unsupported(self.expr)),
             Tok::Op('-') => match self.atom()? {
                 EvalValue::Number(n) => Ok(EvalValue::Number(-n)),
-                _ => Err(unsupported(self.expr)),
+                EvalValue::Str(_) => Err(unsupported(self.expr)),
             },
             Tok::Op('(') => {
                 let v = self.expr(1)?;
@@ -159,13 +160,13 @@ impl Parser<'_> {
                 '-' => x - y,
                 '*' => x * y,
                 '/' => {
-                    if y == 0.0 {
+                    if matches!(y.classify(), std::num::FpCategory::Zero) {
                         return Err(error!("__EVAL: division by zero in: {}", self.expr));
                     }
                     x / y
                 }
                 '%' => {
-                    if y == 0.0 {
+                    if matches!(y.classify(), std::num::FpCategory::Zero) {
                         return Err(error!("__EVAL: division by zero in: {}", self.expr));
                     }
                     x % y
@@ -180,7 +181,14 @@ impl Parser<'_> {
 }
 
 /// Evaluates an expression.
-pub fn eval(expr: &str, vars: &mut HashMap<String, EvalValue>) -> Result<EvalValue, Error> {
+///
+/// # Errors
+///
+/// Returns an error for unsupported syntax, unknown variables and division by zero.
+pub fn eval<S: BuildHasher>(
+    expr: &str,
+    vars: &mut HashMap<String, EvalValue, S>,
+) -> Result<EvalValue, Error> {
     let toks = tokenize(expr)?;
     let mut parser = Parser {
         toks,
@@ -196,7 +204,14 @@ pub fn eval(expr: &str, vars: &mut HashMap<String, EvalValue>) -> Result<EvalVal
 }
 
 /// Executes `;`-separated assignments (`name = expr`), storing the results in `vars`.
-pub fn exec(stmts: &str, vars: &mut HashMap<String, EvalValue>) -> Result<(), Error> {
+///
+/// # Errors
+///
+/// Returns an error for statements that are not simple variable assignments.
+pub fn exec<S: BuildHasher>(
+    stmts: &str,
+    vars: &mut HashMap<String, EvalValue, S>,
+) -> Result<(), Error> {
     let mut in_string = false;
     let mut current = String::new();
     let mut parts = Vec::new();
