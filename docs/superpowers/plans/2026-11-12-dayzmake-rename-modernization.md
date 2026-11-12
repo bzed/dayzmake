@@ -123,10 +123,10 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Files:** Modify: `src/pbo.rs`, `src/binarize.rs`, `src/sign.rs`, `.github/workflows/ci.yml`.
 
-- [ ] **Step 1: Fix** the three modules (sign.rs has the most unwraps; most are in its test module which `clippy.toml` exempts — the non-test ones need error returns). Add a garbage-input test for PBO parsing (truncated header/entries error out instead of panicking), pinning Review Focus #3.
-- [ ] **Step 2: Verify**: `cargo clippy --all-targets --locked -- -D warnings` fully clean; `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` clean; `cargo test` green.
-- [ ] **Step 3: Add the `lint` job to ci.yml** (fmt-check, clippy `-D warnings`, doc, deny on ubuntu-latest) and the `windows` job stays test-only.
-- [ ] **Step 4: Commit** `lint: pbo, binarize, sign to the full standard; ci: lint job`
+- [x] **Step 1: Fix** the three modules (sign.rs has the most unwraps; most are in its test module which `clippy.toml` exempts — the non-test ones need error returns). Add a garbage-input test for PBO parsing (truncated header/entries error out instead of panicking), pinning Review Focus #3.
+- [x] **Step 2: Verify**: `cargo clippy --all-targets --locked -- -D warnings` fully clean; `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` clean; `cargo test` green.
+- [x] **Step 3: Add the `lint` job to ci.yml** (fmt-check, clippy `-D warnings`, doc, deny on ubuntu-latest) and the `windows` job stays test-only.
+- [x] **Step 4: Commit** `lint: pbo, binarize, sign to the full standard; ci: lint job`
 
 ### Task 9: Final verification and README consistency
 
