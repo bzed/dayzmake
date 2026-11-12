@@ -2,8 +2,9 @@ export TMPDIR ?= /tmp
 
 CARGO = cargo
 LOCKED = --locked
+COVERAGE_MIN = 70
 
-.PHONY: fmt fmt-check lint doc deny test check
+.PHONY: fmt fmt-check lint doc deny test cover coverage-check check
 
 fmt:
 	$(CARGO) fmt --all
@@ -24,4 +25,10 @@ test:
 	$(CARGO) test --all-targets $(LOCKED)
 	$(CARGO) test --doc $(LOCKED)
 
-check: fmt-check lint doc deny test
+cover:
+	$(CARGO) llvm-cov --all-features --lcov --output-path lcov.info
+
+coverage-check:
+	$(CARGO) llvm-cov --all-features --fail-under-lines $(COVERAGE_MIN)
+
+check: fmt-check lint doc deny test coverage-check

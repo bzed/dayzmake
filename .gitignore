@@ -1,3 +1,4 @@
 /target
 /testharness/build
+/lcov.info
 **/*.rs.bk

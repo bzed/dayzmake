@@ -12,16 +12,16 @@ permissions:
 
 jobs:
   lint:
-    name: Lint (fmt, clippy, doc, deny)
+    name: Lint (fmt, clippy, doc, deny, coverage)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+      - name: Install cargo-deny and cargo-llvm-cov
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-llvm-cov
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -30,13 +30,34 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
       - name: cargo deny
         run: cargo deny check
+      - name: Coverage floor
+        run: cargo llvm-cov --all-features --fail-under-lines 70
+
+  coverage:
+    name: Coverage (Codecov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-llvm-cov
+      - name: Generate coverage
+        run: make cover
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
 
   linux:
     name: Linux (Debian trixie)
     runs-on: ubuntu-latest
     container: rust:1-trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install build dependencies
         run: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Test
@@ -51,7 +72,7 @@ jobs:
           cp target/release/dayzmake LICENSE README.md "$name/"
           strip "$name/dayzmake"
           tar czf "$name.tar.gz" "$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux
           path: "*.tar.gz"
@@ -62,7 +83,7 @@ jobs:
     env:
       OPENSSL_STATIC: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install static OpenSSL
         run: |
           vcpkg install openssl:x64-windows-static-md
@@ -77,7 +98,7 @@ jobs:
           New-Item -ItemType Directory $name
           Copy-Item target\release\dayzmake.exe, LICENSE, README.md $name
           Compress-Archive $name "$name.zip"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: windows
           path: "*.zip"
