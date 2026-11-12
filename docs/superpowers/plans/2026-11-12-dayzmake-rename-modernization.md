@@ -98,9 +98,9 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Interfaces:** Produces: error-handling helpers the other modules already use (`error!`, `warning`, `print_error`); no signature changes unless a lint forces it.
 
-- [ ] **Step 1: Fix per the full set**: `once_cell` → `std::sync::LazyLock` (drops a dependency); printing in `error.rs`/`run.rs` gets `#[expect(clippy::print_stdout, reason = "CLI output")]`; `stdin().read_to_end().unwrap()` in `run.rs` becomes an error; `unreachable!()` in `run_command` becomes an `error!`; missing rustdoc on pub items; `#[allow]` → `#[expect]`.
-- [ ] **Step 2: Verify**: `cargo clippy --all-targets -- -D warnings 2>&1 | grep -E "^error|error.rs|io.rs|eval.rs|run.rs|main.rs|lib.rs"` shows no findings for these files (other modules still warn); `cargo test` green.
-- [ ] **Step 3: Commit** `lint: error, io, eval, run to the full standard`
+- [x] **Step 1: Fix per the full set**: `once_cell` → `std::sync::LazyLock` (drops a dependency); printing in `error.rs`/`run.rs` gets `#[expect(clippy::print_stdout, reason = "CLI output")]`; `stdin().read_to_end().unwrap()` in `run.rs` becomes an error; `unreachable!()` in `run_command` becomes an `error!`; missing rustdoc on pub items; `#[allow]` → `#[expect]`.
+- [x] **Step 2: Verify**: `cargo clippy --all-targets -- -D warnings 2>&1 | grep -E "^error|error.rs|io.rs|eval.rs|run.rs|main.rs|lib.rs"` shows no findings for these files (other modules still warn); `cargo test` green.
+- [x] **Step 3: Commit** `lint: error, io, eval, run to the full standard`
 
 ### Task 6: Full lint set — config, preprocess
 
