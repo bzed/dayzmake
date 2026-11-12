@@ -9,6 +9,7 @@ use crate::binarize;
 use crate::config;
 use crate::error::*;
 use crate::io::{Input, Output};
+use crate::p3d;
 use crate::paa;
 use crate::pbo;
 use crate::preprocess;
@@ -46,7 +47,8 @@ Commands:
                 for models whose textures are referenced by a longer prefix.
     build       Build a PBO from a folder.
     pack        Pack a folder into a PBO without any binarization or rapification.
-    inspect     Inspect a PBO and list contained files.
+    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
+                show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
@@ -171,7 +173,12 @@ fn run_command(args: &Args) -> Result<(), Error> {
 
         Ok(())
     } else if args.cmd_inspect {
-        pbo::cmd_inspect(&mut get_input(&args)?)
+        let mut input = get_input(&args)?;
+        if p3d::model_magic(&mut input)?.is_some() {
+            p3d::cmd_inspect(&mut input)
+        } else {
+            pbo::cmd_inspect(&mut input)
+        }
     } else if args.cmd_cat {
         pbo::cmd_cat(&mut get_input(&args)?, &mut get_output(&args)?, &args.arg_filename)
     } else if args.cmd_unpack {

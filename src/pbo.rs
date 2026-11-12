@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr};
 use std::fs::{File, create_dir_all, read_dir};
 use std::io::{Read, Write, Seek, SeekFrom, Error, Cursor};
@@ -14,6 +14,7 @@ use crate::io::*;
 use crate::config::*;
 use crate::preprocess::*;
 use crate::binarize;
+use crate::p3d;
 
 struct PBOHeader {
     filename: String,
@@ -283,6 +284,12 @@ impl PBO {
         let prefix: String = pre_extensions.get("prefix").cloned()
             .unwrap_or_else(|| directory.canonicalize().ok().and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default());
 
+        let addon_files: HashSet<String> = file_list.iter()
+            .filter_map(|p| p.strip_prefix(&directory).ok())
+            .filter_map(|p| p.to_str())
+            .map(|p| p.replace('/', "\\").to_lowercase())
+            .collect();
+
         for path in file_list {
             let mut relative = path.strip_prefix(&directory).unwrap().to_path_buf();
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
@@ -295,6 +302,14 @@ impl PBO {
             if !file_allowed(&name, &exclude_patterns) { continue; }
 
             let mut file = File::open(&path)?;
+
+            let prebinarized_as = if binarize && is_binarizable { binarize::binarized_description(&path)? } else { None };
+            let prebinarized = prebinarized_as.is_some();
+            if let Some(description) = prebinarized_as {
+                warning(format!("File is already binarized ({}); copying it as-is.", description), Some("prebinarized-file"), (Some(relative.to_str().unwrap().to_string()), None));
+            } else if binarize && is_binarizable && path.extension().map_or(false, |e| e.eq_ignore_ascii_case("p3d")) {
+                p3d::check_dependencies(&path, relative.to_str().unwrap(), &prefix, &addon_files, includefolders);
+            }
 
             if name == "$PBOPREFIX$" || name == "$PREFIX$" {
                 let mut content = String::new();
@@ -311,12 +326,12 @@ impl PBO {
                     let config = Config::read(&mut Cursor::new(buffer), Some(path.clone()), includefolders).prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
                 }
-            } else if binarize::available() && binarize && is_binarizable {
+            } else if binarize::available() && binarize && is_binarizable && !prebinarized {
                 let cursor = binarize::binarize(&path, &directory, &prefix).prepend_error(format!("Failed to binarize {:?}:", relative).to_string())?;
 
                 files.insert(name, cursor);
             } else {
-                if is_binarizable && !binarize::available() {
+                if is_binarizable && !prebinarized && !binarize::available() {
                     warning("On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is.", Some("non-windows-binarization"), (Some(&relative.to_str().unwrap()), None));
                 }
 

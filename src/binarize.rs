@@ -6,9 +6,7 @@ use std::env::temp_dir;
 use std::fs::File;
 #[cfg(windows)]
 use std::fs::{create_dir_all, remove_dir_all};
-use std::io::{Write, Cursor, Error};
-#[cfg(windows)]
-use std::io::Read;
+use std::io::{Write, Cursor, Error, Read};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
@@ -141,10 +139,37 @@ fn cli_addon(input: PathBuf) -> (PathBuf, PathBuf) {
     (input, addon_root)
 }
 
+/// Whether the file is already binarized (ODOL model or BMTR animation), judged by its magic.
+pub fn is_binarized(path: &Path) -> Result<bool, Error> {
+    Ok(binarized_description(path)?.is_some())
+}
+
+/// For an already binarized file, e.g. "ODOL v56" or "BMTR v1" (the version is left out if the
+/// file is too short to have one). The version is only reported: any version is copied as-is.
+pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
+    let mut header = Vec::with_capacity(8);
+    File::open(path)?.take(8).read_to_end(&mut header)?;
+    if header.len() < 4 || !(&header[..4] == b"ODOL" || &header[..4] == b"BMTR") {
+        return Ok(None);
+    }
+    let format = String::from_utf8_lossy(&header[..4]).into_owned();
+    Ok(Some(if header.len() == 8 {
+        format!("{} v{}", format, u32::from_le_bytes([header[4], header[5], header[6], header[7]]))
+    } else {
+        format
+    }))
+}
+
 /// Binarizes the given path using BI's binarize.exe and writes it to the output.
 pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), Error> {
     if !force && output.exists() {
         return Err(error!("Target file \"{}\" already exists. Use --force to overwrite.", output.display()));
+    }
+
+    if let Some(description) = binarized_description(&input)? {
+        warning(format!("File is already binarized ({}); copying it as-is.", description), Some("prebinarized-file"), (Some(input.to_string_lossy().into_owned()), None));
+        std::fs::copy(&input, &output).prepend_error("Failed to write result to file:")?;
+        return Ok(());
     }
 
     // on unix, `armake2 binarize` always goes through Proton

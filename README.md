@@ -132,9 +132,15 @@ Usage:
 
 See `armake2 --help` for more.
 
+## Inspecting models and checking their textures
+
+`armake2 inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections; for a binarized ODOL (or BMTR) only the format and version are known. Without a model header, `inspect` treats the input as a PBO.
+
+`build` checks every MLOD model it is about to binarize (also without `--proton-binarize`) and warns about textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute with `-w`). References starting with the addon's prefix are looked up in the source folder, ignoring case. Other references (vanilla `dz\...`, other mods) are only checked if they exist below an `-i` folder or the current directory; if they don't, they are not reported because there is no way to tell whether they are wrong. Procedural textures (`#(argb,...)`) are skipped.
+
 ## Binarizing models on Linux
 
-BI's `binarize.exe` only runs on Windows, so on Linux `build` copies `.p3d`/`.rtm` files as-is (with the `non-windows-binarization` warning). With `--proton-binarize` (and for `armake2 binarize`) armake2 runs the DayZ Tools `binarize.exe` under Proton instead. Config and rvmat rapification is unchanged.
+BI's `binarize.exe` only runs on Windows, so on Linux `build` copies `.p3d`/`.rtm` files as-is (with the `non-windows-binarization` warning). With `--proton-binarize` (and for `armake2 binarize`) armake2 runs the DayZ Tools `binarize.exe` under Proton instead. Config and rvmat rapification is unchanged. Files that are already binarized (`ODOL` models, `BMTR` animations) never reach `binarize.exe`; they are copied as-is with the `prebinarized-file` warning, which names the format and version (e.g. `ODOL v56`). Any version is accepted; armake2 does not know which ones the game loads.
 
 Requirements: DayZ Tools (Steam app 830640) and any Proton installed through Steam.
 

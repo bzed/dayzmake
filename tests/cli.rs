@@ -176,3 +176,73 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
     for (n, c) in files { write(dir.path(), n, c); }
     dir
 }
+
+/// Runs armake2 with DayZ Tools unreachable, so any attempt to start binarize.exe is an error.
+fn armake2_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_armake2"))
+        .args(args)
+        .current_dir(cwd)
+        .env("DAYZ_TOOLS", "/nonexistent/dayz-tools")
+        .output()
+        .expect("failed to run armake2");
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+fn prebinarized_build(file: &str, magic: &[u8]) {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let body = [magic, b"\x38\0\0\0 not a real model"].concat();
+    std::fs::write(src.join(file), &body).unwrap();
+    let (code, err) = armake2_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{}", err);
+    assert!(err.contains("prebinarized-file"), "{}", err);
+    assert!(err.contains(&format!("{} v56", String::from_utf8_lossy(magic))), "{}", err);
+    let (code, out, err) = armake2_raw(&["cat", "out.pbo", file], dir.path());
+    assert_eq!(code, 0, "{}", err);
+    assert_eq!(out, body);
+}
+
+#[test]
+fn build_keeps_prebinarized_p3d() {
+    prebinarized_build("m.p3d", b"ODOL");
+}
+
+#[test]
+fn build_keeps_prebinarized_rtm() {
+    prebinarized_build("a.rtm", b"BMTR");
+}
+
+#[test]
+fn build_still_binarizes_mlod() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
+    let (code, err) = armake2_no_tools(&["build", "--proton-binarize", "src", "out.pbo"], dir.path());
+    assert_ne!(code, 0, "an MLOD must reach binarize.exe: {}", err);
+}
+
+#[test]
+fn binarize_copies_prebinarized_p3d() {
+    let dir = tempfile::tempdir().unwrap();
+    let body = b"ODOL\x38\0\0\0 not a real model";
+    std::fs::write(dir.path().join("m.p3d"), body).unwrap();
+    let (code, err) = armake2_no_tools(&["binarize", "m.p3d", "out.p3d"], dir.path());
+    assert_eq!(code, 0, "{}", err);
+    assert!(err.contains("prebinarized-file"), "{}", err);
+    assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
+}
+
+#[test]
+fn binarize_reports_older_odol_versions_instead_of_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    for version in [53u8, 54, 55] {
+        let body = [b"ODOL".as_slice(), &[version, 0, 0, 0], b" not a real model"].concat();
+        std::fs::write(dir.path().join("m.p3d"), &body).unwrap();
+        let (code, err) = armake2_no_tools(&["binarize", "-f", "m.p3d", "out.p3d"], dir.path());
+        assert_eq!(code, 0, "{}", err);
+        assert!(err.contains(&format!("ODOL v{}", version)), "{}", err);
+        assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
+    }
+}
