@@ -4,7 +4,7 @@ use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::io::Error;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Mutex;
 
 use colored::Colorize;
@@ -76,10 +76,10 @@ pub trait PreprocessParseErrorExt<T> {
     /// # Errors
     ///
     /// Returns the formatted error, or the original `Ok` value.
-    fn format_error(self, origin: &Option<PathBuf>, input: &str) -> Result<T, Error>;
+    fn format_error(self, origin: Option<&Path>, input: &str) -> Result<T, Error>;
 }
 impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
-    fn format_error(self, origin: &Option<PathBuf>, input: &str) -> Result<T, Error> {
+    fn format_error(self, origin: Option<&Path>, input: &str) -> Result<T, Error> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {

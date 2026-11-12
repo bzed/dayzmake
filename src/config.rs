@@ -24,8 +24,18 @@ impl From<EvalValue> for ConfigEntry {
     fn from(v: EvalValue) -> ConfigEntry {
         match v {
             EvalValue::Str(s) => ConfigEntry::StringEntry(s),
-            EvalValue::Number(n) if n.fract() == 0.0 && n.abs() < 2147483648.0 => {
-                ConfigEntry::IntEntry(n as i32)
+            EvalValue::Number(n)
+                if matches!(n.fract().classify(), std::num::FpCategory::Zero)
+                    && n.abs() < 2_147_483_648.0 =>
+            {
+                // the guard above ensures the value fits an i32 without truncation
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "guarded by fract() == 0 and abs() < 2^31"
+                )]
+                {
+                    ConfigEntry::IntEntry(n as i32)
+                }
             }
             EvalValue::Number(n) => ConfigEntry::FloatEntry(n),
         }
@@ -36,8 +46,18 @@ impl From<EvalValue> for ConfigArrayElement {
     fn from(v: EvalValue) -> ConfigArrayElement {
         match v {
             EvalValue::Str(s) => ConfigArrayElement::StringElement(s),
-            EvalValue::Number(n) if n.fract() == 0.0 && n.abs() < 2147483648.0 => {
-                ConfigArrayElement::IntElement(n as i32)
+            EvalValue::Number(n)
+                if matches!(n.fract().classify(), std::num::FpCategory::Zero)
+                    && n.abs() < 2_147_483_648.0 =>
+            {
+                // the guard above ensures the value fits an i32 without truncation
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "guarded by fract() == 0 and abs() < 2^31"
+                )]
+                {
+                    ConfigArrayElement::IntElement(n as i32)
+                }
             }
             EvalValue::Number(n) => ConfigArrayElement::FloatElement(n),
         }
@@ -54,21 +74,22 @@ impl ConfigWarnings {
 }
 
 peg::parser! {
+    /// PEG grammar for rapified config syntax.
     pub grammar config_grammar(warnings: &mut ConfigWarnings, ctx: &mut EvalCtx) for str {
         rule whitespace() = quiet!{ [' ' | '\r' | '\n' | '\t']+ }
 
-        rule float() -> f32 = f:$((['-' | '+'])? ['0'..='9']* "." ['0'..='9']+) {
-            if f.chars().filter(|c| c == &'.').count() == 0 {
-                println!("{f}");
-            }
-            f.parse().unwrap()
+        rule float() -> f32 = f:$((['-' | '+'])? ['0'..='9']* "." ['0'..='9']+) {?
+            f.parse::<f32>()
+                .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
         }
 
-        rule integer() -> i32 = i:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) {
+        rule integer() -> i32 = i:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) {?
             if i.contains("0x") {
-                i32::from_str_radix(&i.replace("0x", ""), 16).unwrap()
+                i32::from_str_radix(&i.replace("0x", ""), 16)
+                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
             } else {
-                i.parse::<i32>().unwrap()
+                i.parse::<i32>()
+                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
             }
         }
 
@@ -202,6 +223,7 @@ peg::parser! {
 
         rule class() -> (String, ConfigEntry) = regular_class() / external_class() / deleted_class()
 
+        /// Parses a complete config: a sequence of entries until end of input.
         pub rule config() -> Config = whitespace()? e:entries() whitespace()? ![_] {
             Config {
                 root_body: ConfigClass {
@@ -219,6 +241,14 @@ peg::parser! {
 #[must_use]
 pub fn is_rapified(data: &[u8]) -> bool {
     data.starts_with(b"\0raP")
+}
+
+/// `compressed_int_len` for an in-memory length. Config element counts beyond
+/// `u32::MAX` are impossible in practice (each element costs far more than a
+/// byte of memory), so they clamp to the maximum; the write path reports them
+/// as errors instead.
+fn compressed_int_len_of(len: usize) -> usize {
+    compressed_int_len(u32::try_from(len).unwrap_or(u32::MAX))
 }
 
 /// Config
@@ -294,7 +324,7 @@ impl ConfigArrayElement {
             ConfigArrayElement::FloatElement(_f) => 5,
             ConfigArrayElement::IntElement(_i) => 5,
             ConfigArrayElement::ArrayElement(a) => {
-                1 + compressed_int_len(a.elements.len() as u32)
+                1 + compressed_int_len_of(a.elements.len())
                     + usize::sum(a.elements.iter().map(ConfigArrayElement::rapified_length))
             }
         }
@@ -336,7 +366,9 @@ impl ConfigArray {
     }
 
     fn write_rapified<O: Write>(&self, output: &mut O) -> Result<usize, Error> {
-        let mut written = output.write_compressed_int(self.elements.len() as u32)?;
+        let num_elements = u32::try_from(self.elements.len())
+            .map_err(|_| error!("too many array elements: {}", self.elements.len()))?;
+        let mut written = output.write_compressed_int(num_elements)?;
 
         for element in &self.elements {
             match element {
@@ -367,7 +399,9 @@ impl ConfigArray {
 
     fn read_rapified<I: Read + Seek>(input: &mut I) -> Result<ConfigArray, Error> {
         let num_elements: u32 = input.read_compressed_int()?;
-        let mut elements: Vec<ConfigArrayElement> = Vec::with_capacity(num_elements as usize);
+        // never preallocate the full length from untrusted input
+        let mut elements: Vec<ConfigArrayElement> =
+            Vec::with_capacity(num_elements.min(65536) as usize);
 
         for _i in 0..num_elements {
             let mut buf = [0u8; 1];
@@ -409,7 +443,7 @@ impl ConfigEntry {
             ConfigEntry::IntEntry(_i) => 6,
             ConfigEntry::ArrayEntry(a) => {
                 let len = 1
-                    + compressed_int_len(a.elements.len() as u32)
+                    + compressed_int_len_of(a.elements.len())
                     + usize::sum(a.elements.iter().map(ConfigArrayElement::rapified_length));
                 if a.is_expansion { len + 4 } else { len }
             }
@@ -425,13 +459,13 @@ impl ConfigEntry {
 }
 
 impl ConfigClass {
-    fn write<O: Write>(&self, mut output: &mut O, level: i32) -> Result<(), Error> {
+    fn write<O: Write>(&self, output: &mut O, level: usize) -> Result<(), Error> {
         if let Some(entries) = &self.entries {
             if level > 0 && !entries.is_empty() {
                 output.write_all(b"\n")?;
             }
             for (key, value) in entries {
-                output.write_all(String::from("    ").repeat(level as usize).as_bytes())?;
+                output.write_all(String::from("    ").repeat(level).as_bytes())?;
 
                 match value {
                     ConfigEntry::ClassEntry(c) => {
@@ -457,7 +491,7 @@ impl ConfigClass {
                                         )?;
                                         c.write(output, level + 1)?;
                                         output.write_all(
-                                            String::from("    ").repeat(level as usize).as_bytes(),
+                                            String::from("    ").repeat(level).as_bytes(),
                                         )?;
                                         output.write_all(b"};\n")?;
                                     }
@@ -494,7 +528,7 @@ impl ConfigClass {
                         } else {
                             output.write_all(format!("{key}[] = ").as_bytes())?;
                         }
-                        a.write(&mut output)?;
+                        a.write(output)?;
                         output.write_all(b";\n")?;
                     }
                 }
@@ -509,7 +543,7 @@ impl ConfigClass {
             Some(entries) => {
                 self.parent.len()
                     + 1
-                    + compressed_int_len(entries.len() as u32)
+                    + compressed_int_len_of(entries.len())
                     + usize::sum(entries.iter().map(|(k, v)| {
                         k.len()
                             + 1
@@ -532,7 +566,9 @@ impl ConfigClass {
                 output.write_cstring(&self.parent)?;
                 written += self.parent.len() + 1;
 
-                written += output.write_compressed_int(entries.len() as u32)?;
+                let num_entries = u32::try_from(entries.len())
+                    .map_err(|_| error!("too many class entries: {}", entries.len()))?;
+                written += output.write_compressed_int(num_entries)?;
 
                 let entries_len = usize::sum(
                     entries
@@ -581,7 +617,11 @@ impl ConfigClass {
                             } else {
                                 output.write_all(&[0])?;
                                 output.write_cstring(name)?;
-                                output.write_u32::<LittleEndian>(class_offset as u32)?;
+                                let class_offset_u32 =
+                                    u32::try_from(class_offset).map_err(|_| {
+                                        error!("class body offset out of range: {class_offset}")
+                                    })?;
+                                output.write_u32::<LittleEndian>(class_offset_u32)?;
                                 written += name.len() + 6;
 
                                 let buffer: Box<[u8]> =
@@ -609,7 +649,7 @@ impl ConfigClass {
                 }
             }
             None => {
-                unreachable!()
+                return Err(error!("Cannot rapify a class without entries."));
             }
         }
 
@@ -629,7 +669,9 @@ impl ConfigClass {
 
         let parent = input.read_cstring()?;
         let num_entries: u32 = input.read_compressed_int()?;
-        let mut entries: Vec<(String, ConfigEntry)> = Vec::with_capacity(num_entries as usize);
+        // never preallocate the full length from untrusted input
+        let mut entries: Vec<(String, ConfigEntry)> =
+            Vec::with_capacity(num_entries.min(65536) as usize);
 
         for _i in 0..num_entries {
             let mut buf = [0u8; 1];
@@ -704,20 +746,33 @@ impl ConfigClass {
 
 impl Config {
     /// Writes the config (unrapified) to the output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         self.root_body.write(output, 0)
     }
 
     /// Returns the unrapified config as a string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or invalid UTF-8 in the output.
     pub fn to_string(&self) -> Result<String, Error> {
         let buffer = Vec::new();
         let mut cursor: Cursor<Vec<u8>> = Cursor::new(buffer);
         self.write(&mut cursor)?;
 
-        Ok(String::from_utf8(cursor.into_inner()).unwrap())
+        String::from_utf8(cursor.into_inner())
+            .map_err(|e| error!("Invalid UTF-8 in config output: {e}"))
     }
 
     /// Writes the rapified config to the output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or if the config cannot be rapified.
     pub fn write_rapified<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         let mut writer = BufWriter::new(output);
 
@@ -730,7 +785,8 @@ impl Config {
             .write_rapified(&mut cursor, 16)
             .prepend_error("Failed to rapify root class:")?;
 
-        let enum_offset: u32 = 16 + cursor.get_ref().len() as u32;
+        let enum_offset = u32::try_from(16 + cursor.get_ref().len())
+            .map_err(|_| error!("config too large: {} bytes", cursor.get_ref().len()))?;
         writer.write_u32::<LittleEndian>(enum_offset)?;
 
         writer.write_all(cursor.get_ref())?;
@@ -741,6 +797,10 @@ impl Config {
     }
 
     /// Returns the rapified config as a `Cursor`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config cannot be rapified.
     pub fn to_cursor(&self) -> Result<Cursor<Box<[u8]>>, Error> {
         let len = self.root_body.rapified_length() + 20;
 
@@ -756,6 +816,10 @@ impl Config {
     /// `path` is the path to the input if it is known and is used for relative includes and error
     /// messages. `includefolders` are the folders searched for absolute includes and should usually at
     /// least include the current working directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on preprocessing or parse failures.
     pub fn read<I: Read>(
         input: &mut I,
         path: Option<PathBuf>,
@@ -792,19 +856,20 @@ impl Config {
             let location = if warning_suppressed(w.2) {
                 (None, None)
             } else {
-                let mut line = preprocessed[..w.0].chars().filter(|c| c == &'\n').count();
-                let idx = min(line, info.line_origins.len().saturating_sub(1)); // origins are 1-based line numbers
+                let lines_before = preprocessed[..w.0].chars().filter(|c| c == &'\n').count();
+                let idx = min(lines_before, info.line_origins.len().saturating_sub(1)); // origins are 1-based line numbers
                 let file = info
                     .line_origins
                     .get(idx)
                     .and_then(|o| o.1.as_ref())
-                    .map(|p| p.to_str().unwrap().to_string());
-                line = info
-                    .line_origins
-                    .get(idx)
-                    .map_or(line + 1, |o| o.0 as usize);
+                    .map(|p| p.display().to_string());
+                let line = match info.line_origins.get(idx) {
+                    Some(o) => o.0,
+                    None => u32::try_from(lines_before + 1)
+                        .map_err(|_| error!("line number out of range"))?,
+                };
 
-                (file, Some(line as u32))
+                (file, Some(line))
             };
 
             warning(w.1, w.2, location);
@@ -818,6 +883,10 @@ impl Config {
     /// `path` is the path to the input if it is known and is used for relative includes and error
     /// messages. `includefolders` are the folders searched for absolute includes and should usually at
     /// least include the current working directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on preprocessing or parse failures.
     pub fn from_string(
         input: String,
         path: Option<PathBuf>,
@@ -828,6 +897,10 @@ impl Config {
     }
 
     /// Reads the rapified config from input.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not a rapified config or cannot be parsed.
     pub fn read_rapified<I: Read + Seek>(input: &mut I) -> Result<Config, Error> {
         let mut reader = BufReader::new(input);
 
@@ -849,6 +922,11 @@ impl Config {
 /// `path` is the path to the input if it is known and is used for relative includes and error
 /// messages. `includefolders` are the folders searched for absolute includes and should usually at
 /// least include the current working directory.
+///
+/// # Errors
+///
+/// Returns an error on preprocessing, parsing or I/O failure. Already-rapified
+/// input is passed through unchanged with a warning.
 pub fn cmd_rapify<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,
@@ -880,6 +958,10 @@ pub fn cmd_rapify<I: Read, O: Write>(
 }
 
 /// Reads input, derapifies it and writes to output.
+///
+/// # Errors
+///
+/// Returns an error if the input is not a rapified config or cannot be written.
 pub fn cmd_derapify<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
     let config = Config::read_rapified(input).prepend_error("Failed to read rapified config:")?;
 

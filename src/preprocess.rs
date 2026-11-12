@@ -12,6 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{ErrorExt, PreprocessParseErrorExt, warning};
 
 peg::parser! {
+    /// PEG grammar for the preprocessor: directives, macros, comments and tokens.
     pub grammar preprocess_grammar() for str {
         rule newline() = "\r\n" / "\n"
 
@@ -55,6 +56,7 @@ peg::parser! {
             a.to_string()
         }
 
+        /// Parses a macro argument list: `(a, b, c)`.
         pub rule arguments() -> Vec<String> = [' ' | '\t']* "(" [' ' | '\t']* a:(argument() ** ([' ' | '\t']* "," [' ' | '\t']*)) [' ' | '\t']* ")" {
             a
         }
@@ -65,10 +67,12 @@ peg::parser! {
 
         rule string_token() -> (String, u32) =
                 s:$("\"" ("\\\\" / ("\\" newline()) / "\"\"" / !['\r' | '\n' | '"'] [_])* "\"") {
-            let newlines = s.chars().filter(|c| c == &'\n').count() as u32;
+            let newlines =
+                u32::try_from(s.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX);
             (String::from(s).replace("\r\n", "\n").replace("\\\n", ""), newlines)
         }
 
+        /// Parses a macro invocation: an optional `#`, a name, optional arguments.
         pub rule macro_proper() -> Macro = quoted:"#"? n:name() args:arguments()? {
             Macro {
                 name: n,
@@ -78,12 +82,8 @@ peg::parser! {
             }
         }
 
-        rule macro_token() -> Macro = original:$(macro_proper()) {
-            //println!("parsing macro: {}", original.to_string());
-            let parsed = parse_macro(original);
-            //println!("done");
-            parsed
-            //Macro { name: original.to_string(), arguments: None, original: original.to_string(), quoted: false }
+        rule macro_token() -> Macro = original:$(macro_proper()) {?
+            parse_macro(original).map_err(|_| "a parseable macro invocation")
         }
 
         rule concat_token() = "##"
@@ -93,7 +93,7 @@ peg::parser! {
         }
 
         rule ml_comment() -> u32 = [' ' | '\t']* "/*" content:$((!"*/" (newline() / [_]))*) "*/" {
-            content.chars().filter(|c| c == &'\n').count() as u32
+            u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX)
         }
 
         rule comment_token() -> u32 = sl_comment() / ml_comment()
@@ -105,6 +105,7 @@ peg::parser! {
             m:macro_token() { Token::MacroToken(m) } /
             nm:nonmacro_token() { Token::RegularToken(nm) }
 
+        /// Parses a sequence of tokens.
         pub rule tokens() -> Vec<Token> = t:(token()*) {
             t
         }
@@ -115,6 +116,7 @@ peg::parser! {
             } /
             [' ' | '\t']* t:tokens() { Line::TokenLine(t) }
 
+        /// Parses a whole file into lines.
         pub rule file() -> Vec<Line> = lines:(line() ** (newline())) ![_] {
             lines
         }
@@ -198,13 +200,14 @@ thread_local! {
     static ARG_COUNT_MISMATCHES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-fn parse_macro(input: &str) -> Macro {
-    let without_original: Macro = preprocess_grammar::macro_proper(input).unwrap();
+fn parse_macro(input: &str) -> Result<Macro, Error> {
+    let without_original = preprocess_grammar::macro_proper(input)
+        .map_err(|e| error!("Failed to parse macro invocation \"{input}\": {e}"))?;
 
-    Macro {
+    Ok(Macro {
         original: String::from(input),
         ..without_original
-    }
+    })
 }
 
 impl Clone for Macro {
@@ -233,14 +236,16 @@ impl Clone for Token {
 impl Definition {
     fn value(
         &self,
-        arguments: &Option<Vec<String>>,
+        arguments: Option<&[String]>,
         def_map: &HashMap<String, Definition>,
         stack: &[Definition],
     ) -> Result<Option<Vec<Token>>, Error> {
         let params = self.parameters.clone().unwrap_or_default();
-        let args = arguments.clone().unwrap_or_default();
+        let args = arguments.unwrap_or(&[]);
 
-        let empty_call = params.is_empty() && args.len() == 1 && args[0].trim().is_empty();
+        let empty_call = params.is_empty()
+            && args.len() == 1
+            && args.first().is_some_and(|a| a.trim().is_empty());
         if params.len() != args.len() && !empty_call {
             return Ok(None);
         }
@@ -265,11 +270,10 @@ impl Definition {
 
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
-                let mut tokens =
-                    preprocess_grammar::tokens(arg).expect("Failed to parse macro argument");
+                let mut tokens = preprocess_grammar::tokens(arg)
+                    .map_err(|e| error!("Failed to parse macro argument: {e}"))?;
                 let stack: Vec<Definition> = Vec::new();
-                tokens = Macro::resolve_all(&tokens, def_map, &stack)
-                    .expect("Failed to resolve macro arguments");
+                tokens = Macro::resolve_all(&tokens, def_map, &stack)?;
 
                 local_map.insert(
                     param.clone(),
@@ -303,8 +307,8 @@ impl Macro {
         }
 
         let (_, without_name) = self.original.split_at(self.name.len());
-        let mut arg_tokens =
-            preprocess_grammar::tokens(without_name).expect("Failed to parse macro arguments.");
+        let mut arg_tokens = preprocess_grammar::tokens(without_name)
+            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
 
         arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack)?;
         for t in arg_tokens {
@@ -324,17 +328,20 @@ impl Macro {
                 if let Some(args) = &self.arguments {
                     if def.parameters.is_none() {
                         // Object-like macro followed by parentheses: expand it, keep the parentheses.
-                        let mut tokens = def.value(&None, def_map, stack)?.unwrap_or_default();
+                        let mut tokens = def.value(None, def_map, stack)?.unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
                         let mut rest_tokens = preprocess_grammar::tokens(rest)
-                            .expect("Failed to parse macro arguments.");
+                            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
                         rest_tokens = Macro::resolve_all(&rest_tokens, def_map, stack)?;
                         tokens.extend(rest_tokens);
                         return Ok(tokens);
                     }
 
                     let expected = def.parameters.as_ref().map_or(0, std::vec::Vec::len);
-                    let got = if expected == 0 && args.len() == 1 && args[0].trim().is_empty() {
+                    let got = if expected == 0
+                        && args.len() == 1
+                        && args.first().is_some_and(|a| a.trim().is_empty())
+                    {
                         0
                     } else {
                         args.len()
@@ -353,7 +360,7 @@ impl Macro {
                     }
                 }
 
-                let value = def.value(&self.arguments, def_map, stack)?;
+                let value = def.value(self.arguments.as_deref(), def_map, stack)?;
 
                 if !def.local && self.quoted {
                     // @todo: complain
@@ -424,7 +431,7 @@ impl Token {
                 Token::CommentToken(n) => {
                     newlines += n;
                 }
-                _ => {}
+                Token::ConcatToken => {}
             }
         }
 
@@ -432,14 +439,16 @@ impl Token {
     }
 }
 
-fn read_prefix(prefix_path: &Path) -> String {
+/// Reads the first line of a `$PBOPREFIX$` file.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened or read.
+fn read_prefix(prefix_path: &Path) -> Result<String, Error> {
     let mut content = String::new();
-    File::open(prefix_path)
-        .unwrap()
-        .read_to_string(&mut content)
-        .unwrap();
+    File::open(prefix_path)?.read_to_string(&mut content)?;
 
-    content.lines().next().unwrap().to_string()
+    Ok(content.lines().next().unwrap_or_default().to_string())
 }
 
 /// Returns the path seperator used on the current operating system
@@ -462,9 +471,8 @@ fn names_equal(a: &OsStr, b: &OsStr, ci: bool) -> bool {
 fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
     let mut current = base.to_path_buf();
     for component in relative.components() {
-        let name = match component {
-            Component::Normal(n) => n,
-            _ => continue,
+        let Component::Normal(name) = component else {
+            continue;
         };
         let exact = current.join(name);
         if exact.exists() {
@@ -498,7 +506,10 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
             continue;
         }
 
-        let mut prefix = read_prefix(&prefixpath);
+        // an unreadable prefix file cannot match the include; skip it instead of failing
+        let Ok(mut prefix) = read_prefix(&prefixpath) else {
+            continue;
+        };
 
         prefix = if !prefix.is_empty() && !prefix.starts_with('\\') {
             format!("\\{prefix}")
@@ -508,7 +519,9 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
 
         let prefix_pathbuf = PathBuf::from(prefix.replace('\\', pathsep()));
 
-        let relative = path.strip_prefix(parent).unwrap();
+        let Ok(relative) = path.strip_prefix(parent) else {
+            continue;
+        };
         let test_path = prefix_pathbuf.join(relative);
 
         let (mut a, mut b) = (test_path.components(), include_pathbuf.components());
@@ -561,7 +574,7 @@ fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<Pa
     None
 }
 
-fn canonicalize(path: PathBuf) -> PathBuf {
+fn canonicalize(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
@@ -576,12 +589,12 @@ fn canonicalize(path: PathBuf) -> PathBuf {
     result
 }
 
-fn include_not_found(include_path: &str, origin: Option<&PathBuf>, line: u32) -> Error {
+fn include_not_found(include_path: &str, origin: Option<&Path>, line: u32) -> Error {
     match origin {
         Some(origin_path) => error!(
             "File \"{}\" included from \"{}:{}\" not found.",
             include_path,
-            origin_path.to_str().unwrap().to_string(),
+            origin_path.display(),
             line
         ),
         None => error!(
@@ -605,7 +618,7 @@ fn warn_include_case(include_path: &str, found: &Path) {
 
 fn find_include_file(
     include_path: &str,
-    origin: Option<&PathBuf>,
+    origin: Option<&Path>,
     search_paths: &[PathBuf],
     line: u32,
 ) -> Result<PathBuf, Error> {
@@ -637,14 +650,19 @@ fn find_include_file(
         let mut path = PathBuf::from(include_path.replace('\\', pathsep()));
 
         if let Some(origin_path) = origin {
-            let absolute = PathBuf::from(&origin_path).canonicalize()?;
-            let origin_dir = absolute.parent().unwrap();
+            let absolute = PathBuf::from(origin_path).canonicalize()?;
+            let Some(origin_dir) = absolute.parent() else {
+                return Err(error!(
+                    "Include origin \"{}\" has no parent directory.",
+                    origin_path.display()
+                ));
+            };
             path = origin_dir.join(path);
         } else {
             path = current_dir()?.join(path);
         }
 
-        let absolute = canonicalize(path);
+        let absolute = canonicalize(&path);
 
         if absolute.is_file() {
             return Ok(absolute);
@@ -669,9 +687,13 @@ fn find_include_file(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one branch per directive keeps the preprocessor loop readable"
+)]
 fn preprocess_rec(
-    input: String,
-    origin: Option<PathBuf>,
+    input: &str,
+    origin: Option<&Path>,
     definition_map: &mut HashMap<String, Definition>,
     info: &mut PreprocessInfo,
     includefolders: &[PathBuf],
@@ -679,7 +701,7 @@ fn preprocess_rec(
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
     let lines =
-        PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), &origin, &input)?;
+        PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), origin, &input)?;
     let mut output = String::new();
     let mut original_lineno = 1;
     let mut level = 0;
@@ -702,20 +724,16 @@ fn preprocess_rec(
                         //    // @todo: complain
                         //}
 
-                        let file_path = find_include_file(
-                            &path,
-                            origin.as_ref(),
-                            includefolders,
-                            original_lineno,
-                        )?;
+                        let file_path =
+                            find_include_file(&path, origin, includefolders, original_lineno)?;
 
                         info.import_stack.push(file_path.clone());
 
                         let mut content = String::new();
                         File::open(&file_path)?.read_to_string(&mut content)?;
                         let result = preprocess_rec(
-                            content,
-                            Some(file_path),
+                            &content,
+                            Some(&file_path),
                             definition_map,
                             info,
                             includefolders,
@@ -768,7 +786,9 @@ fn preprocess_rec(
                         }
                     }
                     Directive::EndIfDirective => {
-                        assert!(level > 0);
+                        if level == 0 {
+                            return Err(error!("#endif without matching #ifdef/#ifndef"));
+                        }
                         level -= 1;
                         if level_true > level {
                             level_true -= 1;
@@ -795,7 +815,7 @@ fn preprocess_rec(
                     continue;
                 }
 
-                let file = origin.as_ref().map(|p| p.display().to_string());
+                let file = origin.map(|p| p.display().to_string());
                 for msg in mismatches {
                     warning(
                         msg,
@@ -807,8 +827,11 @@ fn preprocess_rec(
                 output += &result;
                 output += "\n";
 
-                info.line_origins.push((original_lineno, origin.clone()));
-                original_lineno += (before - result.len()) as u32 / 2;
+                info.line_origins
+                    .push((original_lineno, origin.map(Path::to_path_buf)));
+                let removed = u32::try_from((before - result.len()) / 2)
+                    .map_err(|_| error!("line number out of range"))?;
+                original_lineno += removed;
             }
         }
         original_lineno += 1;
@@ -828,6 +851,10 @@ fn preprocess_rec(
 /// messages. `includefolders` are the folders searched for absolute includes and should usually at
 /// least include the current working directory.
 ///
+/// # Errors
+///
+/// Returns an error on parse failures, unreadable includes or invalid include folders.
+///
 /// # Examples
 ///
 /// ```
@@ -843,6 +870,10 @@ fn preprocess_rec(
 ///
 /// assert_eq!("foo = \"abc_xyz\";", output.trim());
 /// ```
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "public API takes ownership of the input; callers pass owned strings"
+)]
 pub fn preprocess(
     mut input: String,
     origin: Option<PathBuf>,
@@ -872,7 +903,13 @@ pub fn preprocess(
 
     let mut def_map: HashMap<String, Definition> = HashMap::new();
 
-    match preprocess_rec(input, origin, &mut def_map, &mut info, includefolders) {
+    match preprocess_rec(
+        &input,
+        origin.as_deref(),
+        &mut def_map,
+        &mut info,
+        includefolders,
+    ) {
         Ok(result) => Ok((result, info)),
         Err(e) => Err(e),
     }
@@ -883,6 +920,10 @@ pub fn preprocess(
 /// `path` is the `path` to the input if it is known and is used for relative includes and error
 /// messages. `includefolders` are the folders searched for absolute includes and should usually at
 /// least include the current working directory.
+///
+/// # Errors
+///
+/// Returns an error on preprocessing or I/O failure.
 pub fn cmd_preprocess<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,

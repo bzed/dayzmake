@@ -207,3 +207,22 @@ fn include_exact_case_wins() {
     assert!(output.contains("a=2;"), "{output:?}");
     assert!(!output.contains("a=1;"), "{output:?}");
 }
+
+/// Truncated and malformed input must not panic; preprocessing is lenient, so
+/// any outcome without a panic is acceptable.
+#[test]
+fn truncated_input_does_not_panic() {
+    let input = String::from("#define A 1\n#ifdef A\nx = A;\n#endif\ny = \"unterminated");
+    for len in 0..=input.len() {
+        let Some(prefix) = input.get(..len) else {
+            continue;
+        };
+        let _ = preprocess(prefix.to_string(), None, &Vec::new());
+    }
+}
+
+/// An `#endif` without a matching `#ifdef`/`#ifndef` is an error, not a panic.
+#[test]
+fn endif_without_ifdef_is_an_error() {
+    assert!(preprocess(String::from("#endif\n"), None, &Vec::new()).is_err());
+}
