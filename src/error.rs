@@ -69,7 +69,7 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
             Err(pe) => {
                 let line_origin = pe.location.line - 1;
                 let file_origin = match origin {
-                    Some(ref path) => format!("{}:", path.to_str().unwrap().to_string()),
+                    Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
                     None => "".to_string()
                 };
 
@@ -90,8 +90,8 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
             Ok(t) => Ok(t),
             Err(pe) => {
                 let line_origin = info.line_origins[min(pe.location.line, info.line_origins.len()) - 1].0 as usize;
-                let file_origin = match info.line_origins[min(pe.location.line, info.line_origins.len()) - 1].1 {
-                    Some(ref path) => format!("{}:", path.to_str().unwrap().to_string()),
+                let file_origin = match &info.line_origins[min(pe.location.line, info.line_origins.len()) - 1].1 {
+                    Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
                     None => "".to_string()
                 };
 

@@ -354,7 +354,7 @@ impl Macro {
 
         for token in tokens {
             match token {
-                Token::MacroToken(ref m) => {
+                Token::MacroToken(m) => {
                     let resolved = m.resolve(def_map, stack)?;
                     for t in resolved {
                         result.push(t);

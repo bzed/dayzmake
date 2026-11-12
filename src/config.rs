@@ -290,7 +290,7 @@ impl ConfigArray {
         output.write_all(b"{")?;
         for (key, value) in self.elements.iter().enumerate() {
             match value {
-                ConfigArrayElement::ArrayElement(ref a) => {
+                ConfigArrayElement::ArrayElement(a) => {
                     a.write(output)?;
                 },
                 ConfigArrayElement::StringElement(s) => {
@@ -398,7 +398,7 @@ impl ConfigClass {
                     output.write_all(String::from("    ").repeat(level as usize).as_bytes())?;
 
                     match value {
-                        ConfigEntry::ClassEntry(ref c) => {
+                        ConfigEntry::ClassEntry(c) => {
                             if c.is_deletion {
                                 output.write_all(format!("delete {};\n", key).as_bytes())?;
                             } else if c.is_external {
@@ -431,7 +431,7 @@ impl ConfigClass {
                         ConfigEntry::IntEntry(i) => {
                             output.write_all(format!("{} = {};\n", key, i).as_bytes())?;
                         },
-                        ConfigEntry::ArrayEntry(ref a) => {
+                        ConfigEntry::ArrayEntry(a) => {
                             if a.is_expansion {
                                 output.write_all(format!("{}[] += ", key).as_bytes())?;
                             } else {

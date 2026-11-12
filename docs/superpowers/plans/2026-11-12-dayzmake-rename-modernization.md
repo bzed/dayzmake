@@ -62,11 +62,11 @@
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write `rust-toolchain.toml`, set edition fields.**
-- [ ] **Step 2: `cargo fix --edition --allow-dirty --all-targets`** then flip `edition = "2021"` → `"2024"`; fix remaining 2024 hardening errors manually (reserved words, `static mut`—none expected; no `unsafe` in src).
-- [ ] **Step 3: `cargo update`** (semver-compatible refresh) so RustSec advisories in Task 3 have a chance to pass; check `cargo tree --duplicates` stays sane.
-- [ ] **Step 4: Verify**: `cargo build --locked && cargo test --locked` green on 1.99.
-- [ ] **Step 5: Commit** `build: pin Rust 1.99, edition 2024, refresh dependencies`
+- [x] **Step 1: Write `rust-toolchain.toml`, set edition fields.**
+- [x] **Step 2: `cargo fix --edition --allow-dirty --all-targets`** then flip `edition = "2021"` → `"2024"`; fix remaining 2024 hardening errors manually (reserved words, `static mut`—none expected; no `unsafe` in src).
+- [x] **Step 3: `cargo update`** (semver-compatible refresh) so RustSec advisories in Task 3 have a chance to pass; check `cargo tree --duplicates` stays sane.
+- [x] **Step 4: Verify**: `cargo build --locked && cargo test --locked` green on 1.99.
+- [x] **Step 5: Commit** `build: pin Rust 1.99, edition 2024, refresh dependencies`
 
 ### Task 3: Quality infrastructure (naves-style)
 

@@ -8,7 +8,8 @@ authors = ["KoffeinFlummi <koffeinflummi@protonmail.com>"]
 homepage = "https://github.com/bzed/dayzmake"
 repository = "https://github.com/bzed/dayzmake"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
+rust-version = "1.99"
 
 [lib]
 name = "dayzmake"
