@@ -18,15 +18,51 @@ fn golden(name: &str) {
     assert_eq!(decoded.to_string().unwrap(), expected, "golden {}", name);
 }
 
-#[test] fn golden_g() { golden("g"); }
-#[test] fn golden_w1() { golden("w1"); }
-#[test] fn golden_us() { golden("us"); }
-#[test] fn golden_c51() { golden("c51"); }
-#[test] fn golden_rap() { golden("rap"); }
-#[test] fn golden_ma() { golden("ma"); }
-#[test] fn golden_m28() { golden("m28"); }
-#[test] fn golden_case() { golden("case"); }
-#[test] fn golden_ev() { golden("ev"); }
-#[test] fn golden_ex() { golden("ex"); }
-#[test] fn golden_e23() { golden("e23"); }
-#[test] fn golden_mac() { golden("mac"); }
+#[test]
+fn golden_g() {
+    golden("g");
+}
+#[test]
+fn golden_w1() {
+    golden("w1");
+}
+#[test]
+fn golden_us() {
+    golden("us");
+}
+#[test]
+fn golden_c51() {
+    golden("c51");
+}
+#[test]
+fn golden_rap() {
+    golden("rap");
+}
+#[test]
+fn golden_ma() {
+    golden("ma");
+}
+#[test]
+fn golden_m28() {
+    golden("m28");
+}
+#[test]
+fn golden_case() {
+    golden("case");
+}
+#[test]
+fn golden_ev() {
+    golden("ev");
+}
+#[test]
+fn golden_ex() {
+    golden("ex");
+}
+#[test]
+fn golden_e23() {
+    golden("e23");
+}
+#[test]
+fn golden_mac() {
+    golden("mac");
+}

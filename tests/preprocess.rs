@@ -1,14 +1,15 @@
-use std::io::{Write};
 use std::fs::{File, create_dir};
-use std::path::{PathBuf};
+use std::io::Write;
+use std::path::PathBuf;
 
-use tempfile::{tempdir};
+use tempfile::tempdir;
 
 use dayzmake::preprocess::*;
 
 #[test]
 fn test_preprocess_macros() {
-    let input = String::from("\
+    let input = String::from(
+        "\
 #define VERSIONAR {3,5, 0, 0}
 #define FOO(x  , y ) #x z x_y x##_##y
 #define QUOTE(x) #x
@@ -25,11 +26,13 @@ class CfgPatches {
         version = QUOTE(3.5.0.0) ;versionStr=\"3.5.0.0\";
         versionAr [] = VERSIONAR;
     };
-};");
+};",
+    );
 
     let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
 
-    assert_eq!("\
+    assert_eq!(
+        "\
 class CfgPatches {
 class ace_frag{
 units[] = { };
@@ -40,12 +43,15 @@ author[] = {\"Nou\"}   ;
 version = \"3.5.0.0\" ;versionStr=\"3.5.0.0\";
 versionAr [] = {3,5, 0, 0};
 };
-};", output.trim());
+};",
+        output.trim()
+    );
 }
 
 #[test]
 fn test_preprocess_ifdef() {
-    let input = String::from("\
+    let input = String::from(
+        "\
 #define foo bar
 #define foobar whatever
 #undef foobar
@@ -58,7 +64,8 @@ fn test_preprocess_ifdef() {
 #else
     abc = 4321;
 #endif
-");
+",
+    );
 
     let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
 
@@ -67,26 +74,40 @@ fn test_preprocess_ifdef() {
 
 #[test]
 fn test_preprocess_include() {
-    let input = String::from("\
+    let input = String::from(
+        "\
 #include \"\\x\\cba\\addons\\whatever\\include.h\"
-DOUBLES(foo,bar)\n");
+DOUBLES(foo,bar)\n",
+    );
 
-    let include = String::from("\
+    let include = String::from(
+        "\
 #define DOUBLES(x,y) x##_##y
-bar_foo\n");
+bar_foo\n",
+    );
 
-    let prefix = String::from("\
-\\x\\cba\\addons\\whatever\n");
+    let prefix = String::from(
+        "\
+\\x\\cba\\addons\\whatever\n",
+    );
 
     let includedir = tempdir().unwrap();
 
     let addondir = includedir.path().join("whatever");
     create_dir(&addondir).unwrap();
 
-    File::create(addondir.join("include.h")).unwrap().write_all(include.as_bytes()).unwrap();
-    File::create(addondir.join("$PBOPREFIX$")).unwrap().write_all(prefix.as_bytes()).unwrap();
+    File::create(addondir.join("include.h"))
+        .unwrap()
+        .write_all(include.as_bytes())
+        .unwrap();
+    File::create(addondir.join("$PBOPREFIX$"))
+        .unwrap()
+        .write_all(prefix.as_bytes())
+        .unwrap();
 
-    let includepath = PathBuf::from(addondir.join("include.h")).canonicalize().unwrap();
+    let includepath = PathBuf::from(addondir.join("include.h"))
+        .canonicalize()
+        .unwrap();
 
     let includefolders = vec![PathBuf::from(includedir.path())];
     let (output, info) = preprocess(input, Some(PathBuf::from("myfile")), &includefolders).unwrap();
@@ -98,7 +119,7 @@ bar_foo\n");
 
 #[test]
 fn test_proprocess_bom() {
-    let input = String::from_utf8(vec![0xef,0xbb,0xbf]).unwrap() + "blub";
+    let input = String::from_utf8(vec![0xef, 0xbb, 0xbf]).unwrap() + "blub";
     let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
 
     assert_eq!("blub", output.trim());
@@ -106,7 +127,8 @@ fn test_proprocess_bom() {
 
 #[test]
 fn test_preprocess_lineorigins() {
-    let input = String::from("\
+    let input = String::from(
+        "\
 #define TEST \"test\"/* foo
 
 bar */
@@ -116,7 +138,8 @@ class test\\
     4};
     bar[] = {1,2,3, \\
     4}jashdlasd;
-};\n");
+};\n",
+    );
 
     let (_, info) = preprocess(input, None, &Vec::new()).unwrap();
     assert_eq!(5, info.line_origins.len());
@@ -126,16 +149,26 @@ class test\\
 #[test]
 fn test_preprocess_directive_trailing_comments() {
     let dir = tempdir().unwrap();
-    File::create(dir.path().join("inc.hpp")).unwrap().write_all(b"inc\n").unwrap();
+    File::create(dir.path().join("inc.hpp"))
+        .unwrap()
+        .write_all(b"inc\n")
+        .unwrap();
     File::create(dir.path().join("f.cpp")).unwrap();
-    let input = String::from("\
+    let input = String::from(
+        "\
 #include \"inc.hpp\" /* c */
 #define Y 1   // c
 #ifdef Y\t// c
 y=Y;
 #endif
-");
-    let (output, _) = preprocess(input, Some(dir.path().join("f.cpp")), &vec![dir.path().to_path_buf()]).unwrap();
+",
+    );
+    let (output, _) = preprocess(
+        input,
+        Some(dir.path().join("f.cpp")),
+        &vec![dir.path().to_path_buf()],
+    )
+    .unwrap();
     assert!(output.contains("inc"), "{:?}", output);
     assert!(output.contains("y=1"), "{:?}", output); // trailing spaces from the #define value are kept
 }
@@ -145,7 +178,10 @@ fn include_case_insensitive_absolute() {
     let dir = tempdir().unwrap();
     create_dir(dir.path().join("z")).unwrap();
     create_dir(dir.path().join("z/mod")).unwrap();
-    File::create(dir.path().join("z/mod/foo.hpp")).unwrap().write_all(b"found\n").unwrap();
+    File::create(dir.path().join("z/mod/foo.hpp"))
+        .unwrap()
+        .write_all(b"found\n")
+        .unwrap();
     let input = String::from("#include \"\\z\\mod\\Foo.hpp\"\n");
     let (output, _) = preprocess(input, None, &vec![dir.path().to_path_buf()]).unwrap();
     assert!(output.contains("found"), "{:?}", output);
@@ -154,11 +190,22 @@ fn include_case_insensitive_absolute() {
 #[test]
 fn include_exact_case_wins() {
     let dir = tempdir().unwrap();
-    File::create(dir.path().join("Inc.hpp")).unwrap().write_all(b"a=1;\n").unwrap();
-    File::create(dir.path().join("inc.hpp")).unwrap().write_all(b"a=2;\n").unwrap();
+    File::create(dir.path().join("Inc.hpp"))
+        .unwrap()
+        .write_all(b"a=1;\n")
+        .unwrap();
+    File::create(dir.path().join("inc.hpp"))
+        .unwrap()
+        .write_all(b"a=2;\n")
+        .unwrap();
     File::create(dir.path().join("f.cpp")).unwrap();
     let input = String::from("#include \"inc.hpp\"\n");
-    let (output, _) = preprocess(input, Some(dir.path().join("f.cpp")), &vec![dir.path().to_path_buf()]).unwrap();
+    let (output, _) = preprocess(
+        input,
+        Some(dir.path().join("f.cpp")),
+        &vec![dir.path().to_path_buf()],
+    )
+    .unwrap();
     assert!(output.contains("a=2;"), "{:?}", output);
     assert!(!output.contains("a=1;"), "{:?}", output);
 }

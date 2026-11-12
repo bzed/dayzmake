@@ -1,12 +1,12 @@
 //! Functions for calling BI's binarize.exe (on Windows, or under Proton on Linux)
 
-use std::env::var;
 #[cfg(windows)]
 use std::env::temp_dir;
+use std::env::var;
 use std::fs::File;
 #[cfg(windows)]
 use std::fs::{create_dir_all, remove_dir_all};
-use std::io::{Write, Cursor, Error, Read};
+use std::io::{Cursor, Error, Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
@@ -17,8 +17,8 @@ use winreg::RegKey;
 #[cfg(windows)]
 use winreg::enums::*;
 
-use crate::*;
 use crate::error::*;
+use crate::*;
 
 #[cfg(windows)]
 fn find_binarize_exe() -> Result<PathBuf, Error> {
@@ -55,7 +55,9 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
     let mut path;
     loop {
         path = dir.join(format!("dayzmake_{}_{}", name, i));
-        if !path.exists() { break; }
+        if !path.exists() {
+            break;
+        }
 
         i += 1;
     }
@@ -71,9 +73,15 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 /// resolves texture references (`prefix\data\x.paa`) relative to its current directory, so the
 /// addon is made available at `P:\<prefix>`.
 #[cfg(unix)]
-pub fn binarize(input: &PathBuf, addon_root: &Path, prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
+pub fn binarize(
+    input: &PathBuf,
+    addon_root: &Path,
+    prefix: &str,
+) -> Result<Cursor<Box<[u8]>>, Error> {
     if !PROTON_ENABLED.load(Ordering::SeqCst) {
-        return Err(error!("binarize.exe is only available on Windows, or on Linux through Proton. Use --proton-binarize (see README) or rapify to binarize configs."));
+        return Err(error!(
+            "binarize.exe is only available on Windows, or on Linux through Proton. Use --proton-binarize (see README) or rapify to binarize configs."
+        ));
     }
 
     proton::binarize(input, addon_root, prefix)
@@ -81,10 +89,16 @@ pub fn binarize(input: &PathBuf, addon_root: &Path, prefix: &str) -> Result<Curs
 
 /// Binarizes the given path with BI's binarize.exe (Windows, or Linux with `--proton-binarize`).
 #[cfg(windows)]
-pub fn binarize(input: &PathBuf, _addon_root: &Path, _prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
+pub fn binarize(
+    input: &PathBuf,
+    _addon_root: &Path,
+    _prefix: &str,
+) -> Result<Cursor<Box<[u8]>>, Error> {
     let binarize_exe = find_binarize_exe().prepend_error("Failed to find BI's binarize.exe:")?;
     if !binarize_exe.exists() {
-        return Err(error!("BI's binarize.exe found in registry, but doesn't exist."));
+        return Err(error!(
+            "BI's binarize.exe found in registry, but doesn't exist."
+        ));
     }
 
     let input_dir = PathBuf::from(input.parent().unwrap());
@@ -99,17 +113,38 @@ pub fn binarize(input: &PathBuf, _addon_root: &Path, _prefix: &str) -> Result<Cu
         command.current_dir("P:\\");
     }
     let binarize_output = command
-        .args(&["-norecurse", "-always", "-silent", "-maxProcesses=0", input_dir.to_str().unwrap(), tempdir.to_str().unwrap(), input.file_name().unwrap().to_str().unwrap()])
-        .stdout(if piped { Stdio::inherit() } else { Stdio::null() })
-        .stderr(if piped { Stdio::inherit() } else { Stdio::null() })
-        .output().unwrap();
+        .args(&[
+            "-norecurse",
+            "-always",
+            "-silent",
+            "-maxProcesses=0",
+            input_dir.to_str().unwrap(),
+            tempdir.to_str().unwrap(),
+            input.file_name().unwrap().to_str().unwrap(),
+        ])
+        .stdout(if piped {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .stderr(if piped {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
+        .output()
+        .unwrap();
 
     if !binarize_output.status.success() {
         let msg = match binarize_output.status.code() {
             Some(code) => format!("binarize.exe terminated with exit code: {}", code),
-            None => "binarize.exe terminated by signal.".to_string()
+            None => "binarize.exe terminated by signal.".to_string(),
         };
-        let outputhint = if !piped { "\nUse BIOUTPUT=1 to see binarize.exe's output." } else { "" };
+        let outputhint = if !piped {
+            "\nUse BIOUTPUT=1 to see binarize.exe's output."
+        } else {
+            ""
+        };
 
         return Err(error!("{}{}", msg, outputhint));
     }
@@ -118,8 +153,10 @@ pub fn binarize(input: &PathBuf, _addon_root: &Path, _prefix: &str) -> Result<Cu
     let mut buffer: Vec<u8> = Vec::new();
 
     {
-        let mut file = File::open(result_path).prepend_error("Failed to open binarize.exe output:")?;
-        file.read_to_end(&mut buffer).prepend_error("Failed to read binarize.exe output:")?;
+        let mut file =
+            File::open(result_path).prepend_error("Failed to open binarize.exe output:")?;
+        file.read_to_end(&mut buffer)
+            .prepend_error("Failed to read binarize.exe output:")?;
     }
 
     remove_dir_all(&tempdir).prepend_error("Failed to remove temp directory:")?;
@@ -135,7 +172,10 @@ fn cli_addon(input: PathBuf) -> (PathBuf, PathBuf) {
         Some(p) if p.as_os_str().is_empty() => Path::new(".").join(&input),
         _ => input,
     };
-    let addon_root = input.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let addon_root = input
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
     (input, addon_root)
 }
 
@@ -154,7 +194,11 @@ pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
     }
     let format = String::from_utf8_lossy(&header[..4]).into_owned();
     Ok(Some(if header.len() == 8 {
-        format!("{} v{}", format, u32::from_le_bytes([header[4], header[5], header[6], header[7]]))
+        format!(
+            "{} v{}",
+            format,
+            u32::from_le_bytes([header[4], header[5], header[6], header[7]])
+        )
     } else {
         format
     }))
@@ -163,11 +207,21 @@ pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
 /// Binarizes the given path using BI's binarize.exe and writes it to the output.
 pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), Error> {
     if !force && output.exists() {
-        return Err(error!("Target file \"{}\" already exists. Use --force to overwrite.", output.display()));
+        return Err(error!(
+            "Target file \"{}\" already exists. Use --force to overwrite.",
+            output.display()
+        ));
     }
 
     if let Some(description) = binarized_description(&input)? {
-        warning(format!("File is already binarized ({}); copying it as-is.", description), Some("prebinarized-file"), (Some(input.to_string_lossy().into_owned()), None));
+        warning(
+            format!(
+                "File is already binarized ({}); copying it as-is.",
+                description
+            ),
+            Some("prebinarized-file"),
+            (Some(input.to_string_lossy().into_owned()), None),
+        );
         std::fs::copy(&input, &output).prepend_error("Failed to write result to file:")?;
         return Ok(());
     }
@@ -175,10 +229,15 @@ pub fn cmd_binarize(input: PathBuf, output: PathBuf, force: bool) -> Result<(), 
     // on unix, `dayzmake binarize` always goes through Proton
     set_proton(true);
     let (input, addon_root) = cli_addon(input);
-    let prefix = addon_root.canonicalize().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
+    let prefix = addon_root
+        .canonicalize()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
     let cursor = binarize(&input, &addon_root, &prefix)?;
     let mut file = File::create(&output).prepend_error("Failed to open output:")?;
-    file.write_all(cursor.get_ref()).prepend_error("Failed to write result to file:")?;
+    file.write_all(cursor.get_ref())
+        .prepend_error("Failed to write result to file:")?;
 
     Ok(())
 }
@@ -196,8 +255,8 @@ mod proton {
 
     use once_cell::sync::Lazy;
 
-    use crate::*;
     use crate::error::*;
+    use crate::*;
 
     const APP_ID: &str = "830640";
     const PREFIX_TIMEOUT: Duration = Duration::from_secs(300);
@@ -214,13 +273,18 @@ mod proton {
 
     /// The first candidate that has `steamapps/common`.
     pub fn find_steam_root(candidates: &[PathBuf]) -> Option<PathBuf> {
-        candidates.iter().find(|c| c.join("steamapps").join("common").is_dir()).cloned()
+        candidates
+            .iter()
+            .find(|c| c.join("steamapps").join("common").is_dir())
+            .cloned()
     }
 
     fn steam_candidates() -> Vec<PathBuf> {
         let mut c: Vec<PathBuf> = Vec::new();
         if let Some(r) = std::env::var_os("STEAM_ROOT") {
-            if !r.is_empty() { c.push(PathBuf::from(r)); }
+            if !r.is_empty() {
+                c.push(PathBuf::from(r));
+            }
         }
         if let Some(home) = std::env::var_os("HOME") {
             let home = PathBuf::from(home);
@@ -232,39 +296,77 @@ mod proton {
     }
 
     /// `override_dir` is DAYZ_TOOLS; returns the directory holding Bin/Binarize/binarize.exe.
-    pub fn find_dayz_tools(steam_root: Option<&Path>, override_dir: Option<PathBuf>) -> Result<PathBuf, Error> {
+    pub fn find_dayz_tools(
+        steam_root: Option<&Path>,
+        override_dir: Option<PathBuf>,
+    ) -> Result<PathBuf, Error> {
         let tools = match (override_dir, steam_root) {
             (Some(d), _) => d,
             (None, Some(s)) => s.join("steamapps/common/DayZ Tools"),
-            (None, None) => return Err(error!("No Steam installation found (set STEAM_ROOT, or DAYZ_TOOLS to the DayZ Tools folder).")),
+            (None, None) => {
+                return Err(error!(
+                    "No Steam installation found (set STEAM_ROOT, or DAYZ_TOOLS to the DayZ Tools folder)."
+                ));
+            }
         };
         if !tools.join("Bin/Binarize/binarize.exe").is_file() {
-            return Err(error!("binarize.exe not found in \"{}\". Install DayZ Tools (Steam app {}) or set DAYZ_TOOLS.", tools.display(), APP_ID));
+            return Err(error!(
+                "binarize.exe not found in \"{}\". Install DayZ Tools (Steam app {}) or set DAYZ_TOOLS.",
+                tools.display(),
+                APP_ID
+            ));
         }
         Ok(tools)
     }
 
     /// `override_dir` is PROTON (the Proton directory); returns the directory containing the `proton` script.
-    pub fn find_proton(steam_root: Option<&Path>, override_dir: Option<PathBuf>) -> Result<PathBuf, Error> {
+    pub fn find_proton(
+        steam_root: Option<&Path>,
+        override_dir: Option<PathBuf>,
+    ) -> Result<PathBuf, Error> {
         if let Some(d) = override_dir {
-            if d.join("proton").is_file() { return Ok(d); }
+            if d.join("proton").is_file() {
+                return Ok(d);
+            }
             return Err(error!("No proton script in PROTON=\"{}\".", d.display()));
         }
         let common = match steam_root {
             Some(s) => s.join("steamapps/common"),
-            None => return Err(error!("No Steam installation found (set STEAM_ROOT, or PROTON to a Proton folder).")),
+            None => {
+                return Err(error!(
+                    "No Steam installation found (set STEAM_ROOT, or PROTON to a Proton folder)."
+                ));
+            }
         };
-        for name in &["Proton Hotfix", "Proton - Experimental", "Proton Experimental"] {
-            if common.join(name).join("proton").is_file() { return Ok(common.join(name)); }
+        for name in &[
+            "Proton Hotfix",
+            "Proton - Experimental",
+            "Proton Experimental",
+        ] {
+            if common.join(name).join("proton").is_file() {
+                return Ok(common.join(name));
+            }
         }
         let mut others: Vec<PathBuf> = match std::fs::read_dir(&common) {
-            Ok(rd) => rd.filter_map(|e| e.ok()).map(|e| e.path())
-                .filter(|p| p.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.starts_with("Proton")) && p.join("proton").is_file())
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map_or(false, |n| n.starts_with("Proton"))
+                        && p.join("proton").is_file()
+                })
                 .collect(),
             Err(_) => Vec::new(),
         };
         others.sort();
-        others.pop().ok_or_else(|| error!("No Proton found under \"{}\". Install one in Steam or set PROTON.", common.display()))
+        others.pop().ok_or_else(|| {
+            error!(
+                "No Proton found under \"{}\". Install one in Steam or set PROTON.",
+                common.display()
+            )
+        })
     }
 
     /// Windows path (drive Z: is the sandbox root) of a path inside the sandbox.
@@ -293,8 +395,17 @@ mod proton {
         let text = read_to_string(log).unwrap_or_default();
         for line in text.lines() {
             let lower = line.to_ascii_lowercase();
-            if lower.contains("texture") && (lower.contains("cannot") || lower.contains("can't") || lower.contains("not found") || lower.contains("failed")) {
-                warning(format!("{}: {}", model, line.trim()), Some("binarize-missing-texture"), (None, None));
+            if lower.contains("texture")
+                && (lower.contains("cannot")
+                    || lower.contains("can't")
+                    || lower.contains("not found")
+                    || lower.contains("failed"))
+            {
+                warning(
+                    format!("{}: {}", model, line.trim()),
+                    Some("binarize-missing-texture"),
+                    (None, None),
+                );
             }
         }
     }
@@ -306,10 +417,17 @@ mod proton {
     }
 
     /// Runs a proton command with output captured in `log`; kills it after `timeout`.
-    fn run_proton(sb: &Sandbox, args: &[&str], cwd: &Path, log: &Path, timeout: Duration) -> Result<(), Error> {
+    fn run_proton(
+        sb: &Sandbox,
+        args: &[&str],
+        cwd: &Path,
+        log: &Path,
+        timeout: Duration,
+    ) -> Result<(), Error> {
         let logfile = File::create(log)?;
         let mut child = Command::new(sb.proton_dir.join("proton"))
-            .arg("run").args(args)
+            .arg("run")
+            .args(args)
             .current_dir(cwd)
             .env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &sb.steam_root)
             .env("STEAM_COMPAT_DATA_PATH", sb.root.join("prefix"))
@@ -324,11 +442,17 @@ mod proton {
 
         let start = Instant::now();
         let status = loop {
-            if let Some(status) = child.try_wait()? { break status; }
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
             if start.elapsed() > timeout {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(error!("Timed out after {} s.\n{}", timeout.as_secs(), tail(log, 15)));
+                return Err(error!(
+                    "Timed out after {} s.\n{}",
+                    timeout.as_secs(),
+                    tail(log, 15)
+                ));
             }
             sleep(Duration::from_millis(100));
         };
@@ -349,33 +473,70 @@ mod proton {
 
     fn create_sandbox() -> Result<Sandbox, Error> {
         let steam_root = find_steam_root(&steam_candidates());
-        let tools = find_dayz_tools(steam_root.as_deref(), std::env::var_os("DAYZ_TOOLS").filter(|v| !v.is_empty()).map(PathBuf::from))?;
-        let proton_dir = find_proton(steam_root.as_deref(), std::env::var_os("PROTON").filter(|v| !v.is_empty()).map(PathBuf::from))?;
+        let tools = find_dayz_tools(
+            steam_root.as_deref(),
+            std::env::var_os("DAYZ_TOOLS")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+        )?;
+        let proton_dir = find_proton(
+            steam_root.as_deref(),
+            std::env::var_os("PROTON")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+        )?;
         let steam_root = steam_root.unwrap_or_else(|| {
             // only reachable with both overrides set: Proton wants some client install path
-            proton_dir.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).map(Path::to_path_buf).unwrap_or_default()
+            proton_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(|p| p.parent())
+                .map(Path::to_path_buf)
+                .unwrap_or_default()
         });
 
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
-        let root = std::env::temp_dir().join(format!("dayzmake-binarize-{}-{}", std::process::id(), nanos));
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "dayzmake-binarize-{}-{}",
+            std::process::id(),
+            nanos
+        ));
         std::fs::create_dir(&root).prepend_error("Failed to create sandbox directory:")?;
-        let mut sb = Sandbox { root, proton_dir, steam_root, counter: 0 };
+        let mut sb = Sandbox {
+            root,
+            proton_dir,
+            steam_root,
+            counter: 0,
+        };
 
         // from here on the sandbox exists on disk, so a failure must remove it again
         let result = (|| -> Result<(), Error> {
             for d in &["prefix", "in", "out", "P"] {
                 create_dir_all(sb.root.join(d))?;
             }
-            copy_dir(&tools.join("Bin/Binarize"), &sb.root.join("Binarize")).prepend_error("Failed to copy Binarize:")?;
+            copy_dir(&tools.join("Bin/Binarize"), &sb.root.join("Binarize"))
+                .prepend_error("Failed to copy Binarize:")?;
 
             eprintln!("Creating a Wine prefix for binarize.exe (the first run takes a while)...");
             let log = sb.root.join("prefix-init.log");
-            run_proton(&sb, &["cmd.exe", "/c", "exit"], &sb.root, &log, PREFIX_TIMEOUT)
-                .prepend_error("Failed to create the Wine prefix:")?;
+            run_proton(
+                &sb,
+                &["cmd.exe", "/c", "exit"],
+                &sb.root,
+                &log,
+                PREFIX_TIMEOUT,
+            )
+            .prepend_error("Failed to create the Wine prefix:")?;
 
             let dosdevices = sb.root.join("prefix/pfx/dosdevices");
             if !dosdevices.is_dir() {
-                return Err(error!("Proton did not create a prefix in \"{}\".", sb.root.join("prefix").display()));
+                return Err(error!(
+                    "Proton did not create a prefix in \"{}\".",
+                    sb.root.join("prefix").display()
+                ));
             }
             // Wine's default Z: is /, and binarize.exe walks directory trees from the drive root
             let z = dosdevices.join("z:");
@@ -403,7 +564,9 @@ mod proton {
         let _ = Command::new(sb.proton_dir.join("files/bin/wineserver"))
             .arg("-k")
             .env("WINEPREFIX", sb.root.join("prefix/pfx"))
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
         sleep(Duration::from_secs(1));
         if let Err(e) = remove_dir_all(&sb.root) {
@@ -413,13 +576,18 @@ mod proton {
 
     pub fn cleanup() {
         let sb = SANDBOX.lock().ok().and_then(|mut g| g.take());
-        if let Some(sb) = sb { destroy(sb); }
+        if let Some(sb) = sb {
+            destroy(sb);
+        }
     }
 
     /// Makes the addon visible at `<sandbox>/P/<prefix>` (once per addon).
     pub fn stage_addon(root: &Path, prefix: &str, addon_root: &Path) -> Result<(), Error> {
         let mut link = root.join("P");
-        for part in prefix.split(|c| c == '\\' || c == '/').filter(|p| !p.is_empty()) {
+        for part in prefix
+            .split(|c| c == '\\' || c == '/')
+            .filter(|p| !p.is_empty())
+        {
             link.push(part);
         }
         if link.symlink_metadata().is_ok() {
@@ -433,22 +601,51 @@ mod proton {
 
     /// Windows path on the P: drive of `relative_dir` inside the addon with the given prefix.
     pub fn p_win_path(prefix: &str, relative_dir: &Path) -> String {
-        let mut parts: Vec<String> = prefix.split(|c| c == '\\' || c == '/').filter(|p| !p.is_empty()).map(String::from).collect();
-        parts.extend(relative_dir.iter().filter_map(|c| c.to_str()).map(String::from));
+        let mut parts: Vec<String> = prefix
+            .split(|c| c == '\\' || c == '/')
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect();
+        parts.extend(
+            relative_dir
+                .iter()
+                .filter_map(|c| c.to_str())
+                .map(String::from),
+        );
         format!("P:\\{}", parts.join("\\"))
     }
 
-    pub fn binarize(input: &PathBuf, addon_root: &Path, prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
-        let mut guard = SANDBOX.lock().map_err(|_| error!("Binarize sandbox lock poisoned."))?;
+    pub fn binarize(
+        input: &PathBuf,
+        addon_root: &Path,
+        prefix: &str,
+    ) -> Result<Cursor<Box<[u8]>>, Error> {
+        let mut guard = SANDBOX
+            .lock()
+            .map_err(|_| error!("Binarize sandbox lock poisoned."))?;
         if guard.is_none() {
             *guard = Some(create_sandbox()?);
         }
         let sb = guard.as_mut().unwrap();
 
-        let name = input.file_name().and_then(|n| n.to_str()).ok_or_else(|| error!("Invalid file name \"{}\".", input.display()))?.to_string();
-        let relative_dir = input.parent().unwrap_or_else(|| Path::new("")).strip_prefix(addon_root)
-            .map_err(|_| error!("\"{}\" is not inside the addon folder \"{}\".", input.display(), addon_root.display()))?;
-        stage_addon(&sb.root, prefix, addon_root).prepend_error("Failed to map the addon onto drive P:")?;
+        let name = input
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| error!("Invalid file name \"{}\".", input.display()))?
+            .to_string();
+        let relative_dir = input
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .strip_prefix(addon_root)
+            .map_err(|_| {
+                error!(
+                    "\"{}\" is not inside the addon folder \"{}\".",
+                    input.display(),
+                    addon_root.display()
+                )
+            })?;
+        stage_addon(&sb.root, prefix, addon_root)
+            .prepend_error("Failed to map the addon onto drive P:")?;
 
         sb.counter += 1;
         let out_dir = sb.root.join("out").join(sb.counter.to_string());
@@ -457,19 +654,40 @@ mod proton {
         let log = out_dir.join("binarize.log");
         let in_w = p_win_path(prefix, relative_dir);
         let out_w = win_path(&sb.root, &out_dir);
-        run_proton(sb, &["Z:\\Binarize\\binarize.exe", "-norecurse", "-always", "-silent", "-maxProcesses=0", &in_w, &out_w, &name],
-            &sb.root.join("P"), &log, BINARIZE_TIMEOUT)
-            .prepend_error("binarize.exe failed:")?;
+        run_proton(
+            sb,
+            &[
+                "Z:\\Binarize\\binarize.exe",
+                "-norecurse",
+                "-always",
+                "-silent",
+                "-maxProcesses=0",
+                &in_w,
+                &out_w,
+                &name,
+            ],
+            &sb.root.join("P"),
+            &log,
+            BINARIZE_TIMEOUT,
+        )
+        .prepend_error("binarize.exe failed:")?;
 
         warn_missing_textures(&log, &name);
 
         let mut buffer: Vec<u8> = Vec::new();
         match File::open(out_dir.join(&name)) {
-            Ok(mut f) => { f.read_to_end(&mut buffer).prepend_error("Failed to read binarize.exe output:")?; }
+            Ok(mut f) => {
+                f.read_to_end(&mut buffer)
+                    .prepend_error("Failed to read binarize.exe output:")?;
+            }
             Err(_) => {}
         }
         if buffer.is_empty() {
-            return Err(error!("binarize.exe produced no output for \"{}\" (models referencing textures/materials may need a P: drive).\n{}", name, tail(&log, 15)));
+            return Err(error!(
+                "binarize.exe produced no output for \"{}\" (models referencing textures/materials may need a P: drive).\n{}",
+                name,
+                tail(&log, 15)
+            ));
         }
 
         let _ = remove_dir_all(&out_dir);
@@ -490,12 +708,25 @@ mod proton {
 
         #[test]
         fn cli_addon_bare_file_name() {
-            for input in &["model.p3d", "./model.p3d", "t21/model.p3d", "/abs/t21/model.p3d"] {
+            for input in &[
+                "model.p3d",
+                "./model.p3d",
+                "t21/model.p3d",
+                "/abs/t21/model.p3d",
+            ] {
                 let (input, root) = super::super::cli_addon(PathBuf::from(input));
-                assert!(input.parent().unwrap().strip_prefix(&root).is_ok(), "{:?} not in {:?}", input, root);
+                assert!(
+                    input.parent().unwrap().strip_prefix(&root).is_ok(),
+                    "{:?} not in {:?}",
+                    input,
+                    root
+                );
                 assert_eq!(input.file_name().unwrap(), "model.p3d");
             }
-            assert_eq!(super::super::cli_addon(PathBuf::from("model.p3d")).1, PathBuf::from("."));
+            assert_eq!(
+                super::super::cli_addon(PathBuf::from("model.p3d")).1,
+                PathBuf::from(".")
+            );
         }
 
         #[test]
@@ -505,10 +736,16 @@ mod proton {
             fs::create_dir_all(root.path().join("P")).unwrap();
             stage_addon(root.path(), "my\\mod", src.path()).unwrap();
             let link = root.path().join("P/my/mod");
-            assert_eq!(fs::read_link(&link).unwrap(), src.path().canonicalize().unwrap());
+            assert_eq!(
+                fs::read_link(&link).unwrap(),
+                src.path().canonicalize().unwrap()
+            );
             // staging twice is fine
             stage_addon(root.path(), "my\\mod", src.path()).unwrap();
-            assert_eq!(p_win_path("my\\mod", Path::new("sub/dir")), "P:\\my\\mod\\sub\\dir");
+            assert_eq!(
+                p_win_path("my\\mod", Path::new("sub/dir")),
+                "P:\\my\\mod\\sub\\dir"
+            );
             assert_eq!(p_win_path("my\\mod", Path::new("")), "P:\\my\\mod");
         }
 
@@ -534,8 +771,14 @@ mod proton {
             let t = tempfile::tempdir().unwrap();
             assert!(find_dayz_tools(Some(t.path()), None).is_err());
             assert!(find_dayz_tools(None, None).is_err());
-            touch(&t.path().join("steamapps/common/DayZ Tools/Bin/Binarize/binarize.exe"));
-            assert_eq!(find_dayz_tools(Some(t.path()), None).unwrap(), t.path().join("steamapps/common/DayZ Tools"));
+            touch(
+                &t.path()
+                    .join("steamapps/common/DayZ Tools/Bin/Binarize/binarize.exe"),
+            );
+            assert_eq!(
+                find_dayz_tools(Some(t.path()), None).unwrap(),
+                t.path().join("steamapps/common/DayZ Tools")
+            );
             let other = t.path().join("other");
             assert!(find_dayz_tools(Some(t.path()), Some(other.clone())).is_err());
             touch(&other.join("Bin/Binarize/binarize.exe"));
@@ -548,15 +791,27 @@ mod proton {
             let common = t.path().join("steamapps/common");
             assert!(find_proton(Some(t.path()), None).is_err());
             touch(&common.join("Proton 9.0/proton"));
-            assert_eq!(find_proton(Some(t.path()), None).unwrap(), common.join("Proton 9.0"));
+            assert_eq!(
+                find_proton(Some(t.path()), None).unwrap(),
+                common.join("Proton 9.0")
+            );
             touch(&common.join("Proton - Experimental/proton"));
-            assert_eq!(find_proton(Some(t.path()), None).unwrap(), common.join("Proton - Experimental"));
+            assert_eq!(
+                find_proton(Some(t.path()), None).unwrap(),
+                common.join("Proton - Experimental")
+            );
             touch(&common.join("Proton Hotfix/proton"));
-            assert_eq!(find_proton(Some(t.path()), None).unwrap(), common.join("Proton Hotfix"));
+            assert_eq!(
+                find_proton(Some(t.path()), None).unwrap(),
+                common.join("Proton Hotfix")
+            );
             let custom = t.path().join("custom");
             assert!(find_proton(Some(t.path()), Some(custom.clone())).is_err());
             touch(&custom.join("proton"));
-            assert_eq!(find_proton(Some(t.path()), Some(custom.clone())).unwrap(), custom);
+            assert_eq!(
+                find_proton(Some(t.path()), Some(custom.clone())).unwrap(),
+                custom
+            );
         }
     }
 }

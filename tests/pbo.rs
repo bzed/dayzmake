@@ -2,11 +2,18 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use dayzmake::pbo::PBO;
-use dayzmake::sign::{cmd_sign, cmd_verify, BISignVersion};
+use dayzmake::sign::{BISignVersion, cmd_sign, cmd_verify};
 
 fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dayzmake")).args(args).current_dir(cwd).output().unwrap();
-    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).into_owned())
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 fn sign_dir() -> PathBuf {
@@ -17,29 +24,51 @@ fn sign_dir() -> PathBuf {
 fn sign_fixture(pbo: &str) -> Vec<u8> {
     let tmp = tempfile::tempdir().unwrap();
     let sig = tmp.path().join("out.bisign");
-    cmd_sign(sign_dir().join("armk.biprivatekey"), sign_dir().join(pbo), Some(sig.clone()), BISignVersion::V3, true).unwrap();
+    cmd_sign(
+        sign_dir().join("armk.biprivatekey"),
+        sign_dir().join(pbo),
+        Some(sig.clone()),
+        BISignVersion::V3,
+        true,
+    )
+    .unwrap();
     fs::read(sig).unwrap()
 }
 
 #[test]
 fn sign_matches_bi_utf8() {
-    assert_eq!(sign_fixture("testsig.pbo"), fs::read(sign_dir().join("testsig.pbo.armk.bisign")).unwrap());
+    assert_eq!(
+        sign_fixture("testsig.pbo"),
+        fs::read(sign_dir().join("testsig.pbo.armk.bisign")).unwrap()
+    );
 }
 
 #[test]
 fn sign_matches_bi_non_utf8() {
-    assert_eq!(sign_fixture("nonutf8.pbo"), fs::read(sign_dir().join("nonutf8.pbo.armk.bisign")).unwrap());
+    assert_eq!(
+        sign_fixture("nonutf8.pbo"),
+        fs::read(sign_dir().join("nonutf8.pbo.armk.bisign")).unwrap()
+    );
 }
 
 #[test]
 fn verify_bi_signature_non_utf8() {
-    cmd_verify(sign_dir().join("armk.bikey"), sign_dir().join("nonutf8.pbo"), Some(sign_dir().join("nonutf8.pbo.armk.bisign"))).unwrap();
+    cmd_verify(
+        sign_dir().join("armk.bikey"),
+        sign_dir().join("nonutf8.pbo"),
+        Some(sign_dir().join("nonutf8.pbo.armk.bisign")),
+    )
+    .unwrap();
 }
 
 #[test]
 fn read_non_utf8_name() {
     let pbo = PBO::read(&mut File::open(sign_dir().join("nonutf8.pbo")).unwrap()).unwrap();
-    assert!(pbo.files.contains_key("data\\a\u{2014}b.txt"), "{:?}", pbo.files.keys().collect::<Vec<_>>());
+    assert!(
+        pbo.files.contains_key("data\\a\u{2014}b.txt"),
+        "{:?}",
+        pbo.files.keys().collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -71,12 +100,18 @@ fn prefix_of(content: &str) -> PBO {
 
 #[test]
 fn prefix_trailing_slash_stripped() {
-    assert_eq!(prefix_of("my\\mod\\").header_extensions["prefix"], "my\\mod");
+    assert_eq!(
+        prefix_of("my\\mod\\").header_extensions["prefix"],
+        "my\\mod"
+    );
 }
 
 #[test]
 fn prefix_normalized_crlf_and_leading_slash() {
-    assert_eq!(prefix_of("\\my\\mod\\\\\r\n").header_extensions["prefix"], "my\\mod");
+    assert_eq!(
+        prefix_of("\\my\\mod\\\\\r\n").header_extensions["prefix"],
+        "my\\mod"
+    );
 }
 
 #[test]

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use std::io::Error;
 
-
 /// Result of an `__EVAL`
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -37,9 +36,13 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
         let c = chars[i];
         if c.is_whitespace() {
             i += 1;
-        } else if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).map_or(false, |d| d.is_ascii_digit())) {
+        } else if c.is_ascii_digit()
+            || (c == '.' && chars.get(i + 1).map_or(false, |d| d.is_ascii_digit()))
+        {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') { i += 1; }
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                i += 1;
+            }
             let text: String = chars[start..i].iter().collect();
             toks.push(Tok::Num(text.parse().map_err(|_| unsupported(expr))?));
         } else if c == '"' {
@@ -48,15 +51,26 @@ fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
             loop {
                 match chars.get(i) {
                     None => return Err(unsupported(expr)),
-                    Some('"') if chars.get(i + 1) == Some(&'"') => { s.push('"'); i += 2; },
-                    Some('"') => { i += 1; break; },
-                    Some(&ch) => { s.push(ch); i += 1; },
+                    Some('"') if chars.get(i + 1) == Some(&'"') => {
+                        s.push('"');
+                        i += 2;
+                    }
+                    Some('"') => {
+                        i += 1;
+                        break;
+                    }
+                    Some(&ch) => {
+                        s.push(ch);
+                        i += 1;
+                    }
                 }
             }
             toks.push(Tok::Str(s));
         } else if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') { i += 1; }
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
             toks.push(Tok::Ident(chars[start..i].iter().collect()));
         } else if "+-*/%^()".contains(c) {
             toks.push(Tok::Op(c));
@@ -95,7 +109,10 @@ impl<'a> Parser<'a> {
     fn expr(&mut self, min_prec: u8) -> Result<EvalValue, Error> {
         let mut lhs = self.atom()?;
         while let Some(op) = self.peek_op() {
-            let prec = match Self::prec(op) { Some(p) if p >= min_prec => p, _ => break };
+            let prec = match Self::prec(op) {
+                Some(p) if p >= min_prec => p,
+                _ => break,
+            };
             self.pos += 1;
             // `^` is right-associative, everything else left-associative
             let rhs = self.expr(if op == '^' { prec } else { prec + 1 })?;
@@ -105,22 +122,32 @@ impl<'a> Parser<'a> {
     }
 
     fn atom(&mut self) -> Result<EvalValue, Error> {
-        let tok = self.toks.get(self.pos).cloned().ok_or_else(|| unsupported(self.expr))?;
+        let tok = self
+            .toks
+            .get(self.pos)
+            .cloned()
+            .ok_or_else(|| unsupported(self.expr))?;
         self.pos += 1;
         match tok {
             Tok::Num(n) => Ok(EvalValue::Number(n)),
             Tok::Str(s) => Ok(EvalValue::Str(s)),
-            Tok::Ident(name) => self.vars.get(&name).cloned().ok_or_else(|| unsupported(self.expr)),
+            Tok::Ident(name) => self
+                .vars
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| unsupported(self.expr)),
             Tok::Op('-') => match self.atom()? {
                 EvalValue::Number(n) => Ok(EvalValue::Number(-n)),
                 _ => Err(unsupported(self.expr)),
             },
             Tok::Op('(') => {
                 let v = self.expr(1)?;
-                if self.peek_op() != Some(')') { return Err(unsupported(self.expr)); }
+                if self.peek_op() != Some(')') {
+                    return Err(unsupported(self.expr));
+                }
                 self.pos += 1;
                 Ok(v)
-            },
+            }
             Tok::Op(_) => Err(unsupported(self.expr)),
         }
     }
@@ -132,13 +159,17 @@ impl<'a> Parser<'a> {
                 '-' => x - y,
                 '*' => x * y,
                 '/' => {
-                    if y == 0.0 { return Err(error!("__EVAL: division by zero in: {}", self.expr)); }
+                    if y == 0.0 {
+                        return Err(error!("__EVAL: division by zero in: {}", self.expr));
+                    }
                     x / y
-                },
+                }
                 '%' => {
-                    if y == 0.0 { return Err(error!("__EVAL: division by zero in: {}", self.expr)); }
+                    if y == 0.0 {
+                        return Err(error!("__EVAL: division by zero in: {}", self.expr));
+                    }
                     x % y
-                },
+                }
                 '^' => x.powf(y),
                 _ => return Err(unsupported(self.expr)),
             })),
@@ -151,7 +182,12 @@ impl<'a> Parser<'a> {
 /// Evaluates an expression.
 pub fn eval(expr: &str, vars: &mut HashMap<String, EvalValue>) -> Result<EvalValue, Error> {
     let toks = tokenize(expr)?;
-    let mut parser = Parser { toks, pos: 0, expr, vars };
+    let mut parser = Parser {
+        toks,
+        pos: 0,
+        expr,
+        vars,
+    };
     let value = parser.expr(1)?;
     if parser.pos != parser.toks.len() {
         return Err(unsupported(expr));
@@ -165,7 +201,9 @@ pub fn exec(stmts: &str, vars: &mut HashMap<String, EvalValue>) -> Result<(), Er
     let mut current = String::new();
     let mut parts = Vec::new();
     for c in stmts.chars() {
-        if c == '"' { in_string = !in_string; }
+        if c == '"' {
+            in_string = !in_string;
+        }
         if c == ';' && !in_string {
             parts.push(std::mem::take(&mut current));
         } else {
@@ -175,10 +213,15 @@ pub fn exec(stmts: &str, vars: &mut HashMap<String, EvalValue>) -> Result<(), Er
     parts.push(current);
 
     for stmt in parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let eq = stmt.find('=').ok_or_else(|| error!("__EXEC statement not supported by dayzmake: {}", stmt))?;
+        let eq = stmt
+            .find('=')
+            .ok_or_else(|| error!("__EXEC statement not supported by dayzmake: {}", stmt))?;
         let name = stmt[..eq].trim();
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err(error!("__EXEC statement not supported by dayzmake: {}", stmt));
+            return Err(error!(
+                "__EXEC statement not supported by dayzmake: {}",
+                stmt
+            ));
         }
         let value = eval(stmt[eq + 1..].trim(), vars)?;
         vars.insert(name.to_string(), value);
@@ -190,7 +233,9 @@ pub fn exec(stmts: &str, vars: &mut HashMap<String, EvalValue>) -> Result<(), Er
 mod tests {
     use super::*;
 
-    fn ev(s: &str) -> Result<EvalValue, Error> { eval(s, &mut HashMap::new()) }
+    fn ev(s: &str) -> Result<EvalValue, Error> {
+        eval(s, &mut HashMap::new())
+    }
 
     #[test]
     fn arithmetic_precedence() {
@@ -202,7 +247,17 @@ mod tests {
 
     #[test]
     fn unsupported_is_error() {
-        assert!(ev("floor 2.7").unwrap_err().to_string().contains("not supported"));
-        assert!(ev("1 > 0").unwrap_err().to_string().contains("not supported"));
+        assert!(
+            ev("floor 2.7")
+                .unwrap_err()
+                .to_string()
+                .contains("not supported")
+        );
+        assert!(
+            ev("1 > 0")
+                .unwrap_err()
+                .to_string()
+                .contains("not supported")
+        );
     }
 }

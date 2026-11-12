@@ -1,10 +1,10 @@
 #![macro_use]
 
-use std::cmp::{min};
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Display};
-use std::io::{Error};
-use std::path::{PathBuf};
+use std::fmt::Display;
+use std::io::Error;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use colored::Colorize;
@@ -43,7 +43,7 @@ impl<T> ErrorExt<T> for Result<T, Error> {
     fn prepend_error<M: AsRef<[u8]> + Display>(self, msg: M) -> Result<T, Error> {
         match self {
             Ok(t) => Ok(t),
-            Err(e) => Err(error!("{}\n{}", msg, e))
+            Err(e) => Err(error!("{}\n{}", msg, e)),
         }
     }
 
@@ -70,12 +70,18 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 let line_origin = pe.location.line - 1;
                 let file_origin = match origin {
                     Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
-                    None => "".to_string()
+                    None => "".to_string(),
                 };
 
                 let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
 
-                Err(format_parse_error(line, file_origin, line_origin, pe.location.column, &pe.expected))
+                Err(format_parse_error(
+                    line,
+                    file_origin,
+                    line_origin,
+                    pe.location.column,
+                    &pe.expected,
+                ))
             }
         }
     }
@@ -89,34 +95,61 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {
-                let line_origin = info.line_origins[min(pe.location.line, info.line_origins.len()) - 1].0 as usize;
-                let file_origin = match &info.line_origins[min(pe.location.line, info.line_origins.len()) - 1].1 {
+                let line_origin = info.line_origins
+                    [min(pe.location.line, info.line_origins.len()) - 1]
+                    .0 as usize;
+                let file_origin = match &info.line_origins
+                    [min(pe.location.line, info.line_origins.len()) - 1]
+                    .1
+                {
                     Some(path) => format!("{}:", path.to_str().unwrap().to_string()),
-                    None => "".to_string()
+                    None => "".to_string(),
                 };
 
                 let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
 
-                Err(format_parse_error(line, file_origin, line_origin, pe.location.column, &pe.expected))
+                Err(format_parse_error(
+                    line,
+                    file_origin,
+                    line_origin,
+                    pe.location.column,
+                    &pe.expected,
+                ))
             }
         }
     }
 }
 
-fn format_parse_error(line: &str, file: String, line_number: usize, column_number: usize, expected: &impl Display) -> Error {
+fn format_parse_error(
+    line: &str,
+    file: String,
+    line_number: usize,
+    column_number: usize,
+    expected: &impl Display,
+) -> Error {
     let trimmed = line.trim_start();
 
-    error!("In line {}{}:\n\n  {}\n  {}{}\n\nUnexpected token \"{}\", expected: {}",
+    error!(
+        "In line {}{}:\n\n  {}\n  {}{}\n\nUnexpected token \"{}\", expected: {}",
         file,
         line_number,
         trimmed,
-        " ".to_string().repeat(column_number - 1 - (line.len() - trimmed.len())),
+        " ".to_string()
+            .repeat(column_number - 1 - (line.len() - trimmed.len())),
         "^".red().bold(),
-        line.chars().map(|x| x.to_string()).nth(column_number - 1).unwrap_or_else(|| "\\n".to_string()),
-        expected)
+        line.chars()
+            .map(|x| x.to_string())
+            .nth(column_number - 1)
+            .unwrap_or_else(|| "\\n".to_string()),
+        expected
+    )
 }
 
-fn print_warning_message<M: AsRef<[u8]> + Display>(msg: M, name: Option<&'static str>, location: (Option<M>,Option<u32>)) {
+fn print_warning_message<M: AsRef<[u8]> + Display>(
+    msg: M,
+    name: Option<&'static str>,
+    location: (Option<M>, Option<u32>),
+) {
     let loc_str = if location.0.is_some() && location.1.is_some() {
         format!("In file {}:{}: ", location.0.unwrap(), location.1.unwrap())
     } else if location.0.is_some() {
@@ -129,13 +162,23 @@ fn print_warning_message<M: AsRef<[u8]> + Display>(msg: M, name: Option<&'static
 
     let name_str = match name {
         Some(name) => format!(" [{}]", name),
-        None => "".to_string()
+        None => "".to_string(),
     };
 
-    eprintln!("{}{}: {}{}", loc_str, "warning".yellow().bold(), msg, name_str);
+    eprintln!(
+        "{}{}: {}{}",
+        loc_str,
+        "warning".yellow().bold(),
+        msg,
+        name_str
+    );
 }
 
-pub fn warning<M: AsRef<[u8]> + Display>(msg: M, name: Option<&'static str>, location: (Option<M>,Option<u32>)) {
+pub fn warning<M: AsRef<[u8]> + Display>(
+    msg: M,
+    name: Option<&'static str>,
+    location: (Option<M>, Option<u32>),
+) {
     let mut state = WARNING_STATE.lock().unwrap();
 
     if let Some(name_str) = name {
@@ -180,14 +223,22 @@ pub fn print_warning_summary() {
     let mut summary_warnings = Vec::new();
 
     for (name, raised) in state.raised.iter() {
-        if state.muted.contains(name) { continue; }
+        if state.muted.contains(name) {
+            continue;
+        }
 
         if *raised > state.max {
             let excess = *raised - state.max;
             let msg = if excess > 1 {
-                format!("{} warnings of type \"{}\" were suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.", excess, name, name)
+                format!(
+                    "{} warnings of type \"{}\" were suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.",
+                    excess, name, name
+                )
             } else {
-                format!("{} warning of type \"{}\" was suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.", excess, name, name)
+                format!(
+                    "{} warning of type \"{}\" was suppressed to prevent spam. Use \"-w {}\" to disable these warnings entirely.",
+                    excess, name, name
+                )
             };
             summary_warnings.push(msg);
         }

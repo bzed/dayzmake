@@ -1,10 +1,9 @@
-use std::collections::{HashSet};
-use std::fs::{File};
-use std::io::{Error, Read, Cursor, stdin, stdout};
-use std::iter::{FromIterator};
-use std::path::{PathBuf};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Cursor, Error, Read, stdin, stdout};
+use std::iter::FromIterator;
+use std::path::PathBuf;
 
-use crate::*;
 use crate::binarize;
 use crate::config;
 use crate::error::*;
@@ -14,6 +13,7 @@ use crate::paa;
 use crate::pbo;
 use crate::preprocess;
 use crate::sign;
+use crate::*;
 
 use serde::Deserialize;
 
@@ -121,7 +121,9 @@ pub struct Args {
 
 fn get_input(args: &Args) -> Result<Input, Error> {
     if let Some(ref source) = args.arg_source {
-        Ok(Input::File(File::open(source).prepend_error("Failed to open input file:")?))
+        Ok(Input::File(
+            File::open(source).prepend_error("Failed to open input file:")?,
+        ))
     } else {
         let mut buffer: Vec<u8> = Vec::new();
         stdin().read_to_end(&mut buffer).unwrap();
@@ -133,9 +135,14 @@ fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
         let path = PathBuf::from(target);
         if !args.flag_force && path.exists() {
-            return Err(error!("Target file \"{}\" already exists. Use --force to overwrite.", target));
+            return Err(error!(
+                "Target file \"{}\" already exists. Use --force to overwrite.",
+                target
+            ));
         }
-        Ok(Output::File(File::create(path).prepend_error("Failed to open output file:")?))
+        Ok(Output::File(
+            File::create(path).prepend_error("Failed to open output file:")?,
+        ))
     } else {
         Ok(Output::Standard(stdout()))
     }
@@ -146,13 +153,27 @@ fn run_command(args: &Args) -> Result<(), Error> {
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_binarize {
-        binarize::cmd_binarize(PathBuf::from(args.arg_source.as_ref().unwrap()), PathBuf::from(args.arg_target.as_ref().unwrap()), args.flag_force)
+        binarize::cmd_binarize(
+            PathBuf::from(args.arg_source.as_ref().unwrap()),
+            PathBuf::from(args.arg_target.as_ref().unwrap()),
+            args.flag_force,
+        )
     } else if args.cmd_rapify {
-        config::cmd_rapify(&mut get_input(&args)?, &mut get_output(&args)?, args.arg_source.as_ref().map(PathBuf::from), &includefolders)
+        config::cmd_rapify(
+            &mut get_input(&args)?,
+            &mut get_output(&args)?,
+            args.arg_source.as_ref().map(PathBuf::from),
+            &includefolders,
+        )
     } else if args.cmd_derapify {
         config::cmd_derapify(&mut get_input(&args)?, &mut get_output(&args)?)
     } else if args.cmd_preprocess {
-        preprocess::cmd_preprocess(&mut get_input(&args)?, &mut get_output(&args)?, args.arg_source.as_ref().map(PathBuf::from), &includefolders)
+        preprocess::cmd_preprocess(
+            &mut get_input(&args)?,
+            &mut get_output(&args)?,
+            args.arg_source.as_ref().map(PathBuf::from),
+            &includefolders,
+        )
     } else if args.cmd_build || args.cmd_pack {
         let flag_privatekey = args.flag_key.as_ref().map(PathBuf::from);
         let flag_signature = args.flag_signature.as_ref().map(PathBuf::from);
@@ -162,13 +183,30 @@ fn run_command(args: &Args) -> Result<(), Error> {
         }
 
         if args.cmd_build {
-            pbo::cmd_build(PathBuf::from(&args.arg_sourcefolder), &mut get_output(&args)?, &args.flag_headerext, &args.flag_exclude, &includefolders)?;
+            pbo::cmd_build(
+                PathBuf::from(&args.arg_sourcefolder),
+                &mut get_output(&args)?,
+                &args.flag_headerext,
+                &args.flag_exclude,
+                &includefolders,
+            )?;
         } else {
-            pbo::cmd_pack(PathBuf::from(&args.arg_sourcefolder), &mut get_output(&args)?, &args.flag_headerext, &args.flag_exclude)?;
+            pbo::cmd_pack(
+                PathBuf::from(&args.arg_sourcefolder),
+                &mut get_output(&args)?,
+                &args.flag_headerext,
+                &args.flag_exclude,
+            )?;
         }
 
         if let Some(pkey) = flag_privatekey {
-            sign::cmd_sign(pkey, PathBuf::from(args.arg_target.as_ref().unwrap()), flag_signature, sign::BISignVersion::V3, args.flag_force)?;
+            sign::cmd_sign(
+                pkey,
+                PathBuf::from(args.arg_target.as_ref().unwrap()),
+                flag_signature,
+                sign::BISignVersion::V3,
+                args.flag_force,
+            )?;
         }
 
         Ok(())
@@ -180,20 +218,52 @@ fn run_command(args: &Args) -> Result<(), Error> {
             pbo::cmd_inspect(&mut input)
         }
     } else if args.cmd_cat {
-        pbo::cmd_cat(&mut get_input(&args)?, &mut get_output(&args)?, &args.arg_filename)
+        pbo::cmd_cat(
+            &mut get_input(&args)?,
+            &mut get_output(&args)?,
+            &args.arg_filename,
+        )
     } else if args.cmd_unpack {
-        pbo::cmd_unpack(&mut get_input(&args)?, PathBuf::from(&args.arg_targetfolder), args.flag_force)
+        pbo::cmd_unpack(
+            &mut get_input(&args)?,
+            PathBuf::from(&args.arg_targetfolder),
+            args.flag_force,
+        )
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
     } else if args.cmd_sign {
-        let version = if args.flag_v2 { sign::BISignVersion::V2 } else { sign::BISignVersion::V3 };
-        sign::cmd_sign(PathBuf::from(&args.arg_privatekey), PathBuf::from(&args.arg_pbo), args.arg_signature.as_ref().map(PathBuf::from), version, args.flag_force)
+        let version = if args.flag_v2 {
+            sign::BISignVersion::V2
+        } else {
+            sign::BISignVersion::V3
+        };
+        sign::cmd_sign(
+            PathBuf::from(&args.arg_privatekey),
+            PathBuf::from(&args.arg_pbo),
+            args.arg_signature.as_ref().map(PathBuf::from),
+            version,
+            args.flag_force,
+        )
     } else if args.cmd_paa2img {
-        paa::cmd_paa2img(PathBuf::from(args.arg_source.as_ref().unwrap()), PathBuf::from(args.arg_target.as_ref().unwrap()), args.flag_force)
+        paa::cmd_paa2img(
+            PathBuf::from(args.arg_source.as_ref().unwrap()),
+            PathBuf::from(args.arg_target.as_ref().unwrap()),
+            args.flag_force,
+        )
     } else if args.cmd_img2paa {
-        paa::cmd_img2paa(PathBuf::from(args.arg_source.as_ref().unwrap()), PathBuf::from(args.arg_target.as_ref().unwrap()), args.flag_type.clone(), args.flag_compress, args.flag_force)
+        paa::cmd_img2paa(
+            PathBuf::from(args.arg_source.as_ref().unwrap()),
+            PathBuf::from(args.arg_target.as_ref().unwrap()),
+            args.flag_type.clone(),
+            args.flag_compress,
+            args.flag_force,
+        )
     } else if args.cmd_verify {
-        sign::cmd_verify(PathBuf::from(&args.arg_publickey), PathBuf::from(&args.arg_pbo), args.arg_signature.as_ref().map(PathBuf::from))
+        sign::cmd_verify(
+            PathBuf::from(&args.arg_publickey),
+            PathBuf::from(&args.arg_pbo),
+            args.arg_signature.as_ref().map(PathBuf::from),
+        )
     } else {
         unreachable!()
     }
@@ -212,7 +282,10 @@ pub fn args(args: &mut Args) {
     }
 
     binarize::set_proton(args.flag_proton_binarize);
-    error::init_warnings(HashSet::from_iter(args.flag_warning.clone()), args.flag_verbose);
+    error::init_warnings(
+        HashSet::from_iter(args.flag_warning.clone()),
+        args.flag_verbose,
+    );
     let result = run_command(&args);
     binarize::cleanup(); // must happen before print_error, which exits on error
     result.print_error(true);

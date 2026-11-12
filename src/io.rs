@@ -1,6 +1,6 @@
-use std::fs::{File};
+use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, Write, Stdout, Cursor};
+use std::io::{Cursor, Read, Seek, Stdout, Write};
 
 pub enum Input {
     File(File),
@@ -15,7 +15,7 @@ pub enum Output {
 impl Read for Input {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match *self {
-            Input::File(ref mut f)   => f.read(buf),
+            Input::File(ref mut f) => f.read(buf),
             Input::Cursor(ref mut c) => c.read(buf),
         }
     }
@@ -24,7 +24,7 @@ impl Read for Input {
 impl Seek for Input {
     fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
         match *self {
-            Input::File(ref mut f)   => f.seek(pos),
+            Input::File(ref mut f) => f.seek(pos),
             Input::Cursor(ref mut c) => c.seek(pos),
         }
     }
@@ -33,14 +33,14 @@ impl Seek for Input {
 impl Write for Output {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match *self {
-            Output::File(ref mut f)     => f.write(buf),
+            Output::File(ref mut f) => f.write(buf),
             Output::Standard(ref mut s) => s.write(buf),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match *self {
-            Output::File(ref mut f)     => f.flush(),
+            Output::File(ref mut f) => f.flush(),
             Output::Standard(ref mut s) => s.flush(),
         }
     }

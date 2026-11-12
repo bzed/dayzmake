@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::env::current_dir;
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
-use std::io::{Read, Write, Error};
-use std::iter::{Sum};
-use std::path::{Path, PathBuf, Component};
+use std::io::{Error, Read, Write};
+use std::iter::Sum;
+use std::path::{Component, Path, PathBuf};
 
 use crate::error::*;
 
-peg::parser!{
+peg::parser! {
     pub grammar preprocess_grammar() for str {
         rule newline() = "\r\n" / "\n"
 
@@ -127,7 +127,7 @@ pub struct Definition {
     name: String,
     parameters: Option<Vec<String>>,
     value: Vec<Token>,
-    local: bool
+    local: bool,
 }
 
 /// Preprocessor directive
@@ -170,7 +170,7 @@ pub enum Token {
     /// Comment token containing a number of newlines
     CommentToken(u32),
     /// Token for the concatenation operator (`##`)
-    ConcatToken
+    ConcatToken,
 }
 
 /// Preprocessor line
@@ -190,7 +190,7 @@ pub struct PreprocessInfo {
     /// `PathBuf` to the file where the line was found. The path may be `None` if the line was in the
     /// original input to `preprocess` and `origin` was not given.
     pub line_origins: Vec<(u32, Option<PathBuf>)>,
-    import_stack: Vec<PathBuf>
+    import_stack: Vec<PathBuf>,
 }
 
 thread_local! {
@@ -231,7 +231,12 @@ impl Clone for Token {
 }
 
 impl Definition {
-    fn value(&self, arguments: &Option<Vec<String>>, def_map: &HashMap<String,Definition>, stack: &[Definition]) -> Result<Option<Vec<Token>>, Error> {
+    fn value(
+        &self,
+        arguments: &Option<Vec<String>>,
+        def_map: &HashMap<String, Definition>,
+        stack: &[Definition],
+    ) -> Result<Option<Vec<Token>>, Error> {
         let params = self.parameters.clone().unwrap_or_default();
         let args = arguments.clone().unwrap_or_default();
 
@@ -250,7 +255,7 @@ impl Definition {
         stack_new.push(self.clone());
 
         if !params.is_empty() {
-            let mut local_map: HashMap<String,Definition> = HashMap::new();
+            let mut local_map: HashMap<String, Definition> = HashMap::new();
 
             for (key, value) in def_map.iter() {
                 local_map.insert(key.clone(), value.clone());
@@ -258,16 +263,21 @@ impl Definition {
 
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
-                let mut tokens = preprocess_grammar::tokens(&arg).expect("Failed to parse macro argument");
+                let mut tokens =
+                    preprocess_grammar::tokens(&arg).expect("Failed to parse macro argument");
                 let stack: Vec<Definition> = Vec::new();
-                tokens = Macro::resolve_all(&tokens, &def_map, &stack).expect("Failed to resolve macro arguments");
+                tokens = Macro::resolve_all(&tokens, &def_map, &stack)
+                    .expect("Failed to resolve macro arguments");
 
-                local_map.insert(param.clone(), Definition {
-                    name: param.clone(),
-                    parameters: None,
-                    value: tokens,
-                    local: true
-                });
+                local_map.insert(
+                    param.clone(),
+                    Definition {
+                        name: param.clone(),
+                        parameters: None,
+                        value: tokens,
+                        local: true,
+                    },
+                );
             }
 
             tokens = Macro::resolve_all(&tokens, &local_map, &stack_new)?;
@@ -280,7 +290,11 @@ impl Definition {
 }
 
 impl Macro {
-    fn resolve_pseudoargs(&self, def_map: &HashMap<String, Definition>, stack: &[Definition]) -> Result<Vec<Token>, Error> {
+    fn resolve_pseudoargs(
+        &self,
+        def_map: &HashMap<String, Definition>,
+        stack: &[Definition],
+    ) -> Result<Vec<Token>, Error> {
         let mut tokens: Vec<Token> = Vec::new();
         tokens.push(Token::RegularToken(self.name.clone()));
 
@@ -289,7 +303,8 @@ impl Macro {
         }
 
         let (_, without_name) = self.original.split_at(self.name.len());
-        let mut arg_tokens = preprocess_grammar::tokens(&without_name).expect("Failed to parse macro arguments.");
+        let mut arg_tokens =
+            preprocess_grammar::tokens(&without_name).expect("Failed to parse macro arguments.");
 
         arg_tokens = Macro::resolve_all(&arg_tokens, &def_map, &stack)?;
         for t in arg_tokens {
@@ -299,7 +314,11 @@ impl Macro {
         Ok(tokens)
     }
 
-    fn resolve(&self, def_map: &HashMap<String, Definition>, stack: &[Definition]) -> Result<Vec<Token>, Error> {
+    fn resolve(
+        &self,
+        def_map: &HashMap<String, Definition>,
+        stack: &[Definition],
+    ) -> Result<Vec<Token>, Error> {
         match def_map.get(&self.name) {
             Some(def) => {
                 if let Some(args) = &self.arguments {
@@ -307,16 +326,24 @@ impl Macro {
                         // Object-like macro followed by parentheses: expand it, keep the parentheses.
                         let mut tokens = def.value(&None, def_map, stack)?.unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
-                        let mut rest_tokens = preprocess_grammar::tokens(rest).expect("Failed to parse macro arguments.");
+                        let mut rest_tokens = preprocess_grammar::tokens(rest)
+                            .expect("Failed to parse macro arguments.");
                         rest_tokens = Macro::resolve_all(&rest_tokens, def_map, stack)?;
                         tokens.extend(rest_tokens);
                         return Ok(tokens);
                     }
 
                     let expected = def.parameters.as_ref().map_or(0, |p| p.len());
-                    let got = if expected == 0 && args.len() == 1 && args[0].trim().is_empty() { 0 } else { args.len() };
+                    let got = if expected == 0 && args.len() == 1 && args[0].trim().is_empty() {
+                        0
+                    } else {
+                        args.len()
+                    };
                     if got != expected {
-                        let msg = format!("Macro \"{}\" expects {} argument(s), got {}", self.name, expected, got);
+                        let msg = format!(
+                            "Macro \"{}\" expects {} argument(s), got {}",
+                            self.name, expected, got
+                        );
                         ARG_COUNT_MISMATCHES.with(|m| m.borrow_mut().push(msg));
                         return Ok(if self.quoted {
                             vec![Token::NewlineToken("\"\"".to_string(), 0)]
@@ -336,7 +363,10 @@ impl Macro {
                     if self.quoted {
                         let (concatted, newlines) = Token::concat(&tokens);
                         let mut tokens: Vec<Token> = Vec::new();
-                        tokens.push(Token::NewlineToken(format!("\"{}\"", concatted.trim()), newlines));
+                        tokens.push(Token::NewlineToken(
+                            format!("\"{}\"", concatted.trim()),
+                            newlines,
+                        ));
                         Ok(tokens)
                     } else {
                         Ok(tokens)
@@ -344,12 +374,16 @@ impl Macro {
                 } else {
                     self.resolve_pseudoargs(def_map, stack)
                 }
-            },
-            None => self.resolve_pseudoargs(def_map, stack)
+            }
+            None => self.resolve_pseudoargs(def_map, stack),
         }
     }
 
-    fn resolve_all(tokens: &[Token], def_map: &HashMap<String, Definition>, stack: &[Definition]) -> Result<Vec<Token>, Error> {
+    fn resolve_all(
+        tokens: &[Token],
+        def_map: &HashMap<String, Definition>,
+        stack: &[Definition],
+    ) -> Result<Vec<Token>, Error> {
         let mut result: Vec<Token> = Vec::new();
 
         for token in tokens {
@@ -359,7 +393,7 @@ impl Macro {
                     for t in resolved {
                         result.push(t);
                     }
-                },
+                }
                 _ => {
                     result.push(token.clone());
                 }
@@ -379,17 +413,17 @@ impl Token {
             match token {
                 Token::RegularToken(s) => {
                     output += &s;
-                },
-                Token::NewlineToken(s,  n) => {
+                }
+                Token::NewlineToken(s, n) => {
                     output += &s;
                     newlines += n;
-                },
+                }
                 Token::MacroToken(m) => {
                     output += &m.original;
-                },
+                }
                 Token::CommentToken(n) => {
                     newlines += n;
-                },
+                }
                 _ => {}
             }
         }
@@ -400,7 +434,10 @@ impl Token {
 
 fn read_prefix(prefix_path: &Path) -> String {
     let mut content = String::new();
-    File::open(prefix_path).unwrap().read_to_string(&mut content).unwrap();
+    File::open(prefix_path)
+        .unwrap()
+        .read_to_string(&mut content)
+        .unwrap();
 
     content.lines().nth(0).unwrap().to_string()
 }
@@ -412,7 +449,8 @@ pub fn pathsep() -> &'static str {
 
 fn names_equal(a: &OsStr, b: &OsStr, ci: bool) -> bool {
     if ci {
-        a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy())
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
     } else {
         a == b
     }
@@ -432,7 +470,10 @@ fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
             current = exact;
             continue;
         }
-        let found = read_dir(&current).ok()?.filter_map(|e| e.ok()).find(|e| names_equal(&e.file_name(), name, true))?;
+        let found = read_dir(&current)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .find(|e| names_equal(&e.file_name(), name, true))?;
         current = found.path();
     }
     Some(current)
@@ -442,15 +483,19 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
     let include_pathbuf = PathBuf::from(&include_path.replace("\\", pathsep()));
 
     match (path.file_name(), include_pathbuf.file_name()) {
-        (Some(a), Some(b)) if names_equal(a, b, ci) => {},
+        (Some(a), Some(b)) if names_equal(a, b, ci) => {}
         _ => return false,
     }
 
     for parent in path.ancestors() {
-        if parent.is_file() { continue; }
+        if parent.is_file() {
+            continue;
+        }
 
         let prefixpath = parent.join("$PBOPREFIX$");
-        if !prefixpath.is_file() { continue; }
+        if !prefixpath.is_file() {
+            continue;
+        }
 
         let mut prefix = read_prefix(&prefixpath);
 
@@ -469,7 +514,7 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
         loop {
             match (a.next(), b.next()) {
                 (None, None) => return true,
-                (Some(x), Some(y)) if names_equal(x.as_os_str(), y.as_os_str(), ci) => {},
+                (Some(x), Some(y)) if names_equal(x.as_os_str(), y.as_os_str(), ci) => {}
                 _ => break,
             }
         }
@@ -497,7 +542,11 @@ fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<Pa
         }
     }
 
-    let relative = PathBuf::from(include_path.trim_start_matches('\\').replace("\\", pathsep()));
+    let relative = PathBuf::from(
+        include_path
+            .trim_start_matches('\\')
+            .replace("\\", pathsep()),
+    );
     let direct_pathbuf = if ci {
         resolve_case_insensitive(directory, &relative)?
     } else {
@@ -517,7 +566,7 @@ fn canonicalize(path: PathBuf) -> PathBuf {
         match component {
             Component::ParentDir => {
                 result.pop();
-            },
+            }
             _ => {
                 result.push(component);
             }
@@ -528,16 +577,37 @@ fn canonicalize(path: PathBuf) -> PathBuf {
 
 fn include_not_found(include_path: &str, origin: Option<&PathBuf>, line: u32) -> Error {
     match origin {
-        Some(origin_path) => error!("File \"{}\" included from \"{}:{}\" not found.", include_path, origin_path.to_str().unwrap().to_string(), line),
-        None => error!("Included file \"{}\" (line {}) not found.", include_path, line)
+        Some(origin_path) => error!(
+            "File \"{}\" included from \"{}:{}\" not found.",
+            include_path,
+            origin_path.to_str().unwrap().to_string(),
+            line
+        ),
+        None => error!(
+            "Included file \"{}\" (line {}) not found.",
+            include_path, line
+        ),
     }
 }
 
 fn warn_include_case(include_path: &str, found: &Path) {
-    warning(format!("Include \"{}\" only matched \"{}\" ignoring case.", include_path, found.display()), Some("include-case"), (None, None));
+    warning(
+        format!(
+            "Include \"{}\" only matched \"{}\" ignoring case.",
+            include_path,
+            found.display()
+        ),
+        Some("include-case"),
+        (None, None),
+    );
 }
 
-fn find_include_file(include_path: &str, origin: Option<&PathBuf>, search_paths: &[PathBuf], line: u32) -> Result<PathBuf, Error> {
+fn find_include_file(
+    include_path: &str,
+    origin: Option<&PathBuf>,
+    search_paths: &[PathBuf],
+    line: u32,
+) -> Result<PathBuf, Error> {
     if include_path.chars().nth(0) != Some('\\') {
         let mut path = PathBuf::from(include_path.replace("\\", pathsep()));
 
@@ -556,25 +626,39 @@ fn find_include_file(include_path: &str, origin: Option<&PathBuf>, search_paths:
         }
 
         // case-insensitive fallback, like on Windows
-        let root: PathBuf = absolute.components().take_while(|c| !matches!(c, Component::Normal(_))).collect();
-        let relative: PathBuf = absolute.components().skip_while(|c| !matches!(c, Component::Normal(_))).collect();
+        let root: PathBuf = absolute
+            .components()
+            .take_while(|c| !matches!(c, Component::Normal(_)))
+            .collect();
+        let relative: PathBuf = absolute
+            .components()
+            .skip_while(|c| !matches!(c, Component::Normal(_)))
+            .collect();
         match resolve_case_insensitive(&root, &relative) {
             Some(found) if found.is_file() => {
                 warn_include_case(include_path, &found);
                 Ok(found)
-            },
+            }
             _ => Err(include_not_found(include_path, origin, line)),
         }
     } else {
         let mut roots: Vec<PathBuf> = Vec::new();
         for search_path in search_paths {
-            roots.push(search_path.canonicalize().map_err(|e| error!("Include folder \"{}\" is not usable: {}", search_path.display(), e))?);
+            roots.push(search_path.canonicalize().map_err(|e| {
+                error!(
+                    "Include folder \"{}\" is not usable: {}",
+                    search_path.display(),
+                    e
+                )
+            })?);
         }
 
         for ci in [false, true] {
             for root in &roots {
                 if let Some(file_path) = search_directory(include_path, root, ci) {
-                    if ci { warn_include_case(include_path, &file_path); }
+                    if ci {
+                        warn_include_case(include_path, &file_path);
+                    }
                     return Ok(file_path);
                 }
             }
@@ -584,10 +668,17 @@ fn find_include_file(include_path: &str, origin: Option<&PathBuf>, search_paths:
     }
 }
 
-fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut HashMap<String, Definition>, info: &mut PreprocessInfo, includefolders: &[PathBuf]) -> Result<String, Error> {
+fn preprocess_rec(
+    input: String,
+    origin: Option<PathBuf>,
+    definition_map: &mut HashMap<String, Definition>,
+    info: &mut PreprocessInfo,
+    includefolders: &[PathBuf],
+) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
-    let lines = PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), &origin, &input)?;
+    let lines =
+        PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), &origin, &input)?;
     let mut output = String::from("");
     let mut original_lineno = 1;
     let mut level = 0;
@@ -600,7 +691,9 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
 
                 match dir {
                     Directive::IncludeDirective(path) => {
-                        if level > level_true { continue; }
+                        if level > level_true {
+                            continue;
+                        }
 
                         //let import_tree = &mut info.import_tree;
                         //let includer = import_tree.get(&path);
@@ -608,26 +701,40 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
                         //    // @todo: complain
                         //}
 
-                        let file_path = find_include_file(&path, origin.as_ref(), includefolders, original_lineno)?;
+                        let file_path = find_include_file(
+                            &path,
+                            origin.as_ref(),
+                            includefolders,
+                            original_lineno,
+                        )?;
 
                         info.import_stack.push(file_path.clone());
 
                         let mut content = String::new();
                         File::open(&file_path)?.read_to_string(&mut content)?;
-                        let result = preprocess_rec(content, Some(file_path), definition_map, info, includefolders).prepend_error(format!("Failed to preprocess include \"{}\":", path))?;
+                        let result = preprocess_rec(
+                            content,
+                            Some(file_path),
+                            definition_map,
+                            info,
+                            includefolders,
+                        )
+                        .prepend_error(format!("Failed to preprocess include \"{}\":", path))?;
 
                         info.import_stack.pop();
 
                         output += &result;
-                    },
+                    }
                     Directive::DefineDirective(def) => {
                         original_lineno += u32::sum(def.value.iter().map(|t| match t {
                             Token::NewlineToken(_s, n) => *n,
                             Token::CommentToken(n) => *n,
-                            _ => 0
+                            _ => 0,
                         }));
 
-                        if level > level_true { continue; }
+                        if level > level_true {
+                            continue;
+                        }
 
                         if definition_map.remove(&def.name).is_some() {
                             // @todo: warn about redefine
@@ -636,16 +743,27 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
                         definition_map.insert(def.name.clone(), def);
                     }
                     Directive::UndefDirective(name) => {
-                        if level > level_true { continue; }
+                        if level > level_true {
+                            continue;
+                        }
 
                         definition_map.remove(&name);
                     }
                     Directive::IfDefDirective(name) => {
-                        level_true += if level_true == level && definition_map.contains_key(&name) { 1 } else { 0 };
+                        level_true += if level_true == level && definition_map.contains_key(&name) {
+                            1
+                        } else {
+                            0
+                        };
                         level += 1;
                     }
                     Directive::IfNDefDirective(name) => {
-                        level_true += if level_true == level && !definition_map.contains_key(&name) { 1 } else { 0 };
+                        level_true += if level_true == level && !definition_map.contains_key(&name)
+                        {
+                            1
+                        } else {
+                            0
+                        };
                         level += 1;
                     }
                     Directive::ElseDirective => {
@@ -663,11 +781,13 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
                         }
                     }
                 }
-            },
+            }
             Line::TokenLine(tokens) => {
                 let stack: Vec<Definition> = Vec::new();
-                let resolved = Macro::resolve_all(&tokens, &definition_map, &stack).prepend_error("Failed to resolve macros:");
-                let mismatches = ARG_COUNT_MISMATCHES.with(|m| std::mem::take(&mut *m.borrow_mut()));
+                let resolved = Macro::resolve_all(&tokens, &definition_map, &stack)
+                    .prepend_error("Failed to resolve macros:");
+                let mismatches =
+                    ARG_COUNT_MISMATCHES.with(|m| std::mem::take(&mut *m.borrow_mut()));
                 let resolved = resolved?;
 
                 let (mut result, newlines) = Token::concat(&resolved);
@@ -677,11 +797,17 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
                 let before = result.len();
                 result = result.replace("\\\n", "");
 
-                if level > level_true { continue; }
+                if level > level_true {
+                    continue;
+                }
 
                 let file = origin.as_ref().map(|p| p.display().to_string());
                 for msg in mismatches {
-                    warning(msg, Some("macro-arg-count"), (file.clone(), Some(original_lineno)));
+                    warning(
+                        msg,
+                        Some("macro-arg-count"),
+                        (file.clone(), Some(original_lineno)),
+                    );
                 }
 
                 output += &result;
@@ -723,20 +849,27 @@ fn preprocess_rec(input: String, origin: Option<PathBuf>, definition_map: &mut H
 ///
 /// assert_eq!("foo = \"abc_xyz\";", output.trim());
 /// ```
-pub fn preprocess(mut input: String, origin: Option<PathBuf>, includefolders: &[PathBuf]) -> Result<(String, PreprocessInfo), Error> {
-    if input.as_bytes().starts_with(&[0xef,0xbb,0xbf]) {
+pub fn preprocess(
+    mut input: String,
+    origin: Option<PathBuf>,
+    includefolders: &[PathBuf],
+) -> Result<(String, PreprocessInfo), Error> {
+    if input.as_bytes().starts_with(&[0xef, 0xbb, 0xbf]) {
         input = input[3..].to_string();
     }
 
     for folder in includefolders {
         if !folder.is_dir() {
-            return Err(error!("Include folder \"{}\" does not exist or is not a directory.", folder.display()));
+            return Err(error!(
+                "Include folder \"{}\" does not exist or is not a directory.",
+                folder.display()
+            ));
         }
     }
 
     let mut info = PreprocessInfo {
         line_origins: Vec::new(),
-        import_stack: Vec::new()
+        import_stack: Vec::new(),
     };
 
     if let Some(ref path) = origin {
@@ -747,7 +880,7 @@ pub fn preprocess(mut input: String, origin: Option<PathBuf>, includefolders: &[
 
     match preprocess_rec(input, origin, &mut def_map, &mut info, includefolders) {
         Ok(result) => Ok((result, info)),
-        Err(e) => Err(e)
+        Err(e) => Err(e),
     }
 }
 
@@ -756,13 +889,22 @@ pub fn preprocess(mut input: String, origin: Option<PathBuf>, includefolders: &[
 /// `path` is the `path` to the input if it is known and is used for relative includes and error
 /// messages. `includefolders` are the folders searched for absolute includes and should usually at
 /// least include the current working directory.
-pub fn cmd_preprocess<I: Read, O: Write>(input: &mut I, output: &mut O, path: Option<PathBuf>, includefolders: &[PathBuf]) -> Result<(), Error> {
+pub fn cmd_preprocess<I: Read, O: Write>(
+    input: &mut I,
+    output: &mut O,
+    path: Option<PathBuf>,
+    includefolders: &[PathBuf],
+) -> Result<(), Error> {
     let mut buffer = String::new();
-    input.read_to_string(&mut buffer).prepend_error("Failed to read input file")?;
+    input
+        .read_to_string(&mut buffer)
+        .prepend_error("Failed to read input file")?;
 
     let (result, _) = preprocess(buffer, path, includefolders)?;
 
-    output.write_all(result.as_bytes()).prepend_error("Failed to write output")?;
+    output
+        .write_all(result.as_bytes())
+        .prepend_error("Failed to write output")?;
 
     Ok(())
 }

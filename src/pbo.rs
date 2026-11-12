@@ -1,20 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr};
+use std::ffi::OsStr;
 use std::fs::{File, create_dir_all, read_dir};
-use std::io::{Read, Write, Seek, SeekFrom, Error, Cursor};
-use std::path::{PathBuf};
+use std::io::{Cursor, Error, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use linked_hash_map::{LinkedHashMap};
+use linked_hash_map::LinkedHashMap;
 use openssl::hash::{Hasher, MessageDigest};
-use regex::{Regex};
+use regex::Regex;
 
+use crate::binarize;
+use crate::config::*;
 use crate::error::*;
 use crate::io::*;
-use crate::config::*;
-use crate::preprocess::*;
-use crate::binarize;
 use crate::p3d;
+use crate::preprocess::*;
 
 struct PBOHeader {
     filename: String,
@@ -46,7 +46,14 @@ fn normalize_prefix(prefix: &str, warn: bool) -> String {
     let normalized = trimmed.replace('/', "\\");
     let stripped = normalized.trim_matches('\\');
     if warn && stripped.len() != normalized.len() {
-        warning(format!("Removed leading/trailing slashes from prefix {:?}.", trimmed), Some("prefix-slash"), (None, None));
+        warning(
+            format!(
+                "Removed leading/trailing slashes from prefix {:?}.",
+                trimmed
+            ),
+            Some("prefix-slash"),
+            (None, None),
+        );
     }
     stripped.to_string()
 }
@@ -55,14 +62,22 @@ fn normalize_prefix(prefix: &str, warn: bool) -> String {
 /// extensions. Prefix slashes are normalized (`warn` controls the `prefix-slash` warning).
 fn parse_prefix_file(content: &str, header_extensions: &mut HashMap<String, String>, warn: bool) {
     for l in content.lines() {
-        if l.is_empty() { break; }
+        if l.is_empty() {
+            break;
+        }
 
         let mut kv = l.splitn(2, '=');
         let key = kv.next().unwrap();
         match kv.next() {
-            None => { header_extensions.insert("prefix".to_string(), normalize_prefix(l, warn)); },
-            Some(value) if key == "prefix" => { header_extensions.insert(key.to_string(), normalize_prefix(value, warn)); },
-            Some(value) => { header_extensions.insert(key.to_string(), value.to_string()); },
+            None => {
+                header_extensions.insert("prefix".to_string(), normalize_prefix(l, warn));
+            }
+            Some(value) if key == "prefix" => {
+                header_extensions.insert(key.to_string(), normalize_prefix(value, warn));
+            }
+            Some(value) => {
+                header_extensions.insert(key.to_string(), value.to_string());
+            }
         }
     }
 }
@@ -141,7 +156,9 @@ fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> 
         pos += 1;
 
         for bit in 0..8 {
-            if out.len() >= original_size { break; }
+            if out.len() >= original_size {
+                break;
+            }
 
             if flags & (1 << bit) != 0 {
                 out.push(*data.get(pos).ok_or_else(truncated)?);
@@ -153,10 +170,16 @@ fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> 
 
                 let offset = b1 | ((b2 & 0xF0) << 4);
                 let length = (b2 & 0x0F) + 3;
-                if offset == 0 { return Err(error!("Invalid back reference in compressed PBO entry.")); }
+                if offset == 0 {
+                    return Err(error!("Invalid back reference in compressed PBO entry."));
+                }
 
                 for _ in 0..length {
-                    let byte = if out.len() >= offset { out[out.len() - offset] } else { b' ' };
+                    let byte = if out.len() >= offset {
+                        out[out.len() - offset]
+                    } else {
+                        b' '
+                    };
                     out.push(byte);
                 }
             }
@@ -169,10 +192,14 @@ fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> 
 
 fn matches_glob(s: &str, pattern: &str) -> bool {
     if let Some(index) = pattern.find('*') {
-        if s[..index] != pattern[..index] { return false; }
+        if s[..index] != pattern[..index] {
+            return false;
+        }
 
-        for i in (index+1)..(s.len()-1) {
-            if matches_glob(&s[i..].to_string(), &pattern[(index+1)..].to_string()) { return true; }
+        for i in (index + 1)..(s.len() - 1) {
+            if matches_glob(&s[i..].to_string(), &pattern[(index + 1)..].to_string()) {
+                return true;
+            }
         }
 
         false
@@ -183,7 +210,9 @@ fn matches_glob(s: &str, pattern: &str) -> bool {
 
 fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
     for pattern in exclude_patterns {
-        if matches_glob(&name, &pattern) { return false; }
+        if matches_glob(&name, &pattern) {
+            return false;
+        }
     }
 
     true
@@ -192,12 +221,18 @@ fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
 impl PBO {
     /// Returns the bytes an entry name is stored as in the PBO header.
     pub fn name_bytes(&self, name: &str) -> Vec<u8> {
-        self.raw_names.get(name).cloned().unwrap_or_else(|| name.as_bytes().to_vec())
+        self.raw_names
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.as_bytes().to_vec())
     }
 
     /// Returns the bytes a header extension key or value is stored as.
     pub(crate) fn extension_bytes(&self, s: &str) -> Vec<u8> {
-        self.raw_extensions.get(s).cloned().unwrap_or_else(|| s.as_bytes().to_vec())
+        self.raw_extensions
+            .get(s)
+            .cloned()
+            .unwrap_or_else(|| s.as_bytes().to_vec())
     }
 
     /// Reads an existing PBO from input.
@@ -208,7 +243,9 @@ impl PBO {
         let mut raw_extensions: HashMap<String, Vec<u8>> = HashMap::new();
         let mut decode_ext = |bytes: Vec<u8>| {
             let (s, raw) = decode_name(bytes);
-            if let Some(raw) = raw { raw_extensions.insert(s.clone(), raw); }
+            if let Some(raw) = raw {
+                raw_extensions.insert(s.clone(), raw);
+            }
             s
         };
 
@@ -217,11 +254,15 @@ impl PBO {
             // todo: garbage filter
 
             if header.packing_method == 0x5665_7273 {
-                if !first { unreachable!(); }
+                if !first {
+                    unreachable!();
+                }
 
                 loop {
                     let s = decode_ext(input.read_cstring_bytes()?);
-                    if s.is_empty() { break; }
+                    if s.is_empty() {
+                        break;
+                    }
 
                     let value = decode_ext(input.read_cstring_bytes()?);
                     header_extensions.insert(s, value);
@@ -265,26 +306,37 @@ impl PBO {
     /// `exclude_patterns` contains glob patterns to exclude from the PBO, `includefolders` contain
     /// paths to search for absolute includes and should generally include the current working
     /// directory.
-    pub fn from_directory(directory: PathBuf, mut binarize: bool, exclude_patterns: &[String], includefolders: &[PathBuf]) -> Result<PBO, Error> {
+    pub fn from_directory(
+        directory: PathBuf,
+        mut binarize: bool,
+        exclude_patterns: &[String],
+        includefolders: &[PathBuf],
+    ) -> Result<PBO, Error> {
         let file_list = list_files(&directory)?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
-        let mut header_extensions: HashMap<String,String> = HashMap::new();
+        let mut header_extensions: HashMap<String, String> = HashMap::new();
 
         if directory.join("$NOBIN$").exists() || directory.join("$NOBIN-NOTEST$").exists() {
             binarize = false;
         }
 
         // the prefix is needed while binarizing, so read it before looking at the other files
-        let mut pre_extensions: HashMap<String,String> = HashMap::new();
+        let mut pre_extensions: HashMap<String, String> = HashMap::new();
         for prefix_file in &["$PBOPREFIX$", "$PREFIX$"] {
             if let Ok(content) = std::fs::read_to_string(directory.join(prefix_file)) {
                 parse_prefix_file(&content, &mut pre_extensions, false);
             }
         }
-        let prefix: String = pre_extensions.get("prefix").cloned()
-            .unwrap_or_else(|| directory.canonicalize().ok().and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default());
+        let prefix: String = pre_extensions.get("prefix").cloned().unwrap_or_else(|| {
+            directory
+                .canonicalize()
+                .ok()
+                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_default()
+        });
 
-        let addon_files: HashSet<String> = file_list.iter()
+        let addon_files: HashSet<String> = file_list
+            .iter()
             .filter_map(|p| p.strip_prefix(&directory).ok())
             .filter_map(|p| p.to_str())
             .map(|p| p.replace('/', "\\").to_lowercase())
@@ -299,46 +351,92 @@ impl PBO {
             let mut name: String = relative.to_str().unwrap().replace("/", "\\");
             let is_binarizable = Regex::new(".(rtm|p3d)$").unwrap().is_match(&name);
 
-            if !file_allowed(&name, &exclude_patterns) { continue; }
+            if !file_allowed(&name, &exclude_patterns) {
+                continue;
+            }
 
             let mut file = File::open(&path)?;
 
-            let prebinarized_as = if binarize && is_binarizable { binarize::binarized_description(&path)? } else { None };
+            let prebinarized_as = if binarize && is_binarizable {
+                binarize::binarized_description(&path)?
+            } else {
+                None
+            };
             let prebinarized = prebinarized_as.is_some();
             if let Some(description) = prebinarized_as {
-                warning(format!("File is already binarized ({}); copying it as-is.", description), Some("prebinarized-file"), (Some(relative.to_str().unwrap().to_string()), None));
-            } else if binarize && is_binarizable && path.extension().map_or(false, |e| e.eq_ignore_ascii_case("p3d")) {
-                p3d::check_dependencies(&path, relative.to_str().unwrap(), &prefix, &addon_files, includefolders);
+                warning(
+                    format!(
+                        "File is already binarized ({}); copying it as-is.",
+                        description
+                    ),
+                    Some("prebinarized-file"),
+                    (Some(relative.to_str().unwrap().to_string()), None),
+                );
+            } else if binarize
+                && is_binarizable
+                && path
+                    .extension()
+                    .map_or(false, |e| e.eq_ignore_ascii_case("p3d"))
+            {
+                p3d::check_dependencies(
+                    &path,
+                    relative.to_str().unwrap(),
+                    &prefix,
+                    &addon_files,
+                    includefolders,
+                );
             }
 
             if name == "$PBOPREFIX$" || name == "$PREFIX$" {
                 let mut content = String::new();
                 file.read_to_string(&mut content)?;
                 parse_prefix_file(&content, &mut header_extensions, true);
-            } else if binarize && vec!["cpp", "rvmat"].contains(&path.extension().unwrap_or_else(|| OsStr::new("")).to_str().unwrap()) {
+            } else if binarize
+                && vec!["cpp", "rvmat"].contains(
+                    &path
+                        .extension()
+                        .unwrap_or_else(|| OsStr::new(""))
+                        .to_str()
+                        .unwrap(),
+                )
+            {
                 let mut buffer: Vec<u8> = Vec::new();
                 file.read_to_end(&mut buffer)?;
 
                 if is_rapified(&buffer) {
-                    warning("File is already rapified; copying it as-is.", Some("prerapified-file"), (Some(&relative.to_str().unwrap()), None));
+                    warning(
+                        "File is already rapified; copying it as-is.",
+                        Some("prerapified-file"),
+                        (Some(&relative.to_str().unwrap()), None),
+                    );
                     files.insert(name, Cursor::new(buffer.into_boxed_slice()));
                 } else {
-                    let config = Config::read(&mut Cursor::new(buffer), Some(path.clone()), includefolders).prepend_error("Failed to parse config:")?;
+                    let config =
+                        Config::read(&mut Cursor::new(buffer), Some(path.clone()), includefolders)
+                            .prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
                 }
             } else if binarize::available() && binarize && is_binarizable && !prebinarized {
-                let cursor = binarize::binarize(&path, &directory, &prefix).prepend_error(format!("Failed to binarize {:?}:", relative).to_string())?;
+                let cursor = binarize::binarize(&path, &directory, &prefix)
+                    .prepend_error(format!("Failed to binarize {:?}:", relative).to_string())?;
 
                 files.insert(name, cursor);
             } else {
                 if is_binarizable && !prebinarized && !binarize::available() {
-                    warning("On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is.", Some("non-windows-binarization"), (Some(&relative.to_str().unwrap()), None));
+                    warning(
+                        "On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is.",
+                        Some("non-windows-binarization"),
+                        (Some(&relative.to_str().unwrap()), None),
+                    );
                 }
 
                 let mut buffer: Vec<u8> = Vec::new();
                 file.read_to_end(&mut buffer)?;
 
-                name = Regex::new(".p3do$").unwrap().replace_all(&name, ".p3d").to_string();
+                name = Regex::new(".p3do$")
+                    .unwrap()
+                    .replace_all(&name, ".p3d")
+                    .to_string();
 
                 files.insert(name, Cursor::new(buffer.into_boxed_slice()));
             }
@@ -380,14 +478,17 @@ impl PBO {
         }
 
         for (key, value) in self.header_extensions.iter() {
-            if key == "prefix" { continue; }
+            if key == "prefix" {
+                continue;
+            }
 
             headers.write_cstring(self.extension_bytes(key))?;
             headers.write_cstring(self.extension_bytes(value))?;
         }
         headers.write_cstring("".to_string())?;
 
-        let mut files_sorted: Vec<(String,&Cursor<Box<[u8]>>)> = self.files.iter().map(|(a,b)| (a.clone(),b)).collect();
+        let mut files_sorted: Vec<(String, &Cursor<Box<[u8]>>)> =
+            self.files.iter().map(|(a, b)| (a.clone(), b)).collect();
         files_sorted.sort_by_cached_key(|f| self.name_bytes(&f.0).to_ascii_lowercase());
 
         for (name, cursor) in &files_sorted {
@@ -435,9 +536,11 @@ impl PBO {
         };
 
         match self.headers.iter().find(|h| h.filename == name) {
-            Some(h) if h.packing_method == PACKING_COMPRESSED =>
+            Some(h) if h.packing_method == PACKING_COMPRESSED => {
                 lzss_decompress(cursor.get_ref(), h.original_size as usize)
-                    .prepend_error(&format!("Failed to decompress \"{}\":", name)).map(Some),
+                    .prepend_error(&format!("Failed to decompress \"{}\":", name))
+                    .map(Some)
+            }
             _ => Ok(Some(cursor.get_ref().to_vec())),
         }
     }
@@ -487,7 +590,10 @@ pub fn cmd_inspect<I: Read>(input: &mut I) -> Result<(), Error> {
     println!("                                                                  Size      Size");
     println!("================================================================================");
     for header in pbo.headers {
-        println!("{:50} {:9} {:9} {:9}", header.filename, header.packing_method, header.original_size, header.data_size);
+        println!(
+            "{:50} {:9} {:9} {:9}",
+            header.filename, header.packing_method, header.original_size, header.data_size
+        );
     }
 
     Ok(())
@@ -498,8 +604,10 @@ pub fn cmd_cat<I: Read, O: Write>(input: &mut I, output: &mut O, name: &str) -> 
 
     match pbo.file_data(name)? {
         Some(data) => {
-            output.write_all(&data).prepend_error("Failed to write output:")?;
-        },
+            output
+                .write_all(&data)
+                .prepend_error("Failed to write output:")?;
+        }
         None => {
             eprintln!("not found"); // @todo
         }
@@ -516,49 +624,83 @@ pub fn cmd_unpack<I: Read>(input: &mut I, output: PathBuf, force: bool) -> Resul
     if !pbo.header_extensions.is_empty() {
         let prefix_path = output.join(PathBuf::from("$PBOPREFIX$"));
         if !force && prefix_path.exists() {
-            return Err(error!("Target file \"{}\" already exists. Use --force to overwrite.", prefix_path.display()));
+            return Err(error!(
+                "Target file \"{}\" already exists. Use --force to overwrite.",
+                prefix_path.display()
+            ));
         }
-        let mut prefix_file = File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
+        let mut prefix_file =
+            File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
 
         for (key, value) in pbo.header_extensions.iter() {
-            prefix_file.write_all(format!("{}={}\n", key, value).as_bytes()).prepend_error("Failed to write prefix file:")?;
+            prefix_file
+                .write_all(format!("{}={}\n", key, value).as_bytes())
+                .prepend_error("Failed to write prefix file:")?;
         }
     }
 
     for file_name in pbo.files.keys() {
         if pbo.raw_names.contains_key(file_name) {
-            warning(format!("Entry name {:?} is not valid UTF-8; extracting it as windows-1252.", file_name), Some("non-utf8-filename"), (None, None));
+            warning(
+                format!(
+                    "Entry name {:?} is not valid UTF-8; extracting it as windows-1252.",
+                    file_name
+                ),
+                Some("non-utf8-filename"),
+                (None, None),
+            );
         }
         let data = match pbo.file_data(file_name) {
             Ok(Some(data)) => data,
             Ok(None) => continue,
             Err(e) => {
-                warning(format!("Skipping \"{}\": {}", file_name, e), None, (None, None));
+                warning(
+                    format!("Skipping \"{}\": {}", file_name, e),
+                    None,
+                    (None, None),
+                );
                 continue;
             }
         };
         // @todo: windows
         let path = output.join(PathBuf::from(file_name.replace("\\", pathsep())));
         if !force && path.exists() {
-            return Err(error!("Target file \"{}\" already exists. Use --force to overwrite.", path.display()));
+            return Err(error!(
+                "Target file \"{}\" already exists. Use --force to overwrite.",
+                path.display()
+            ));
         }
-        let written = create_dir_all(path.parent().unwrap_or(&output)).prepend_error("Failed to create output folder:")
+        let written = create_dir_all(path.parent().unwrap_or(&output))
+            .prepend_error("Failed to create output folder:")
             .and_then(|_| File::create(&path).prepend_error("Failed to open output file:"))
-            .and_then(|mut file| file.write_all(&data).prepend_error("Failed to write output file:"));
+            .and_then(|mut file| {
+                file.write_all(&data)
+                    .prepend_error("Failed to write output file:")
+            });
         if let Err(e) = written {
-            warning(format!("Skipping \"{}\": {}", file_name, e), None, (None, None));
+            warning(
+                format!("Skipping \"{}\": {}", file_name, e),
+                None,
+                (None, None),
+            );
         }
     }
 
     Ok(())
 }
 
-pub fn cmd_pack<O: Write>(input: PathBuf, output: &mut O, headerext: &[String], excludes: &[String]) -> Result<(), Error> {
+pub fn cmd_pack<O: Write>(
+    input: PathBuf,
+    output: &mut O,
+    headerext: &[String],
+    excludes: &[String],
+) -> Result<(), Error> {
     let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new())?;
 
     for h in headerext {
         let (key, value) = (h.split('=').nth(0).unwrap(), h.split('=').nth(1).unwrap());
-        pbo.header_extensions.insert(key.to_string(), value.to_string());
+        pbo.header_extensions
+            .insert(key.to_string(), value.to_string());
     }
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;
@@ -566,12 +708,19 @@ pub fn cmd_pack<O: Write>(input: PathBuf, output: &mut O, headerext: &[String], 
     Ok(())
 }
 
-pub fn cmd_build<O: Write>(input: PathBuf, output: &mut O, headerext: &[String], excludes: &[String], includefolders: &[PathBuf]) -> Result<(), Error> {
+pub fn cmd_build<O: Write>(
+    input: PathBuf,
+    output: &mut O,
+    headerext: &[String],
+    excludes: &[String],
+    includefolders: &[PathBuf],
+) -> Result<(), Error> {
     let mut pbo = PBO::from_directory(input, true, excludes, includefolders)?;
 
     for h in headerext {
         let (key, value) = (h.split('=').nth(0).unwrap(), h.split('=').nth(1).unwrap());
-        pbo.header_extensions.insert(key.to_string(), value.to_string());
+        pbo.header_extensions
+            .insert(key.to_string(), value.to_string());
     }
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;

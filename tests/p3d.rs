@@ -9,8 +9,16 @@ fn fixture() -> PathBuf {
 }
 
 fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake")).args(args).current_dir(cwd).output().unwrap();
-    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 #[test]
@@ -23,7 +31,14 @@ fn mlod_round_trips_byte_for_byte() {
     assert_eq!(names.iter().filter(|n| **n == "#Property#").count(), 2);
     assert_eq!(names.iter().filter(|n| **n == "#UVSet#").count(), 2);
     // the unused 4th vertex of a triangle is kept
-    assert_eq!(p3d.lods[0].faces[0].spare_vertex.as_ref().unwrap().point_index, 7);
+    assert_eq!(
+        p3d.lods[0].faces[0]
+            .spare_vertex
+            .as_ref()
+            .unwrap()
+            .point_index,
+        7
+    );
 
     let mut written = Vec::new();
     p3d.write(&mut written).unwrap();
@@ -36,12 +51,22 @@ fn mlod_round_trips_byte_for_byte() {
 fn real_models_round_trip() {
     let dir = match std::env::var_os("DAYZMAKE_P3D_CORPUS") {
         Some(d) => PathBuf::from(d),
-        None => { eprintln!("skipped: set DAYZMAKE_P3D_CORPUS"); return; }
+        None => {
+            eprintln!("skipped: set DAYZMAKE_P3D_CORPUS");
+            return;
+        }
     };
     fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()) {
             let p = e.path();
-            if p.is_dir() { walk(&p, out); } else if p.extension().map_or(false, |x| x.eq_ignore_ascii_case("p3d")) { out.push(p); }
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p
+                .extension()
+                .map_or(false, |x| x.eq_ignore_ascii_case("p3d"))
+            {
+                out.push(p);
+            }
         }
     }
     let mut files = Vec::new();
@@ -49,7 +74,9 @@ fn real_models_round_trip() {
     let mut checked = 0;
     for f in files {
         let data = std::fs::read(&f).unwrap();
-        if !data.starts_with(b"MLOD") { continue; }
+        if !data.starts_with(b"MLOD") {
+            continue;
+        }
         let p3d = P3D::read(&mut &data[..]).unwrap_or_else(|e| panic!("{}: {}", f.display(), e));
         let mut out = Vec::new();
         p3d.write(&mut out).unwrap();
@@ -123,14 +150,25 @@ fn build_warns_about_missing_textures_without_proton() {
     assert_eq!(code, 0, "{}", err);
     assert!(err.contains("missing-texture"), "{}", err);
     assert!(err.contains("gone_co.paa"), "{}", err);
-    assert!(!err.contains("a_co.paa"), "an existing texture was reported: {}", err);
-    assert!(!err.contains("argb"), "a procedural texture was reported: {}", err);
+    assert!(
+        !err.contains("a_co.paa"),
+        "an existing texture was reported: {}",
+        err
+    );
+    assert!(
+        !err.contains("argb"),
+        "a procedural texture was reported: {}",
+        err
+    );
     assert!(!err.contains("missing-material"), "{}", err);
 
     // the case of the file name doesn't matter, and the warning can be muted
     std::fs::rename(src.join("data/m.rvmat"), src.join("data/M.RVMAT")).unwrap();
     std::fs::remove_file(src.join("data/a_co.paa")).unwrap();
-    let (code, _, err) = dayzmake(&["build", "-f", "-w", "missing-texture", "src", "out.pbo"], dir.path());
+    let (code, _, err) = dayzmake(
+        &["build", "-f", "-w", "missing-texture", "src", "out.pbo"],
+        dir.path(),
+    );
     assert_eq!(code, 0, "{}", err);
     assert!(!err.contains("missing-texture"), "{}", err);
     assert!(!err.contains("missing-material"), "{}", err);

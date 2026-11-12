@@ -3,8 +3,10 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use dayzmake::preprocess::*;
 
 fn bench_preprocess_short(c: &mut Criterion) {
-    c.bench_function("preprocess", |b| b.iter(|| {
-        let input = String::from("\
+    c.bench_function("preprocess", |b| {
+        b.iter(|| {
+            let input = String::from(
+                "\
 #define VERSIONAR {3,5, 0, 0}
 #define FOO(x  , y ) #x z x_y x##_##y
 #define QUOTE(x) #x
@@ -21,10 +23,12 @@ class CfgPatches {
         version = QUOTE(3.5.0.0) ;versionStr=\"3.5.0.0\";
         versionAr [] = VERSIONAR;
     };
-};");
+};",
+            );
 
-        preprocess(input, None, &Vec::new()).unwrap();
-    }));
+            preprocess(input, None, &Vec::new()).unwrap();
+        })
+    });
 }
 
 criterion_group!(benches, bench_preprocess_short);
