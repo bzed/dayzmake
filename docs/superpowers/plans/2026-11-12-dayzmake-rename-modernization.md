@@ -106,10 +106,10 @@ Correction (binding): `Makefile` and `codeql.yml` land here; the `lint` job in `
 
 **Files:** Modify: `src/config.rs`, `src/preprocess.rs`.
 
-- [ ] **Step 1: Fix**: unwraps on untrusted input → errors; slice indexing → `get(…).ok_or_else(|| error!(…))`; pedantic (doc sections, format strings, pass-by-value, `String` vs `&str`); float equality (`n.fract() == 0.0`, `y == 0.0`) → `matches!(x.classify(), std::num::FpCategory::Zero)`; missing rustdoc.
-- [ ] **Step 2: Add garbage-input tests**: truncated rapified config bytes and a truncated preprocessed file must return errors, not panic (mirror `garbage_is_an_error_not_a_panic`).
-- [ ] **Step 3: Verify**: no clippy findings for these two files; `cargo test` green (incl. new tests).
-- [ ] **Step 4: Commit** `lint: config, preprocess to the full standard`
+- [x] **Step 1: Fix**: unwraps on untrusted input → errors; slice indexing → `get(…).ok_or_else(|| error!(…))`; pedantic (doc sections, format strings, pass-by-value, `String` vs `&str`); float equality (`n.fract() == 0.0`, `y == 0.0`) → `matches!(x.classify(), std::num::FpCategory::Zero)`; missing rustdoc.
+- [x] **Step 2: Add garbage-input tests**: truncated rapified config bytes and a truncated preprocessed file must return errors, not panic (mirror `garbage_is_an_error_not_a_panic`).
+- [x] **Step 3: Verify**: no clippy findings for these two files; `cargo test` green (incl. new tests).
+- [x] **Step 4: Commit** `lint: config, preprocess to the full standard`
 
 ### Task 7: Full lint set — p3d, paa
 
