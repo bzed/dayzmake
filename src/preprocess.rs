@@ -482,22 +482,26 @@ fn differs_in_case(a: &Path, b: &Path) -> bool {
 
 /// Resolves `relative` below `base`, comparing each component ASCII-case-insensitively.
 /// An exact match is preferred over a case-insensitive one at every level.
+///
+/// The names always come from the directory entries, never from `exists()`
+/// probes: on a case-insensitive filesystem (Windows) those succeed for any
+/// casing and would hide the name the file has on disk.
 fn resolve_case_insensitive(base: &Path, relative: &Path) -> Option<PathBuf> {
     let mut current = base.to_path_buf();
     for component in relative.components() {
         let Component::Normal(name) = component else {
             continue;
         };
-        let exact = current.join(name);
-        if exact.exists() {
-            current = exact;
-            continue;
+        let mut exact = None;
+        let mut ignoring_case = None;
+        for entry in read_dir(&current).ok()?.filter_map(std::result::Result::ok) {
+            if exact.is_none() && names_equal(&entry.file_name(), name, false) {
+                exact = Some(entry);
+            } else if ignoring_case.is_none() && names_equal(&entry.file_name(), name, true) {
+                ignoring_case = Some(entry);
+            }
         }
-        let found = read_dir(&current)
-            .ok()?
-            .filter_map(std::result::Result::ok)
-            .find(|e| names_equal(&e.file_name(), name, true))?;
-        current = found.path();
+        current = exact.or(ignoring_case)?.path();
     }
     Some(current)
 }
@@ -975,4 +979,42 @@ pub fn cmd_preprocess<I: Read, O: Write>(
         .prepend_error("Failed to write output")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    /// The resolver reports the name the file has on disk, never the requested
+    /// one: on Windows an `exists()` probe succeeds for any casing, so only the
+    /// directory entries carry the truth.
+    #[test]
+    fn resolve_reports_the_on_disk_casing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("inc.hpp"), b"x").unwrap();
+        let found = resolve_case_insensitive(dir.path(), Path::new("INC.hpp")).unwrap();
+        assert_eq!(found.file_name(), Some(OsStr::new("inc.hpp")));
+    }
+
+    #[test]
+    fn resolve_prefers_the_exact_match() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Inc.hpp"), b"a").unwrap();
+        std::fs::write(dir.path().join("inc.hpp"), b"b").unwrap();
+        let found = resolve_case_insensitive(dir.path(), Path::new("inc.hpp")).unwrap();
+        assert_eq!(found.file_name(), Some(OsStr::new("inc.hpp")));
+    }
+
+    #[test]
+    fn case_difference_is_detected_component_wise() {
+        assert!(differs_in_case(
+            Path::new("/a/B.hpp"),
+            Path::new("/a/b.hpp")
+        ));
+        assert!(!differs_in_case(
+            Path::new("/a/b.hpp"),
+            Path::new("/a/b.hpp")
+        ));
+    }
 }
