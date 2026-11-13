@@ -997,7 +997,11 @@ mod tests {
         assert_eq!(found.file_name(), Some(OsStr::new("inc.hpp")));
     }
 
+    /// An exact match is preferred over a case-insensitive one. The fixture
+    /// needs two files that differ only in case, which a case-insensitive
+    /// filesystem (Windows) cannot hold.
     #[test]
+    #[cfg(not(windows))]
     fn resolve_prefers_the_exact_match() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("Inc.hpp"), b"a").unwrap();
