@@ -5,6 +5,12 @@ on:
     branches: ["**"]
   pull_request:
   workflow_call:
+    inputs:
+      skip-coverage:
+        description: Skip the Codecov upload, e.g. when the calling workflow's own CI
+          run uploads coverage for the same commit already.
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -35,9 +41,10 @@ jobs:
 
   coverage:
     name: Coverage (Codecov)
-    # the same commit's push to main already uploads coverage; a second upload
-    # for the same SHA (release workflow_call) is rejected by Codecov
-    if: github.event_name != 'workflow_call'
+    # a second upload for a commit SHA whose coverage was already uploaded is
+    # rejected by Codecov; the release workflow passes skip-coverage: true
+    # because its tag commit is also pushed to main, whose CI uploads it
+    if: ${{ !inputs.skip-coverage }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
