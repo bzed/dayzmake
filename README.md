@@ -82,6 +82,7 @@ Usage:
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
+    dayzmake api class|find|sub|enum|chain|src|defines|update ...  (see "Script API index")
     dayzmake (-h | --help)
     dayzmake --version
 
@@ -124,6 +125,39 @@ Options:
 ```
 
 See `dayzmake --help` for more.
+
+## Script API index
+
+`dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a
+declaration lives, compile-time defines) from the installed game, without extracting anything.
+
+```
+dayzmake api class PlayerBase --max 40        # members of a class
+dayzmake api class PlayerBase --inherited     # with its base classes
+dayzmake api find GetGroup -m cf              # regex over members, classes and enum items
+dayzmake api sub ManBase --all                # subclasses
+dayzmake api enum EStatLevels
+dayzmake api chain PlayerBase
+dayzmake api src AIAgent                      # file and line of every declaration
+dayzmake api src AIAgent --cat                # the full source files
+dayzmake api defines [regex]
+dayzmake api update                           # rebuild the cache now
+```
+
+- **Branch:** stable by default, `--experimental` for the experimental branch. The two branches have separate
+  indexes and caches. The install is found through Steam (`STEAM_ROOT` first); `--dayz <dir>` names a DayZ client or
+  server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
+- **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
+  workshop id or a mod directory adds mods; `-m all` means the aliases that are installed. A mod contributes the
+  scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
+  Results from several indexes are tagged with the index name.
+- **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as
+  text); `-v` first prints one `# <index>: <build>` line per index.
+- **Cache:** one JSON file per index in `$DAYZMAKE_CACHE`, else `$XDG_CACHE_HOME/dayzmake/api`, else
+  `~/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`). It is rebuilt automatically when the size or
+  modification time of a PBO changes or the index format changes; `--refresh` forces it. A corrupt file is replaced.
+- PBO contents are untrusted: entries and prefixes with unsafe paths are skipped with a warning and nothing is
+  extracted to disk.
 
 ## Inspecting models and checking their textures
 

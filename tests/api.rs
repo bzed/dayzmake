@@ -1640,3 +1640,452 @@ fn inherited_walks_across_indexes() {
     assert!(heads[2].starts_with("class Base  [vanilla"), "{heads:?}");
     assert_eq!(heads[3], "class Base  [cf 4_World]  [modded]");
 }
+
+// ---- sources from PBOs, cache and CLI ----
+
+mod from_pbo {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use dayzmake::api::cache::{cached, stamps};
+    use dayzmake::api::model::{ApiIndex, INDEX_FORMAT};
+    use dayzmake::api::source::{ModSpec, parse_mods, resolve_mod};
+    use dayzmake::api::steam::Branch;
+    use dayzmake::pbo::PBO;
+
+    use super::fixture;
+
+    fn copy_dir(from: &Path, to: &Path) {
+        fs::create_dir_all(to).expect("mkdir");
+        for e in fs::read_dir(from).expect("read_dir") {
+            let e = e.expect("entry");
+            let target = to.join(e.file_name());
+            if e.path().is_dir() {
+                copy_dir(&e.path(), &target);
+            } else {
+                fs::copy(e.path(), target).expect("copy");
+            }
+        }
+    }
+
+    /// Packs `src` (a copy of a fixture tree plus `extra` files) into `out`, with an optional prefix.
+    fn make_pbo(src: &Path, extra: &[(&str, &str)], prefix: Option<&str>, out: &Path) {
+        let work = tempfile::tempdir().expect("tmp");
+        copy_dir(src, work.path());
+        for (name, text) in extra {
+            let p = work.path().join(name);
+            fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+            fs::write(p, text).expect("write");
+        }
+        if let Some(p) = prefix {
+            fs::write(work.path().join("$PBOPREFIX$"), p).expect("prefix");
+        }
+        let pbo = PBO::from_directory(work.path().to_path_buf(), false, &[], &[]).expect("pbo");
+        fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
+        let mut f = fs::File::create(out).expect("create");
+        pbo.write(&mut f).expect("write pbo");
+    }
+
+    fn manifest(root: &Path, app: u32, dir: &str, buildid: u32) {
+        fs::create_dir_all(root.join("steamapps")).expect("mkdir");
+        fs::write(
+            root.join(format!("steamapps/appmanifest_{app}.acf")),
+            format!(
+                "\"AppState\"\n{{\n\t\"installdir\"\t\t\"{dir}\"\n\t\"buildid\"\t\t\"{buildid}\"\n}}\n"
+            ),
+        )
+        .expect("manifest");
+    }
+
+    struct World {
+        _tmp: tempfile::TempDir,
+        root: PathBuf,
+        cache: PathBuf,
+        home: PathBuf,
+    }
+
+    impl World {
+        fn new() -> World {
+            let tmp = tempfile::tempdir().expect("tmp");
+            let root = tmp.path().join("steam");
+            let cache = tmp.path().join("cache");
+            let home = tmp.path().join("home");
+            fs::create_dir_all(&home).expect("home");
+            let van = fixture("vanilla/scripts");
+            manifest(&root, 221_100, "DayZ", 111);
+            make_pbo(
+                &van,
+                &[],
+                None,
+                &root.join("steamapps/common/DayZ/dta/scripts.pbo"),
+            );
+            manifest(&root, 1_024_020, "DayZ Exp", 222);
+            make_pbo(
+                &van,
+                &[("3_Game/Exp.c", "class OnlyExperimental\n{\n}\n")],
+                None,
+                &root.join("steamapps/common/DayZ Exp/dta/scripts.pbo"),
+            );
+            World {
+                _tmp: tmp,
+                root,
+                cache,
+                home,
+            }
+        }
+
+        fn stable_pbo(&self) -> PathBuf {
+            self.root.join("steamapps/common/DayZ/dta/scripts.pbo")
+        }
+
+        fn cache_file(&self, name: &str) -> PathBuf {
+            self.cache.join(name)
+        }
+
+        /// Runs the CLI with the environment on the child only.
+        fn run(&self, args: &[&str]) -> (i32, String, String) {
+            let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+                .args(args)
+                .env("STEAM_ROOT", &self.root)
+                .env("DAYZMAKE_CACHE", &self.cache)
+                .env("HOME", &self.home)
+                .env_remove("XDG_CACHE_HOME")
+                .current_dir(&self.home)
+                .output()
+                .expect("run");
+            (
+                out.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&out.stdout).into_owned(),
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            )
+        }
+
+        /// A mod directory with the fixture CF scripts in `addons/jm_cf.pbo`.
+        fn cf_mod(&self) -> PathBuf {
+            let dir = self.home.join("@CF");
+            make_pbo(
+                &fixture("mod/JM/CF"),
+                &[],
+                Some("jm\\cf"),
+                &dir.join("addons/jm_cf.pbo"),
+            );
+            fs::write(dir.join("meta.cpp"), "name = \"Community Framework\";\n").expect("meta");
+            dir
+        }
+    }
+
+    #[test]
+    fn api_class_from_pbo_stable_default() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"), "{out}");
+        assert!(!out.contains("OnlyExperimental"));
+        let (code, _, err) = w.run(&["api", "class", "OnlyExperimental"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("OnlyExperimental"), "{err}");
+    }
+
+    #[test]
+    fn api_experimental_uses_exp_install() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "class", "OnlyExperimental", "--experimental"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("OnlyExperimental"), "{out}");
+        let (code, out, _) = w.run(&["api", "update", "--experimental"]);
+        assert_eq!(code, 0);
+        assert!(out.contains("vanilla-experimental:") && out.contains("experimental build 222"));
+    }
+
+    #[test]
+    fn branches_have_separate_caches() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        assert_eq!(w.run(&["api", "class", "Base", "--experimental"]).0, 0);
+        assert!(w.cache_file("vanilla-stable.json").is_file());
+        assert!(w.cache_file("vanilla-experimental.json").is_file());
+        let (_, out, _) = w.run(&["api", "update"]);
+        assert!(out.starts_with("vanilla-stable: "), "{out}");
+        assert!(out.contains("stable build 111"), "{out}");
+    }
+
+    #[test]
+    fn cache_reused_when_unchanged() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let file = w.cache_file("vanilla-stable.json");
+        let first = fs::metadata(&file)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let second = fs::metadata(&file)
+            .expect("meta")
+            .modified()
+            .expect("mtime");
+        assert_eq!(first, second);
+        // --refresh rebuilds.
+        let before = fs::read(&file).expect("read");
+        assert_eq!(w.run(&["api", "class", "Base", "--refresh"]).0, 0);
+        assert_eq!(before, fs::read(&file).expect("read"));
+    }
+
+    #[test]
+    fn cache_rebuilds_on_pbo_change() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        assert_eq!(w.run(&["api", "class", "Fresh"]).0, 1);
+        make_pbo(
+            &fixture("vanilla/scripts"),
+            &[("3_Game/Fresh.c", "class Fresh\n{\n}\n")],
+            None,
+            &w.stable_pbo(),
+        );
+        let (code, out, err) = w.run(&["api", "class", "Fresh"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("Fresh"));
+    }
+
+    #[test]
+    fn cache_write_is_atomic() {
+        let w = World::new();
+        fs::create_dir_all(&w.cache).expect("mkdir");
+        fs::write(w.cache_file("vanilla-stable.json"), b"{ truncated").expect("corrupt");
+        let (code, _, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        let text = fs::read_to_string(w.cache_file("vanilla-stable.json")).expect("read");
+        let idx: ApiIndex = serde_json::from_str(&text).expect("valid json again");
+        assert!(idx.classes.contains_key("Base"));
+        let names: Vec<String> = fs::read_dir(&w.cache)
+            .expect("dir")
+            .map(|e| e.expect("e").file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["vanilla-stable.json".to_string()]);
+    }
+
+    #[test]
+    fn cache_format_bump_rebuilds() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let file = w.cache_file("vanilla-stable.json");
+        let mut idx: ApiIndex =
+            serde_json::from_slice(&fs::read(&file).expect("read")).expect("json");
+        idx.format = INDEX_FORMAT + 1;
+        idx.classes.clear();
+        fs::write(&file, serde_json::to_vec(&idx).expect("ser")).expect("write");
+        let (code, out, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"));
+        let idx: ApiIndex = serde_json::from_slice(&fs::read(&file).expect("read")).expect("json");
+        assert_eq!(idx.format, INDEX_FORMAT);
+    }
+
+    #[test]
+    fn cache_dir_is_private_and_keys_are_checked() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&w.cache).expect("meta").permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        let idx = ApiIndex::new("x", "x", "x");
+        let r = cached("../evil", &[], false, || Ok(idx));
+        assert!(r.is_err());
+        assert!(stamps(&[w.cache.join("missing")]).is_err());
+    }
+
+    #[test]
+    fn api_src_cat_prints_full_file() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.starts_with("// ==== [vanilla] dta/scripts.pbo scripts\\3_Game\\Base.c:"));
+        assert!(out.contains("private void Secret(int a) { m_Secret = a; }"));
+    }
+
+    #[test]
+    fn api_src_shows_line_numbers() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("Base.c:"), "{out}");
+    }
+
+    #[test]
+    fn api_class_json() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "class", "Base", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert!(v.to_string().contains("m_Count"));
+        let (code, out, err) = w.run(&["api", "class", "Nope", "--json"]);
+        assert_eq!(code, 1);
+        assert!(out.is_empty() && err.contains("Nope"), "{out} {err}");
+    }
+
+    #[test]
+    fn api_other_commands_and_verbose() {
+        let w = World::new();
+        for args in [
+            vec!["api", "find", "Secret"],
+            vec!["api", "sub", "Base", "--all"],
+            vec!["api", "enum", "AIStatus"],
+            vec!["api", "chain", "Variant"],
+            vec!["api", "defines"],
+            vec!["api", "defines", "DAYZ", "--max", "3"],
+        ] {
+            let (code, _, err) = w.run(&args);
+            assert_eq!(code, 0, "{args:?}: {err}");
+        }
+        let (_, out, _) = w.run(&["api", "class", "Base", "-v"]);
+        assert!(out.starts_with("# vanilla: stable build 111\n"), "{out}");
+        let (code, _, err) = w.run(&["api", "class", "Base", "--max", "x"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("--max"), "{err}");
+    }
+
+    #[test]
+    fn api_mod_by_dir() {
+        let w = World::new();
+        let dir = w.cf_mod();
+        let m = dir.to_string_lossy().into_owned();
+        // Without -m only vanilla is queried.
+        let (code, _, _) = w.run(&["api", "class", "CFBase"]);
+        assert_eq!(code, 1);
+        let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("CFBase") && out.contains("[_CF"), "{out}");
+        let (code, out, err) = w.run(&["api", "src", "CFBase", "-m", &m, "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("// ==== [_CF] addons/jm_cf.pbo jm\\cf\\"),
+            "{out}"
+        );
+        assert!(out.contains("void Init();"));
+        let (_, out, _) = w.run(&["api", "defines", "-m", &m]);
+        assert!(
+            out.contains("CF_FIXTURE") && out.contains("jm\\cf"),
+            "{out}"
+        );
+        let (_, out, _) = w.run(&["api", "update", "-m", &m]);
+        assert!(out.contains("mod-_CF-stable-"), "{out}");
+        // The mod's own defines select the branch of the #ifdef.
+        let (_, out, _) = w.run(&["api", "class", "CFSwitch", "-m", &m]);
+        assert!(out.contains("CFBase"), "{out}");
+    }
+
+    #[test]
+    fn api_mod_unsafe_prefix_skipped() {
+        let w = World::new();
+        let dir = w.cf_mod();
+        let evil = tempfile::tempdir().expect("tmp");
+        fs::write(evil.path().join("E.c"), "class EvilClass {}\n").expect("w");
+        make_pbo(
+            evil.path(),
+            &[],
+            Some("..\\evil"),
+            &dir.join("addons/evil.pbo"),
+        );
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("CFBase"));
+        assert!(err.contains("unsafe prefix"), "{err}");
+        let (code, _, _) = w.run(&["api", "class", "EvilClass", "-m", &m]);
+        assert_eq!(code, 1);
+        // Nothing was written outside the cache dir and the mod dir.
+        assert!(!w.home.join("evil").exists() && !dir.join("evil").exists());
+        assert!(!w.home.join(".cache").exists());
+    }
+
+    #[test]
+    fn api_missing_install_message() {
+        let w = World::new();
+        let empty = w.home.join("emptysteam");
+        fs::create_dir_all(empty.join("steamapps")).expect("mkdir");
+        let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+            .args(["api", "class", "Base", "--experimental"])
+            .env("STEAM_ROOT", &empty)
+            .env("DAYZMAKE_CACHE", &w.cache)
+            .env("HOME", &w.home)
+            .output()
+            .expect("run");
+        assert_eq!(out.status.code(), Some(1));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("experimental") && err.contains("--dayz"),
+            "{err}"
+        );
+        let (code, _, err) = w.run(&["api", "class", "Base", "--dayz", "/nonexistent"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("--dayz"), "{err}");
+    }
+
+    #[test]
+    fn mod_list_parsing_and_resolution() {
+        assert_eq!(
+            parse_mods("cf").expect("cf"),
+            vec![ModSpec::Alias("cf", 1_559_212_036)]
+        );
+        let all = parse_mods("all,CF").expect("all");
+        assert_eq!(all.len(), 4);
+        assert_eq!(
+            parse_mods("123,some/dir").expect("list"),
+            vec![ModSpec::Workshop(123), ModSpec::Dir("some/dir".into())]
+        );
+        assert!(parse_mods("").is_err() && parse_mods("cf,").is_err());
+        assert!(parse_mods("99999999999999999999999").is_err());
+        let w = World::new();
+        assert!(resolve_mod(&ModSpec::Dir(w.home.join("nope")), Branch::Stable, &[]).is_err());
+        let err = resolve_mod(&ModSpec::Alias("cf", 1), Branch::Stable, &[]).expect_err("missing");
+        assert!(err.to_string().contains("not installed"), "{err}");
+        assert!(resolve_mod(&ModSpec::Workshop(7), Branch::Stable, &[]).is_err());
+        let file = w.home.join("file");
+        fs::write(&file, "x").expect("w");
+        assert!(resolve_mod(&ModSpec::Dir(file), Branch::Stable, &[]).is_err());
+        let dir = w.cf_mod();
+        let m = resolve_mod(&ModSpec::Dir(dir), Branch::Stable, &[]).expect("dir");
+        assert_eq!(m.name, "_CF");
+        assert_eq!(m.pbos.len(), 1);
+    }
+
+    #[test]
+    fn workshop_mods_and_all() {
+        let w = World::new();
+        let ws = w.root.join("steamapps/workshop/content/221100");
+        make_pbo(
+            &fixture("mod/JM/CF"),
+            &[],
+            Some("jm\\cf"),
+            &ws.join("1559212036/Addons/jm_cf.pbo"),
+        );
+        let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+            .args(["api", "class", "CFBase", "-m", "all", "-v"])
+            .env("STEAM_ROOT", &w.root)
+            .env("DAYZMAKE_CACHE", &w.cache)
+            .env("HOME", &w.home)
+            .output()
+            .expect("run");
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(text.contains("# cf:") && !text.contains("# cot:"), "{text}");
+        // Naming an alias that is not installed is an error.
+        let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+            .args(["api", "class", "Base", "-m", "cot"])
+            .env("STEAM_ROOT", &w.root)
+            .env("DAYZMAKE_CACHE", &w.cache)
+            .env("HOME", &w.home)
+            .output()
+            .expect("run");
+        assert_eq!(out.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("not installed"));
+    }
+}

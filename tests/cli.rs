@@ -306,3 +306,24 @@ fn binarize_reports_older_odol_versions_instead_of_failing() {
         assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
     }
 }
+
+#[test]
+fn cli_usage_lists_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, out, err) = dayzmake(&["--help"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    for line in [
+        "dayzmake api class",
+        "dayzmake api find",
+        "dayzmake api sub",
+        "dayzmake api enum",
+        "dayzmake api chain",
+        "dayzmake api src",
+        "dayzmake api defines",
+        "dayzmake api update",
+        "--refresh",
+        "--json",
+    ] {
+        assert!(out.contains(line), "{line} missing from {out}");
+    }
+}

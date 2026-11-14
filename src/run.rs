@@ -2,6 +2,9 @@ use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
 use std::path::PathBuf;
 
+use crate::api;
+use crate::api::query::{Query, render_json, render_text, run_query};
+use crate::api::steam::Branch;
 use crate::binarize;
 use crate::config;
 use crate::error;
@@ -34,6 +37,14 @@ Usage:
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
+    dayzmake api class [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--inherited] [--mods-only] [--json] <name>
+    dayzmake api find [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--class <class>] [--json] <regex>
+    dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
+    dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
+    dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake (-h | --help)
     dayzmake --version
 
@@ -55,6 +66,8 @@ Commands:
     verify      Verify a PBO's signature with the given public key.
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
+    api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
+                with -m, from mods: class, find, sub, enum, chain, src, defines, update.
 
 Options:
     -v --verbose                Enable verbose output.
@@ -72,6 +85,18 @@ Options:
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
+    --experimental              api: use the experimental branch instead of stable.
+    --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
+    -m --mod <mods>             api: also query mods: cf, cot, dabs, expansion, all (those installed),
+                                a workshop id or a mod directory; comma separated.
+    --refresh                   api: rebuild the cached index.
+    --max <n>                   api: print at most n lines (or JSON items). [default: 120]
+    --inherited                 api class: also show the base classes.
+    --mods-only                 api class: show only what the mods declare.
+    --class <class>             api find: search only the members of this class or enum.
+    --all                       api sub: include indirect subclasses.
+    --cat                       api src: print the full source files.
+    --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ";
@@ -99,6 +124,28 @@ pub struct Args {
     cmd_paa2img: bool,
     cmd_img2paa: bool,
     cmd_verify: bool,
+    cmd_api: bool,
+    cmd_class: bool,
+    cmd_find: bool,
+    cmd_sub: bool,
+    cmd_enum: bool,
+    cmd_chain: bool,
+    cmd_src: bool,
+    cmd_defines: bool,
+    cmd_update: bool,
+    flag_experimental: bool,
+    flag_dayz: Option<String>,
+    flag_mod: Option<String>,
+    flag_refresh: bool,
+    flag_max: String,
+    flag_inherited: bool,
+    flag_mods_only: bool,
+    flag_class: Option<String>,
+    flag_all: bool,
+    flag_cat: bool,
+    flag_json: bool,
+    arg_name: String,
+    arg_regex: Option<String>,
     flag_verbose: bool,
     flag_force: bool,
     flag_use_prefix: bool,
@@ -165,7 +212,9 @@ fn run_command(args: &Args) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
-    if args.cmd_binarize {
+    if args.cmd_api {
+        run_api(args)
+    } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
         binarize::cmd_binarize(source, &target, args.flag_force)
@@ -280,6 +329,82 @@ fn run_command(args: &Args) -> Result<(), Error> {
     } else {
         Err(error!("no command given"))
     }
+}
+
+/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
+fn run_api(args: &Args) -> Result<(), Error> {
+    let ctx = api::ApiContext {
+        branch: if args.flag_experimental {
+            Branch::Experimental
+        } else {
+            Branch::Stable
+        },
+        dayz: args.flag_dayz.as_ref().map(PathBuf::from),
+        mods: args.flag_mod.clone().unwrap_or_default(),
+        refresh: args.flag_refresh || args.cmd_update,
+    };
+    #[expect(clippy::print_stdout, reason = "CLI command output")]
+    {
+        if args.cmd_update {
+            for (key, index) in api::load_keyed(&ctx)? {
+                println!("{key}: {} classes, {}", index.classes.len(), index.build);
+            }
+            return Ok(());
+        }
+        let max: usize = args
+            .flag_max
+            .parse()
+            .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
+        if args.cmd_src && args.flag_cat {
+            print!("{}", api::cat_sources(&ctx, &args.arg_name)?);
+            return Ok(());
+        }
+        let name = args.arg_name.clone();
+        let query = if args.cmd_class {
+            Query::Class {
+                name,
+                inherited: args.flag_inherited,
+                mods_only: args.flag_mods_only,
+            }
+        } else if args.cmd_find {
+            Query::Find {
+                regex: args.arg_regex.clone().unwrap_or_default(),
+                class: args.flag_class.clone(),
+            }
+        } else if args.cmd_sub {
+            Query::Sub {
+                name,
+                all: args.flag_all,
+            }
+        } else if args.cmd_enum {
+            Query::Enum { name }
+        } else if args.cmd_chain {
+            Query::Chain { name }
+        } else if args.cmd_src {
+            Query::Src { name }
+        } else if args.cmd_defines {
+            Query::Defines {
+                regex: args.arg_regex.clone(),
+            }
+        } else {
+            return Err(error!("no api command given"));
+        };
+        let indexes = api::load_indexes(&ctx)?;
+        let result = run_query(&indexes, &query)?;
+        if args.flag_json {
+            println!("{}", render_json(&result, max));
+        } else {
+            if args.flag_verbose {
+                for i in &indexes {
+                    println!("# {}: {}", i.name, i.build);
+                }
+            }
+            for line in render_text(&result, indexes.len() > 1, max) {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Returns the `<source>` argument, which docopt guarantees for these commands.
