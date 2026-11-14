@@ -82,7 +82,7 @@ Usage:
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
-    dayzmake api class|find|sub|enum|chain|src|defines|update ...  (see "Script API index")
+    dayzmake api class|find|sub|enum|chain|src|defines|update|mods ...  (see "Script API index")
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -149,7 +149,9 @@ dayzmake api update                           # rebuild the cache now
   indexes and caches. The install is found through Steam (`STEAM_ROOT` first); `--dayz <dir>` names a DayZ client or
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
-  workshop id or a mod directory adds mods; `-m all` means the aliases that are installed. A mod contributes the
+  workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (the first
+  run indexes each mod once, which can take a while; later runs use the cache). A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.
 - **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as
