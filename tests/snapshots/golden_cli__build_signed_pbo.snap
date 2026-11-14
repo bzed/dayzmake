@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: "fs::read(e.base().join(\"out.pbo\")).unwrap()"
+extension: pbo
+snapshot_kind: binary
+---

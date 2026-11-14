@@ -1,0 +1,5 @@
+---
+source: tests/golden_cli.rs
+expression: r.err()
+---
+error: No Steam installation found (set STEAM_ROOT, or DAYZ_TOOLS to the DayZ Tools folder).

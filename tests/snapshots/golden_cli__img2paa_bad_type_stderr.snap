@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: r.err()
+---
+error: Failed to convert image to PAA:
+Unsupported PAA compression type for creation: bogus

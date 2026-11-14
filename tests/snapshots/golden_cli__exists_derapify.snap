@@ -1,0 +1,5 @@
+---
+source: tests/golden_cli.rs
+expression: second.err()
+---
+error: Target file "t.cpp" already exists. Use --force to overwrite.

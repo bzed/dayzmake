@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: img.into_raw()
+extension: rgba
+snapshot_kind: binary
+---

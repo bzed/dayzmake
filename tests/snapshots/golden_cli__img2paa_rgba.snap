@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: b
+extension: paa
+snapshot_kind: binary
+---
