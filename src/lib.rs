@@ -4,6 +4,8 @@
 //! textures and BI signatures, plus the preprocessing/rapification pipeline
 //! used by the `dayzmake` binary.
 
+/// Script API index builder and query tool.
+pub mod api;
 /// Binarization through BI's `binarize.exe` (Windows or Proton).
 pub mod binarize;
 /// Config parsing and rapification/derapification.
@@ -14,6 +16,8 @@ pub mod error;
 pub mod eval;
 /// I/O helpers for the binary formats.
 pub mod io;
+/// Stdio MCP server exposing the API index and the file commands as tools.
+pub mod mcp;
 /// P3D model reading and inspection.
 pub mod p3d;
 /// PAA texture conversion.

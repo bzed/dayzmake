@@ -2,7 +2,7 @@
 
 use std::fs::File;
 use std::io::{Cursor, Error, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use openssl::bn::{BigNum, BigNumContext, BigNumRef};
@@ -95,6 +95,30 @@ fn check_key_length(length: u32) -> Result<(), Error> {
         return Err(error!("Invalid key length: {length}."));
     }
     Ok(())
+}
+
+/// The default signature file of `pbo_path`: `<pbo>.<key name>.bisign`.
+///
+/// The key name is read from the (untrusted) key file, so it must be a plain file name part:
+/// `Path::set_extension` panics on a path separator, and a name must not steer the file elsewhere.
+///
+/// # Errors
+///
+/// Returns an error if the key name is empty or contains a path separator, `:` or a control
+/// character.
+fn default_signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error> {
+    if key_name.is_empty()
+        || key_name
+            .chars()
+            .any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
+    {
+        return Err(error!(
+            "The key name {key_name:?} cannot be used in a file name; pass the signature path explicitly."
+        ));
+    }
+    let mut path = pbo_path.to_path_buf();
+    path.set_extension(format!("pbo.{key_name}.bisign"));
+    Ok(path)
 }
 
 /// Converts bytes into a `BigNum`.
@@ -717,9 +741,7 @@ pub fn cmd_sign(
     let sig_path = if let Some(path) = signature_path {
         path
     } else {
-        let mut path = pbo_path.clone();
-        path.set_extension(format!("pbo.{}.bisign", privatekey.name));
-        path
+        default_signature_path(&pbo_path, &privatekey.name)?
     };
 
     if !force && sig_path.exists() {
@@ -761,9 +783,7 @@ pub fn cmd_verify(
     let sig_path = if let Some(path) = signature_path {
         path
     } else {
-        let mut path = pbo_path.clone();
-        path.set_extension(format!("pbo.{}.bisign", publickey.name));
-        path
+        default_signature_path(&pbo_path, &publickey.name)?
     };
 
     let sig = BISign::read(&mut File::open(&sig_path).prepend_error("Failed to open signature:")?)

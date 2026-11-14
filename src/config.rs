@@ -1,6 +1,7 @@
 //! Functions for rapifying and derapifying Arma configs
 
 use std::cmp::min;
+use std::collections::HashSet;
 use std::io::{BufReader, BufWriter, Cursor, Error, Read, Seek, SeekFrom, Write};
 use std::iter::Sum;
 use std::path::PathBuf;
@@ -12,9 +13,6 @@ use crate::error::{ConfigParseErrorExt, ErrorExt, warning, warning_suppressed};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::preprocess;
-
-/// Deepest class or array nesting accepted when reading a rapified config.
-const MAX_RAPIFIED_DEPTH: u32 = 128;
 
 /// State shared with the grammar for `__EVAL` / `__EXEC`.
 #[derive(Default)]
@@ -334,6 +332,56 @@ impl ConfigArrayElement {
     }
 }
 
+/// Deepest class or array nesting accepted when reading a rapified config.
+const MAX_RAPIFIED_DEPTH: u32 = 128;
+
+/// Most entries and array elements accepted in one rapified config.
+const MAX_RAPIFIED_ENTRIES: u64 = 4_000_000;
+
+/// Limits that keep reading a crafted rapified config from running away.
+struct ReadBudget {
+    depth: u32,
+    remaining: u64,
+    /// Offsets of the class bodies being read, to catch bodies that contain themselves.
+    open_bodies: Vec<u32>,
+    /// Offsets of every class body read so far. Real configs never share a body between classes; a file
+    /// that does can make the output exponentially larger than the input.
+    seen_bodies: HashSet<u32>,
+}
+
+impl ReadBudget {
+    fn new() -> Self {
+        ReadBudget {
+            depth: 0,
+            remaining: MAX_RAPIFIED_ENTRIES,
+            open_bodies: Vec::new(),
+            seen_bodies: HashSet::new(),
+        }
+    }
+
+    fn enter(&mut self) -> Result<(), Error> {
+        if self.depth >= MAX_RAPIFIED_DEPTH {
+            return Err(error!(
+                "Rapified config nesting is deeper than {MAX_RAPIFIED_DEPTH} levels."
+            ));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
+    fn take_entry(&mut self) -> Result<(), Error> {
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or_else(|| error!("Rapified config has too many entries."))?;
+        Ok(())
+    }
+}
+
 impl ConfigArray {
     fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         output.write_all(b"{")?;
@@ -400,18 +448,27 @@ impl ConfigArray {
         Ok(written)
     }
 
-    fn read_rapified<I: Read + Seek>(input: &mut I, depth: u32) -> Result<ConfigArray, Error> {
-        if depth > MAX_RAPIFIED_DEPTH {
-            return Err(error!(
-                "Rapified arrays are nested deeper than {MAX_RAPIFIED_DEPTH} levels."
-            ));
-        }
+    fn read_rapified<I: Read + Seek>(
+        input: &mut I,
+        budget: &mut ReadBudget,
+    ) -> Result<ConfigArray, Error> {
+        budget.enter()?;
+        let result = ConfigArray::read_rapified_elements(input, budget);
+        budget.leave();
+        result
+    }
+
+    fn read_rapified_elements<I: Read + Seek>(
+        input: &mut I,
+        budget: &mut ReadBudget,
+    ) -> Result<ConfigArray, Error> {
         let num_elements: u32 = input.read_compressed_int()?;
         // never preallocate the full length from untrusted input
         let mut elements: Vec<ConfigArrayElement> =
             Vec::with_capacity(num_elements.min(65536) as usize);
 
         for _i in 0..num_elements {
+            budget.take_entry()?;
             let mut buf = [0u8; 1];
             input.read_exact(&mut buf)?;
             let element_type = buf[0];
@@ -428,7 +485,7 @@ impl ConfigArray {
                 ));
             } else if element_type == 3 {
                 elements.push(ConfigArrayElement::ArrayElement(
-                    ConfigArray::read_rapified(input, depth + 1)?,
+                    ConfigArray::read_rapified(input, budget)?,
                 ));
             } else {
                 return Err(error!("Unrecognized array element type: {}", element_type));
@@ -664,22 +721,50 @@ impl ConfigClass {
         Ok(written)
     }
 
-    fn read_rapified<I: Read + Seek>(input: &mut I, level: u32) -> Result<ConfigClass, Error> {
-        if level > MAX_RAPIFIED_DEPTH {
-            return Err(error!(
-                "Rapified classes are nested deeper than {MAX_RAPIFIED_DEPTH} levels."
-            ));
-        }
+    fn read_rapified<I: Read + Seek>(
+        input: &mut I,
+        level: u32,
+        budget: &mut ReadBudget,
+    ) -> Result<ConfigClass, Error> {
         let mut fp = 0;
-        if level == 0 {
+        let body_offset: u32 = if level == 0 {
             input.seek(SeekFrom::Start(16))?;
+            16
         } else {
             let classbody_fp: u32 = input.read_u32::<LittleEndian>()?;
 
             fp = input.stream_position()?;
             input.seek(SeekFrom::Start(classbody_fp.into()))?;
+            classbody_fp
+        };
+
+        if budget.open_bodies.contains(&body_offset) {
+            return Err(error!("Rapified class body cycle at offset {body_offset}."));
+        }
+        if !budget.seen_bodies.insert(body_offset) {
+            return Err(error!(
+                "Rapified class body shared at offset {body_offset}."
+            ));
+        }
+        budget.enter()?;
+        budget.open_bodies.push(body_offset);
+        let result = ConfigClass::read_rapified_body(input, level, budget);
+        budget.open_bodies.pop();
+        budget.leave();
+        let class = result?;
+
+        if level > 0 {
+            input.seek(SeekFrom::Start(fp))?;
         }
 
+        Ok(class)
+    }
+
+    fn read_rapified_body<I: Read + Seek>(
+        input: &mut I,
+        level: u32,
+        budget: &mut ReadBudget,
+    ) -> Result<ConfigClass, Error> {
         let parent = input.read_cstring()?;
         let num_entries: u32 = input.read_compressed_int()?;
         // never preallocate the full length from untrusted input
@@ -687,6 +772,7 @@ impl ConfigClass {
             Vec::with_capacity(num_entries.min(65536) as usize);
 
         for _i in 0..num_entries {
+            budget.take_entry()?;
             let mut buf = [0u8; 1];
             input.read_exact(&mut buf)?;
             let entry_type = buf[0];
@@ -694,7 +780,7 @@ impl ConfigClass {
             if entry_type == 0 {
                 let name = input.read_cstring()?;
 
-                let class_entry = ConfigClass::read_rapified(input, level + 1)
+                let class_entry = ConfigClass::read_rapified(input, level + 1, budget)
                     .prepend_error(format!("Failed to read rapified class \"{name}\":"))?;
                 entries.push((name, ConfigEntry::ClassEntry(class_entry)));
             } else if entry_type == 1 {
@@ -724,7 +810,7 @@ impl ConfigClass {
                 }
 
                 let name = input.read_cstring()?;
-                let mut array = ConfigArray::read_rapified(input, 0)
+                let mut array = ConfigArray::read_rapified(input, budget)
                     .prepend_error("Failed to read rapified array:")?;
                 array.is_expansion = entry_type == 5;
 
@@ -742,10 +828,6 @@ impl ConfigClass {
             } else {
                 return Err(error!("Unrecognized class entry type: {}.", entry_type));
             }
-        }
-
-        if level > 0 {
-            input.seek(SeekFrom::Start(fp))?;
         }
 
         Ok(ConfigClass {
@@ -925,7 +1007,7 @@ impl Config {
         }
 
         Ok(Config {
-            root_body: ConfigClass::read_rapified(&mut reader, 0)?,
+            root_body: ConfigClass::read_rapified(&mut reader, 0, &mut ReadBudget::new())?,
         })
     }
 }

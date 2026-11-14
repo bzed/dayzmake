@@ -1,7 +1,10 @@
 use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::api;
+use crate::api::query::Query;
+use crate::api::steam::Branch;
 use crate::binarize;
 use crate::config;
 use crate::error;
@@ -27,13 +30,23 @@ Usage:
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] <source> <targetfolder>
+    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
     dayzmake cat [-v] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
+    dayzmake api class [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--inherited] [--mods-only] [--json] <name>
+    dayzmake api find [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--class <class>] [--json] <regex>
+    dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
+    dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
+    dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
+    dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
+    dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
 
@@ -55,6 +68,10 @@ Commands:
     verify      Verify a PBO's signature with the given public key.
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
+    api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
+                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                mods lists the installed mods.
+    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
     -v --verbose                Enable verbose output.
@@ -70,7 +87,23 @@ Options:
     -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
+    --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
+    --experimental              api: use the experimental branch instead of stable.
+    --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
+    -m --mod <mods>             api: also query mods, comma separated: cf, cot, dabs, expansion, aliases
+                                (those four, if installed), all (every installed mod with scripts; the
+                                first run can take a while: each mod is indexed once, then cached), a
+                                workshop id, a mod name or @dir name (see `api mods`) or a directory.
+                                Without -m only vanilla is queried.
+    --refresh                   api: rebuild the cached index.
+    --max <n>                   api: print at most n lines (or JSON items). [default: 120]
+    --inherited                 api class: also show the base classes.
+    --mods-only                 api class: show only what the mods declare.
+    --class <class>             api find: search only the members of this class or enum.
+    --all                       api sub: include indirect subclasses.
+    --cat                       api src: print the full source files.
+    --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ";
@@ -98,8 +131,33 @@ pub struct Args {
     cmd_paa2img: bool,
     cmd_img2paa: bool,
     cmd_verify: bool,
+    cmd_api: bool,
+    cmd_mcp: bool,
+    cmd_class: bool,
+    cmd_find: bool,
+    cmd_sub: bool,
+    cmd_enum: bool,
+    cmd_chain: bool,
+    cmd_src: bool,
+    cmd_defines: bool,
+    cmd_update: bool,
+    cmd_mods: bool,
+    flag_experimental: bool,
+    flag_dayz: Option<String>,
+    flag_mod: Option<String>,
+    flag_refresh: bool,
+    flag_max: String,
+    flag_inherited: bool,
+    flag_mods_only: bool,
+    flag_class: Option<String>,
+    flag_all: bool,
+    flag_cat: bool,
+    flag_json: bool,
+    arg_name: String,
+    arg_regex: Option<String>,
     flag_verbose: bool,
     flag_force: bool,
+    flag_use_prefix: bool,
     flag_warning: Vec<String>,
     flag_include: Vec<String>,
     flag_exclude: Vec<String>,
@@ -140,16 +198,10 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        let path = PathBuf::from(target);
-        if !args.flag_force && path.exists() {
-            return Err(error!(
-                "Target file \"{}\" already exists. Use --force to overwrite.",
-                target
-            ));
-        }
-        Ok(Output::File(
-            File::create(path).prepend_error("Failed to open output file:")?,
-        ))
+        Ok(Output::File(crate::io::create_target(
+            Path::new(target),
+            args.flag_force,
+        )?))
     } else {
         Ok(Output::Standard(stdout()))
     }
@@ -163,7 +215,11 @@ fn run_command(args: &Args) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
-    if args.cmd_binarize {
+    if args.cmd_mcp {
+        crate::mcp::serve(std::io::stdin().lock(), stdout())
+    } else if args.cmd_api {
+        run_api(args)
+    } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
         binarize::cmd_binarize(source, &target, args.flag_force)
@@ -223,9 +279,9 @@ fn run_command(args: &Args) -> Result<(), Error> {
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
         if p3d::model_magic(&mut input)?.is_some() {
-            p3d::cmd_inspect(&mut input)
+            p3d::cmd_inspect(&mut input, &mut stdout())
         } else {
-            pbo::cmd_inspect(&mut input)
+            pbo::cmd_inspect(&mut input, &mut stdout())
         }
     } else if args.cmd_cat {
         pbo::cmd_cat(
@@ -238,6 +294,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
             &mut get_input(args)?,
             &PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
+            args.flag_use_prefix,
         )
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
@@ -277,6 +334,83 @@ fn run_command(args: &Args) -> Result<(), Error> {
     } else {
         Err(error!("no command given"))
     }
+}
+
+/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
+fn run_api(args: &Args) -> Result<(), Error> {
+    let ctx = api::ApiContext {
+        branch: if args.flag_experimental {
+            Branch::Experimental
+        } else {
+            Branch::Stable
+        },
+        dayz: args.flag_dayz.as_ref().map(PathBuf::from),
+        mods: args.flag_mod.clone().unwrap_or_default(),
+        refresh: args.flag_refresh || args.cmd_update,
+    };
+    #[expect(clippy::print_stdout, reason = "CLI command output")]
+    {
+        if args.cmd_mods {
+            let text = api::mods_text(&ctx, args.flag_json)?;
+            if !text.is_empty() {
+                println!("{text}");
+            }
+            return Ok(());
+        }
+        if args.cmd_update {
+            for line in api::update_lines(&ctx)? {
+                println!("{line}");
+            }
+            return Ok(());
+        }
+        let max: usize = args
+            .flag_max
+            .parse()
+            .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
+        if args.cmd_src && args.flag_cat {
+            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json)?;
+            if args.flag_json {
+                println!("{text}");
+            } else {
+                print!("{text}");
+            }
+            return Ok(());
+        }
+        let name = args.arg_name.clone();
+        let query = if args.cmd_class {
+            Query::Class {
+                name,
+                inherited: args.flag_inherited,
+                mods_only: args.flag_mods_only,
+            }
+        } else if args.cmd_find {
+            Query::Find {
+                regex: args.arg_regex.clone().unwrap_or_default(),
+                class: args.flag_class.clone(),
+            }
+        } else if args.cmd_sub {
+            Query::Sub {
+                name,
+                all: args.flag_all,
+            }
+        } else if args.cmd_enum {
+            Query::Enum { name }
+        } else if args.cmd_chain {
+            Query::Chain { name }
+        } else if args.cmd_src {
+            Query::Src { name }
+        } else if args.cmd_defines {
+            Query::Defines {
+                regex: args.arg_regex.clone(),
+            }
+        } else {
+            return Err(error!("no api command given"));
+        };
+        for line in api::answer(&ctx, &query, max, args.flag_json, args.flag_verbose)? {
+            println!("{line}");
+        }
+    }
+    Ok(())
 }
 
 /// Returns the `<source>` argument, which docopt guarantees for these commands.

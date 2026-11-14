@@ -306,3 +306,39 @@ fn binarize_reports_older_odol_versions_instead_of_failing() {
         assert_eq!(std::fs::read(dir.path().join("out.p3d")).unwrap(), body);
     }
 }
+
+#[test]
+fn cli_usage_lists_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, out, err) = dayzmake(&["--help"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    for line in [
+        "dayzmake api class",
+        "dayzmake api find",
+        "dayzmake api sub",
+        "dayzmake api enum",
+        "dayzmake api chain",
+        "dayzmake api src",
+        "dayzmake api defines",
+        "dayzmake api update",
+        "--refresh",
+        "--json",
+    ] {
+        assert!(out.contains(line), "{line} missing from {out}");
+    }
+}
+
+/// The usage block of the README is the `USAGE` text of the binary.
+#[test]
+fn readme_usage_block_equals_usage() {
+    // A Windows checkout (`text=auto`) has CRLF line endings.
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
+        .expect("README")
+        .replace("\r\n", "\n");
+    let block = readme
+        .split("## Usage\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```\n").nth(1))
+        .expect("the usage block");
+    assert_eq!(block.trim(), dayzmake::run::USAGE.trim());
+}

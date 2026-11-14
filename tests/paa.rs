@@ -135,6 +135,40 @@ fn an_lzo_stream_ends_with_its_marker_and_nothing_after_it() {
     }
 }
 
+/// A PAA header (DXT1, no taggs, no palette) followed by `rest`.
+fn paa_bytes(taggs: &[u8], rest: &[u8]) -> Vec<u8> {
+    let mut bytes = 0xff01u16.to_le_bytes().to_vec();
+    bytes.extend_from_slice(taggs);
+    bytes.extend_from_slice(&0u16.to_le_bytes()); // palette size
+    bytes.extend_from_slice(rest);
+    bytes
+}
+
+#[test]
+fn paa_huge_tagg_is_an_error() {
+    let mut tagg = b"GGATSGGA".to_vec();
+    tagg.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    tagg.extend_from_slice(&[1, 2, 3, 4]);
+    let bytes = paa_bytes(&tagg, &[]);
+    let err = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(bytes))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("too large"), "{err}");
+}
+
+#[test]
+fn paa_huge_dimensions_is_an_error() {
+    let mut mip = 0xFFFFu16.to_le_bytes().to_vec(); // 0x7FFF wide, LZO flag
+    mip.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    mip.extend_from_slice(&[4, 0, 0]);
+    mip.extend_from_slice(&[0x11, 0, 0, 0]);
+    let bytes = paa_bytes(&[], &mip);
+    let err = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(bytes))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("dimensions"), "{err}");
+}
+
 /// Found by fuzzing: a tag size of about 4 GiB made the reader allocate that much before it
 /// noticed the input was a few dozen bytes long. Reading must fail with an error instead.
 #[test]
