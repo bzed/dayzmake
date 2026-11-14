@@ -17,7 +17,7 @@ Line numbers are those of the commit that added this document.
 
 src/pbo.rs:819 — `--use-prefix` with an unsafe prefix (`..`, absolute, drive, dot-only component) could unpack outside the target folder — fixed in Task 1.1 (`safe_relative_path`)
 src/pbo.rs:850 — entry names could leave the target folder, or be written through a symlink in the target tree — fixed in Task 1.1 (`safe_relative_path`, `crosses_symlink`)
-src/config.rs:335 — rapified config recursion on self-referencing or deeply nested class bodies, exponential fan-out — fixed in Task 1.2 (depth, cycle and entry budgets)
+src/config.rs:335 — rapified config recursion on self-referencing or deeply nested class bodies — fixed in Task 1.2 (depth and cycle checks); exponential fan-out was only partly fixed there: the entry budget (4 000 000) bounds the entries but not the bytes, and a 1.4 KB file with 20 levels of two class entries sharing one body, ending in 1 KB strings, derapified to 1.5 GB — fixed in the final review (`ReadBudget::seen_bodies`: a body offset that was read once is rejected with "Rapified class body shared at offset N."; real configs never share bodies; tests `rapified_shared_class_body_fan_out_is_an_error`, corpus seed `shared-body-fan-out.bin`)
 src/pbo.rs:151 — LZSS allocation sized by the entry's `original_size` — fixed in Task 1.2 (at most 9x the compressed size)
 src/paa.rs:32 — PAA tagg size, mipmap dimension and LZO ratio unbounded — fixed in Task 1.2
 src/pbo.rs:205 — pathological glob patterns — fixed in Task 1.2 (`matches_glob` rewrite)

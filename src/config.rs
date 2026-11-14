@@ -1,6 +1,7 @@
 //! Functions for rapifying and derapifying Arma configs
 
 use std::cmp::min;
+use std::collections::HashSet;
 use std::io::{BufReader, BufWriter, Cursor, Error, Read, Seek, SeekFrom, Write};
 use std::iter::Sum;
 use std::path::PathBuf;
@@ -343,6 +344,9 @@ struct ReadBudget {
     remaining: u64,
     /// Offsets of the class bodies being read, to catch bodies that contain themselves.
     open_bodies: Vec<u32>,
+    /// Offsets of every class body read so far. Real configs never share a body between classes; a file
+    /// that does can make the output exponentially larger than the input.
+    seen_bodies: HashSet<u32>,
 }
 
 impl ReadBudget {
@@ -351,6 +355,7 @@ impl ReadBudget {
             depth: 0,
             remaining: MAX_RAPIFIED_ENTRIES,
             open_bodies: Vec::new(),
+            seen_bodies: HashSet::new(),
         }
     }
 
@@ -735,6 +740,11 @@ impl ConfigClass {
 
         if budget.open_bodies.contains(&body_offset) {
             return Err(error!("Rapified class body cycle at offset {body_offset}."));
+        }
+        if !budget.seen_bodies.insert(body_offset) {
+            return Err(error!(
+                "Rapified class body shared at offset {body_offset}."
+            ));
         }
         budget.enter()?;
         budget.open_bodies.push(body_offset);

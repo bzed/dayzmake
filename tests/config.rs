@@ -146,7 +146,7 @@ fn rapified_exponential_fanout_is_an_error() {
     }
     bytes.extend_from_slice(&[0, 0]); // last body: no entries
     let err = read_bytes(bytes).unwrap_err().to_string();
-    assert!(err.contains("too many entries"), "{err}");
+    assert!(err.contains("shared"), "{err}");
 }
 
 /// Found by fuzzing: a class body offset that points back into itself recursed until the
@@ -165,4 +165,44 @@ fn read_rapified_rejects_deeply_nested_arrays() {
     data.extend_from_slice(&[0, 1, 2, b'a', 0, 1]);
     data.extend(std::iter::repeat_n([3u8, 1], 1_000_000).flatten());
     assert!(Config::read_rapified(&mut Cursor::new(&data[..])).is_err());
+}
+
+/// 20 class bodies, each with two class entries that point at the next body, and a last body with two
+/// 1 KB strings: 1.4 KB that derapify to over 1 GB when shared bodies are read once per reference.
+fn shared_body_fan_out() -> Vec<u8> {
+    const LEVELS: u32 = 20;
+    let mut bytes = rapified_header();
+    for level in 0..LEVELS - 1 {
+        bytes.push(0); // parent ""
+        bytes.push(2); // two entries
+        let next = 16 + 16 * (level + 1);
+        for name in [b"a\0", b"b\0"] {
+            bytes.push(0); // class entry
+            bytes.extend_from_slice(name);
+            bytes.extend_from_slice(&next.to_le_bytes());
+        }
+    }
+    bytes.push(0); // parent ""
+    bytes.push(2); // two entries
+    for name in [b"a\0", b"b\0"] {
+        bytes.push(1); // variable
+        bytes.push(0); // string
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&[b'x'; 1024]);
+        bytes.push(0);
+    }
+    bytes
+}
+
+#[test]
+fn rapified_shared_class_body_fan_out_is_an_error() {
+    let bytes = shared_body_fan_out();
+    assert!(bytes.len() < 3000, "{}", bytes.len());
+    let started = std::time::Instant::now();
+    let Err(err) = read_bytes(bytes) else {
+        panic!("shared bodies are rejected");
+    };
+    let err = err.to_string();
+    assert!(err.contains("shared"), "{err}");
+    assert!(started.elapsed().as_secs() < 2);
 }
