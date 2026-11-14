@@ -83,9 +83,23 @@ fn normalize_prefix(prefix: &str, warn: bool) -> String {
     stripped.to_string()
 }
 
+/// Sets a header extension: a repeated key keeps its first position and takes the last value, so
+/// the order of the extensions is the order of the file.
+fn set_extension(extensions: &mut LinkedHashMap<String, String>, key: &str, value: String) {
+    if let Some(existing) = extensions.get_mut(key) {
+        *existing = value;
+    } else {
+        extensions.insert(key.to_string(), value);
+    }
+}
+
 /// Parses `$PBOPREFIX$` into header extensions: a bare line is the prefix, `key=value` lines are
 /// extensions. Prefix slashes are normalized (`warn` controls the `prefix-slash` warning).
-fn parse_prefix_file(content: &str, header_extensions: &mut HashMap<String, String>, warn: bool) {
+fn parse_prefix_file(
+    content: &str,
+    header_extensions: &mut LinkedHashMap<String, String>,
+    warn: bool,
+) {
     for l in content.lines() {
         if l.is_empty() {
             break;
@@ -93,13 +107,13 @@ fn parse_prefix_file(content: &str, header_extensions: &mut HashMap<String, Stri
 
         match l.split_once('=') {
             None => {
-                header_extensions.insert("prefix".to_string(), normalize_prefix(l, warn));
+                set_extension(header_extensions, "prefix", normalize_prefix(l, warn));
             }
             Some((key, value)) if key == "prefix" => {
-                header_extensions.insert(key.to_string(), normalize_prefix(value, warn));
+                set_extension(header_extensions, key, normalize_prefix(value, warn));
             }
             Some((key, value)) => {
-                header_extensions.insert(key.to_string(), value.to_string());
+                set_extension(header_extensions, key, value.to_string());
             }
         }
     }
@@ -125,7 +139,7 @@ pub struct PBO {
     /// The PBO's files in header order, keyed by name.
     pub files: LinkedHashMap<String, Cursor<Box<[u8]>>>,
     /// Header extensions (`key=value`), including the prefix under the key `prefix`.
-    pub header_extensions: HashMap<String, String>,
+    pub header_extensions: LinkedHashMap<String, String>,
     /// Original bytes of entry names that are not valid UTF-8, keyed by their windows-1252 decoding
     /// (the key used in `files`).
     pub raw_names: HashMap<String, Vec<u8>>,
@@ -167,7 +181,7 @@ impl PBOHeader {
 
 /// The parsed header block of a PBO: the header extensions and the entry headers.
 struct HeaderBlock {
-    extensions: HashMap<String, String>,
+    extensions: LinkedHashMap<String, String>,
     raw_extensions: HashMap<String, Vec<u8>>,
     headers: Vec<PBOHeader>,
 }
@@ -180,7 +194,7 @@ struct HeaderBlock {
 /// from a size in the file.
 fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
     let mut block = HeaderBlock {
-        extensions: HashMap::new(),
+        extensions: LinkedHashMap::new(),
         raw_extensions: HashMap::new(),
         headers: Vec::new(),
     };
@@ -208,7 +222,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
                 if let Some(raw) = raw_value {
                     block.raw_extensions.insert(value.clone(), raw);
                 }
-                block.extensions.insert(key, value);
+                set_extension(&mut block.extensions, &key, value);
             }
         } else if header.filename.is_empty() {
             break;
@@ -229,7 +243,7 @@ pub type SelectedEntry = (String, Result<Vec<u8>, Error>);
 /// The entries of a PBO that [`PBO::read_entries`] selected.
 pub struct PboSelection {
     /// Header extensions (`key=value`), including the prefix under the key `prefix`.
-    pub header_extensions: HashMap<String, String>,
+    pub header_extensions: LinkedHashMap<String, String>,
     /// All entry names in file order.
     pub names: Vec<String>,
     /// The selected entries in file order with their decompressed data; an entry that cannot be
@@ -421,7 +435,7 @@ impl PBO {
     /// Returns an error if the header block is truncated, malformed or exceeds the limits.
     pub fn read_headers<I: Read>(
         input: &mut I,
-    ) -> Result<(HashMap<String, String>, Vec<String>), Error> {
+    ) -> Result<(LinkedHashMap<String, String>, Vec<String>), Error> {
         let block = read_header_block(input)?;
         let names = block.headers.into_iter().map(|h| h.filename).collect();
         Ok((block.extensions, names))
@@ -508,14 +522,14 @@ impl PBO {
     ) -> Result<PBO, Error> {
         let file_list = list_files(&directory)?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
-        let mut header_extensions: HashMap<String, String> = HashMap::new();
+        let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 
         if directory.join("$NOBIN$").exists() || directory.join("$NOBIN-NOTEST$").exists() {
             binarize = false;
         }
 
         // the prefix is needed while binarizing, so read it before looking at the other files
-        let mut pre_extensions: HashMap<String, String> = HashMap::new();
+        let mut pre_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
         for prefix_file in &["$PBOPREFIX$", "$PREFIX$"] {
             if let Ok(content) = std::fs::read_to_string(directory.join(prefix_file)) {
                 parse_prefix_file(&content, &mut pre_extensions, false);
@@ -909,7 +923,7 @@ fn sanitize_header(text: &str) -> String {
 /// Writes `$PBOPREFIX$` into `base` with control characters removed from keys and values, unless
 /// it is a symlink.
 fn write_prefix_file(
-    extensions: &HashMap<String, String>,
+    extensions: &LinkedHashMap<String, String>,
     base: &Path,
     force: bool,
 ) -> Result<(), Error> {
@@ -1099,8 +1113,7 @@ pub fn cmd_pack<O: Write>(
                 "Invalid header extension \"{h}\" (expected key=value)."
             ));
         };
-        pbo.header_extensions
-            .insert(key.to_string(), value.to_string());
+        set_extension(&mut pbo.header_extensions, key, value.to_string());
     }
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;
@@ -1128,8 +1141,7 @@ pub fn cmd_build<O: Write>(
                 "Invalid header extension \"{h}\" (expected key=value)."
             ));
         };
-        pbo.header_extensions
-            .insert(key.to_string(), value.to_string());
+        set_extension(&mut pbo.header_extensions, key, value.to_string());
     }
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;

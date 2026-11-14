@@ -493,3 +493,48 @@ fn read_still_bounds_header_strings() {
     let long = vec![b'a'; 100_000];
     assert!(PBO::read(&mut &long[..]).is_err());
 }
+
+const ORDERED_PREFIX_FILE: &str = "prefix=t\nb=2\na=1\nc=3\nz=9\ny=8\n";
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn ordered_extension_folder() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("$PBOPREFIX$"), ORDERED_PREFIX_FILE).unwrap();
+    fs::write(dir.path().join("data.txt"), "x").unwrap();
+    dir
+}
+
+#[test]
+fn header_extensions_keep_file_order_and_bytes_are_stable() {
+    let dir = ordered_extension_folder();
+    let build = || {
+        PBO::from_directory(dir.path().to_path_buf(), false, &[], &[])
+            .unwrap()
+            .to_cursor()
+            .unwrap()
+            .into_inner()
+    };
+    let first = build();
+    for _ in 0..7 {
+        assert_eq!(build(), first, "PBO bytes differ between builds");
+    }
+    let pbo = PBO::read(&mut &first[..]).unwrap();
+    let keys: Vec<&str> = pbo.header_extensions.keys().map(String::as_str).collect();
+    assert_eq!(keys, ["prefix", "b", "a", "c", "z", "y"]);
+}
+
+#[test]
+fn unpack_writes_prefix_file_in_original_order() {
+    let dir = ordered_extension_folder();
+    let bytes = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[])
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner();
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("in.pbo"), bytes).unwrap();
+    let (code, err) = run_dayzmake(&["unpack", "in.pbo", "out"], tmp.path());
+    assert_eq!(code, 0, "{err}");
+    let content = fs::read_to_string(tmp.path().join("out/$PBOPREFIX$")).unwrap();
+    assert_eq!(content, ORDERED_PREFIX_FILE);
+}

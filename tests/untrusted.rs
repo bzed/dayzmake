@@ -371,3 +371,33 @@ fn paa_decoded_size_is_bounded() {
     let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
     assert!(paa.to_dynamic_image().is_err());
 }
+
+#[test]
+fn duplicate_header_extension_keys_read_and_write_deterministically() {
+    let mut bytes = Vec::new();
+    let header = |out: &mut Vec<u8>, name: &[u8], method: u32, size: u32| {
+        out.extend_from_slice(name);
+        out.push(0);
+        for v in [method, size, 0, 0, size] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    };
+    header(&mut bytes, b"", 0x5665_7273, 0);
+    bytes.extend_from_slice(b"prefix\0p\0k\x001\0k\x002\0\0");
+    header(&mut bytes, b"a.txt", 0, 1);
+    header(&mut bytes, b"", 0, 0);
+    bytes.push(b'x');
+    bytes.push(0);
+    bytes.extend_from_slice(&[0; 20]);
+
+    let pbo = PBO::read(&mut &bytes[..]).expect("read");
+    let pairs: Vec<(&str, &str)> = pbo
+        .header_extensions
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(pairs, [("prefix", "p"), ("k", "2")]);
+    let first = pbo.to_cursor().expect("write").into_inner();
+    let second = pbo.to_cursor().expect("write").into_inner();
+    assert_eq!(first, second);
+}
