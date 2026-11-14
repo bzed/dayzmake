@@ -1,9 +1,9 @@
 use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::api;
-use crate::api::query::{Query, render_json, render_text, run_query};
+use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::binarize;
 use crate::config;
@@ -45,6 +45,7 @@ Usage:
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
+    dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
 
@@ -68,6 +69,7 @@ Commands:
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
                 with -m, from mods: class, find, sub, enum, chain, src, defines, update.
+    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
     -v --verbose                Enable verbose output.
@@ -125,6 +127,7 @@ pub struct Args {
     cmd_img2paa: bool,
     cmd_verify: bool,
     cmd_api: bool,
+    cmd_mcp: bool,
     cmd_class: bool,
     cmd_find: bool,
     cmd_sub: bool,
@@ -189,16 +192,10 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        let path = PathBuf::from(target);
-        if !args.flag_force && path.exists() {
-            return Err(error!(
-                "Target file \"{}\" already exists. Use --force to overwrite.",
-                target
-            ));
-        }
-        Ok(Output::File(
-            File::create(path).prepend_error("Failed to open output file:")?,
-        ))
+        Ok(Output::File(crate::io::create_target(
+            Path::new(target),
+            args.flag_force,
+        )?))
     } else {
         Ok(Output::Standard(stdout()))
     }
@@ -212,7 +209,9 @@ fn run_command(args: &Args) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
-    if args.cmd_api {
+    if args.cmd_mcp {
+        crate::mcp::serve(std::io::stdin().lock(), stdout())
+    } else if args.cmd_api {
         run_api(args)
     } else if args.cmd_binarize {
         let source = required_source(args)?;
@@ -346,8 +345,8 @@ fn run_api(args: &Args) -> Result<(), Error> {
     #[expect(clippy::print_stdout, reason = "CLI command output")]
     {
         if args.cmd_update {
-            for (key, index) in api::load_keyed(&ctx)? {
-                println!("{key}: {} classes, {}", index.classes.len(), index.build);
+            for line in api::update_lines(&ctx)? {
+                println!("{line}");
             }
             return Ok(());
         }
@@ -356,13 +355,11 @@ fn run_api(args: &Args) -> Result<(), Error> {
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
         if args.cmd_src && args.flag_cat {
+            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json)?;
             if args.flag_json {
-                let files = api::src_contents(&ctx, &args.arg_name)?;
-                let json = serde_json::to_string(&serde_json::json!({ "files": files }))
-                    .map_err(|e| error!("cannot serialize: {e}"))?;
-                println!("{json}");
+                println!("{text}");
             } else {
-                print!("{}", api::cat_sources(&ctx, &args.arg_name)?);
+                print!("{text}");
             }
             return Ok(());
         }
@@ -396,19 +393,8 @@ fn run_api(args: &Args) -> Result<(), Error> {
         } else {
             return Err(error!("no api command given"));
         };
-        let indexes = api::load_indexes(&ctx)?;
-        let result = run_query(&indexes, &query)?;
-        if args.flag_json {
-            println!("{}", render_json(&result, max));
-        } else {
-            if args.flag_verbose {
-                for i in &indexes {
-                    println!("# {}: {}", i.name, i.build);
-                }
-            }
-            for line in render_text(&result, indexes.len() > 1, max) {
-                println!("{line}");
-            }
+        for line in api::answer(&ctx, &query, max, args.flag_json, args.flag_verbose)? {
+            println!("{line}");
         }
     }
     Ok(())

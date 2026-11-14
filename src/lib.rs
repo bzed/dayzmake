@@ -16,6 +16,8 @@ pub mod error;
 pub mod eval;
 /// I/O helpers for the binary formats.
 pub mod io;
+/// Stdio MCP server exposing the API index and the file commands as tools.
+pub mod mcp;
 /// P3D model reading and inspection.
 pub mod p3d;
 /// PAA texture conversion.

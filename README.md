@@ -83,6 +83,7 @@ Usage:
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
     dayzmake api class|find|sub|enum|chain|src|defines|update ...  (see "Script API index")
+    dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
 
@@ -158,6 +159,29 @@ dayzmake api update                           # rebuild the cache now
   modification time of a PBO changes or the index format changes; `--refresh` forces it. A corrupt file is replaced.
 - PBO contents are untrusted: entries and prefixes with unsafe paths are skipped with a warning and nothing is
   extracted to disk.
+
+## MCP server
+
+`dayzmake mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server on stdin/stdout
+(newline-delimited JSON-RPC, tools only). Register it with Claude Code:
+
+```
+claude mcp add dayzmake -- dayzmake mcp
+```
+
+Tools:
+
+- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_defines`, `api_update`:
+  the script API index (see above). They take `mods`, `experimental`, `dayz`, `refresh`, `json` and `max`
+  (default 120). Without `mods` only vanilla is queried; no tool defaults to `all`.
+- `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
+  `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
+  commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
+
+The tools take file paths as given (relative to the server's working directory) and act with the permissions of
+the user running the server: they can read, create and, with `force`, overwrite any file that user can. Only
+register the server with a client you trust to do that. Output is capped at 200 000 bytes, warnings are appended
+to the result, and failures are results with `isError: true`.
 
 ## Inspecting models and checking their textures
 

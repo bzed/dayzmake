@@ -1,3 +1,4 @@
+use crate::error::ErrorExt;
 use std::fs::File;
 use std::io;
 use std::io::{Cursor, Read, Seek, Stdout, Write};
@@ -174,4 +175,19 @@ pub fn compressed_int_len(x: u32) -> usize {
     }
 
     len + 1
+}
+
+/// Creates the target file of a command; an existing file is an error unless `force`.
+///
+/// # Errors
+///
+/// Returns an error if the file exists without `force` or cannot be created.
+pub fn create_target(path: &std::path::Path, force: bool) -> io::Result<File> {
+    if !force && path.exists() {
+        return Err(error!(
+            "Target file \"{}\" already exists. Use --force to overwrite.",
+            path.display()
+        ));
+    }
+    File::create(path).prepend_error("Failed to open output file:")
 }

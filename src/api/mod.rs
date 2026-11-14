@@ -11,7 +11,7 @@ use crate::error;
 use crate::pbo::{PBO, safe_relative_path};
 use cache::dir_hash;
 use model::ApiIndex;
-use query::src_files;
+use query::{Query, render_json, render_text, run_query, src_files};
 use source::{ModSource, ModSpec, build_mod, build_vanilla, parse_mods, resolve_mod};
 use steam::{Branch, find_game, libraries, steam_roots};
 
@@ -246,3 +246,57 @@ pub mod parse;
 pub mod query;
 /// Scanner: comments, docs and conditional compilation.
 mod scan;
+
+/// One line per index with its key, class count and build, as `dayzmake api update` prints them.
+/// The caller sets `refresh` to rebuild the caches.
+///
+/// # Errors
+///
+/// See [`load_keyed`].
+pub fn update_lines(ctx: &ApiContext) -> Result<Vec<String>, Error> {
+    Ok(load_keyed(ctx)?
+        .into_iter()
+        .map(|(key, index)| format!("{key}: {} classes, {}", index.classes.len(), index.build))
+        .collect())
+}
+
+/// Runs `query` and renders the answer: JSON (one line) or text (at most `max` lines, with a
+/// `# <index>: <build>` header per index when `verbose`).
+///
+/// # Errors
+///
+/// Returns an error when the indexes cannot be loaded or the query fails.
+pub fn answer(
+    ctx: &ApiContext,
+    query: &Query,
+    max: usize,
+    json: bool,
+    verbose: bool,
+) -> Result<Vec<String>, Error> {
+    let indexes = load_indexes(ctx)?;
+    let result = run_query(&indexes, query)?;
+    if json {
+        return Ok(vec![render_json(&result, max)]);
+    }
+    let mut lines = Vec::new();
+    if verbose {
+        lines.extend(indexes.iter().map(|i| format!("# {}: {}", i.name, i.build)));
+    }
+    lines.extend(render_text(&result, indexes.len() > 1, max));
+    Ok(lines)
+}
+
+/// `api src --cat`: the full source files as JSON (`{"files": [...]}`) or as text.
+///
+/// # Errors
+///
+/// Returns an error when the name is unknown or a PBO cannot be read.
+pub fn src_cat(ctx: &ApiContext, name: &str, json: bool) -> Result<String, Error> {
+    if json {
+        let files = src_contents(ctx, name)?;
+        serde_json::to_string(&serde_json::json!({ "files": files }))
+            .map_err(|e| error!("cannot serialize: {e}"))
+    } else {
+        cat_sources(ctx, name)
+    }
+}

@@ -122,8 +122,11 @@ pub fn binarize(
             tempdir.to_str().unwrap(),
             input.file_name().unwrap().to_str().unwrap(),
         ])
+        // The child must never write to our stdout: `dayzmake mcp` uses it for JSON-RPC frames only.
+        // It does not read our stdin either (that is the MCP request stream).
+        .stdin(Stdio::null())
         .stdout(if piped {
-            Stdio::inherit()
+            Stdio::from(std::io::stderr())
         } else {
             Stdio::null()
         })
