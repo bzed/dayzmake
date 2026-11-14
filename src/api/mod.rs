@@ -2,3 +2,8 @@
 
 /// Steam and DayZ install discovery.
 pub mod steam;
+
+/// Index model.
+pub mod model;
+/// Enforce Script declaration parser.
+pub mod parse;

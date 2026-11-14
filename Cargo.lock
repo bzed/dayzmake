@@ -259,6 +259,7 @@ dependencies = [
  "peg",
  "regex",
  "serde",
+ "serde_json",
  "tempfile",
  "texpresso",
  "winreg",
