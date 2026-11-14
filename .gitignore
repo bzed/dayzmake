@@ -2,3 +2,5 @@
 /testharness/build
 /lcov.info
 **/*.rs.bk
+/fuzz/target
+/fuzz/artifacts

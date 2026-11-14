@@ -1,10 +1,16 @@
+COVERAGE_MIN = 70
+
+# Temporary and build folders never go under $HOME.
 export TMPDIR ?= /tmp
+export CARGO_TARGET_DIR ?= /var/tmp/dayzmake-target
 
 CARGO = cargo
 LOCKED = --locked
-COVERAGE_MIN = 70
+FUZZ_TIME ?= 10
+# cargo-fuzz binaries from prebuilt releases default to a musl target, where sanitizers do not work.
+FUZZ_HOST = $(shell rustc +nightly -vV | sed -n "s/^host: //p")
 
-.PHONY: fmt fmt-check lint doc deny test cover coverage-check check
+.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri check
 
 fmt:
 	$(CARGO) fmt --all
@@ -25,10 +31,22 @@ test:
 	$(CARGO) test --all-targets $(LOCKED)
 	$(CARGO) test --doc $(LOCKED)
 
+# Each target runs FUZZ_TIME seconds (10 by default; `make fuzz FUZZ_TIME=60` for longer).
+fuzz:
+	@if [ -d fuzz ]; then \
+	  cd fuzz && for t in $$($(CARGO) +nightly fuzz list 2>/dev/null); do \
+	    mkdir -p $(TMPDIR)/dayzmake-fuzz/$$t; \
+	    $(CARGO) +nightly fuzz run --target $(FUZZ_HOST) $$t $(TMPDIR)/dayzmake-fuzz/$$t corpus/$$t -- -max_total_time=$(FUZZ_TIME) || exit 1; \
+	  done; \
+	fi
+
 cover:
 	$(CARGO) llvm-cov --all-features --lcov --output-path lcov.info
 
 coverage-check:
 	$(CARGO) llvm-cov --all-features --fail-under-lines $(COVERAGE_MIN)
 
-check: fmt-check lint doc deny test coverage-check
+miri:
+	$(CARGO) +nightly miri test $(LOCKED)
+
+check: fmt-check lint doc deny test fuzz coverage-check

@@ -334,3 +334,15 @@ fn compressed_entry_size_bomb_is_an_error() {
     assert!(code > 0, "the process must not be killed: {code}");
     assert!(err.contains("implausible"), "{err}");
 }
+
+/// Found by fuzzing: a compressed entry whose original size is about 2 GiB made `file_data`
+/// allocate that much up front. It must fail without that allocation.
+#[test]
+fn file_data_does_not_trust_the_original_size() {
+    let data = include_bytes!("fixtures/fuzz/pbo_huge_original_size.pbo");
+    if let Ok(pbo) = PBO::read(&mut &data[..]) {
+        for name in pbo.files.keys() {
+            let _ = pbo.file_data(name);
+        }
+    }
+}
