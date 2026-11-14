@@ -36,6 +36,8 @@ CLI-shaped arguments.
 - Every new dependency is reviewed per AGENTS.md *Dependencies*; the review goes into the commit message.
 - No game data in the repo. The differential run (Task 13) reads the user's DayZ install at run time and writes only
   under `/var/tmp`.
+- Every crate linked into `dayzmake-core` must be licensed compatibly with both GPL-2.0-or-later and AGPL-3.0
+  (no GPL-2.0-only code): consumers such as Náves are AGPL-3.0.
 - Commit prefixes: `test:`, `fix:`, `build:`, `refactor:`, `feat:`, `docs:`, `ci:`. Commits end with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Work on a branch (`feature/workspace-split`), not `main`.
 
@@ -262,7 +264,16 @@ fn duplicate_header_extension_keys_read_and_write_deterministically() {
 - [ ] **Step 4: Run:** `cargo test --workspace --locked`. Expected: PASS, and all Task 1/2 snapshots unchanged
   (they only use a prefix and at most one extra extension).
 
-- [ ] **Step 5: `make check`, commit** — `fix: write PBO header extensions in file order`. The message names the
+- [ ] **Step 4b: Sorted directory traversal.** `list_files` in `src/pbo.rs` returns `read_dir` order, so the
+  order of build warnings (stderr, MCP replies) depends on the file system. Sort each directory's entries by name
+  (byte order of the file name) before recursing. Test in `tests/cli.rs`:
+  `build_warnings_come_in_sorted_file_order` (create `b.cpp`, `a.cpp`, `c.cpp` prerapified in that creation order;
+  stderr lines name `a.cpp`, `b.cpp`, `c.cpp` in that order). Snapshot exception for this step only: the
+  warning order in `build_bytes_and_warnings`, `warning_quota`, `warning_verbose` and `golden_mcp__pbo_build`
+  may change to the sorted order; PBO bytes must not change (entries were already sorted on write).
+
+- [ ] **Step 5: `make check`, commit** — `fix: write PBO header extensions in file order` (and a second commit
+  `fix: traverse addon folders in sorted order` for Step 4b). The message names the
   rule (AGENTS.md *Same input, same output*) that was broken.
 
 ---
@@ -706,6 +717,53 @@ pub use image;                                // in lib.rs: consumers use the sa
 
 ---
 
+### Task 9b: Replace the GPL-2.0-only `lzo1x` crate
+
+`lzo1x 0.2.2` is licensed `GPL-2.0` (only; its LICENSE is plain GPLv2, no "or later" anywhere). That is
+incompatible with AGPL-3.0 consumers such as Náves, and `Paa::from_dynamic_image` LZO-compresses every DXT mipmap
+wider than 128 px, so a consumer cannot avoid it.
+
+**Files:**
+- Modify: `crates/dayzmake-core/Cargo.toml`, `crates/dayzmake-core/src/paa.rs`, `deny.toml` (the `GPL-2.0` entry
+  in `allow` goes once nothing needs it), `Cargo.lock`, `fuzz/Cargo.lock`
+- Test: `crates/dayzmake-core/tests/paa_api.rs`, the existing LZO tests in `tests/paa.rs`
+
+**Interfaces:**
+- No public API change. Internal: `fn lzo_compress(data: &[u8]) -> Vec<u8>` and
+  `fn lzo_decompress(data: &[u8], out_len: usize) -> Result<Vec<u8>, Error>` in `paa.rs` wrap the new crate, so the
+  crate is used in one place.
+
+- [ ] **Step 1: Pick the crate.** Candidates: `lzokay-native` (MIT), `lzallright`, `rust-lzo1x`, `lzo` (decoder
+  only), `decode-lzo` (decoder only). Review per AGENTS.md (licence on the `deny.toml` allow-list and compatible with
+  GPL-2.0-or-later *and* AGPL-3.0, i.e. permissive or GPL-2.0-or-later; safe Rust or justified `unsafe`; no panics on
+  hostile input in the decompressor; maintenance). A compressor and a decompressor may come from different crates.
+  If none passes, stop and report BLOCKED with the review.
+- [ ] **Step 2: Failing tests** (in `paa_api.rs`)
+
+```rust
+#[test] fn lzo_compressed_mipmaps_decompress_to_the_dxt_data() {
+    // 256×256 gradient → from_dynamic_image(Dxt5) → write → read → to_dynamic_image():
+    // pixels equal those of the same image converted to Dxt5 at 128×128 scale-free path… simpler:
+    // compare to_dynamic_image() of the new PAA with the decoded `img2paa_dxt5`-style result of the old build,
+    // stored as a binary snapshot `lzo_roundtrip.rgba` recorded BEFORE swapping the crate
+}
+#[test] fn hostile_lzo_streams_are_errors() { /* the existing paa_short_mipmap / huge fixtures + 64 random byte strings (fixed seed) as LZO mipmaps → Err, no panic */ }
+```
+
+  Record `lzo_roundtrip.rgba` with the old crate first (commit it in this task's first commit, `test:`), then swap.
+- [ ] **Step 3: Swap the crate.** Keep the rule "use the compressed data only if it is shorter" and the end-marker
+  rule (`11 00 00` last, nothing after it; `an_lzo_stream_ends_with_its_marker_and_nothing_after_it` must pass).
+- [ ] **Step 4: Verify.** `cargo test --workspace --locked`: PASS. Snapshots that may change, and only these: the
+  PAA byte snapshots of images wider than 128 px (the Task 1 PNGs are 64×64, so normally none). Any other change is
+  a regression. `cargo deny check licenses` shows no `GPL-2.0`-only crate:
+  `cargo tree -p dayzmake-core -e normal --format '{p} {l}' | grep -E 'GPL-2.0($| )'` → no output.
+- [ ] **Step 5: In-game note.** The new compressor's output differs from the old one byte-wise; the decompressed
+  mipmaps are identical. Add to the report that a PAA > 128 px made with the new build should be checked in the game
+  (Task 13 does it).
+- [ ] **Step 6: `make check`, commit** — `fix: replace the GPL-2.0-only lzo1x crate` (body: crate review, why).
+
+---
+
 ### Task 10: Config read access and `#[non_exhaustive]` model types
 
 **Files:**
@@ -862,6 +920,9 @@ make -C . && cargo build --release --locked   # new binary in $CARGO_TARGET_DIR/
   - PBOs with more than one non-prefix header extension: order in `inspect` output and in unpacked `$PBOPREFIX$`
     (Task 3; check the new order is the file order)
   - suppression summary lines on stderr (Task 5)
+  - LZO-compressed PAA mipmap bytes (Task 9b); decompressed pixels must be identical. Convert one PNG wider
+    than 128 px with the new binary and ask the user to load it in the game (a texture on a test item); record
+    the answer.
   Anything else is a regression: stop, write a failing test in the owning task's test file, fix, rerun.
 - [ ] **Step 3: Clean up:** `git worktree remove "$OLD/src"`, `rm -rf "$OLD"`.
 - [ ] **Step 4: `make check`, commit** — `test: differential comparison against a released dayzmake`
