@@ -276,12 +276,22 @@ fn class_query(
                 });
             }
         }
-        if views.is_empty() {
-            return Err(not_found(indexes, "class", name));
-        }
         if inherited {
             cur = base_of(indexes, &n);
         }
+    }
+    if views.is_empty() {
+        if mods_only && has_class(indexes, name) {
+            let scope = if inherited {
+                " or its base classes"
+            } else {
+                ""
+            };
+            return Err(error!(
+                "\"{name}\" exists in vanilla, but no loaded mod declares it{scope}"
+            ));
+        }
+        return Err(not_found(indexes, "class", name));
     }
     Ok(QueryResult::Classes(views))
 }
@@ -465,9 +475,9 @@ fn render_class(v: &ClassView, multi: bool, out: &mut Vec<String>) {
     }
     if !c.alt_bases.is_empty() {
         out.push(format!(
-            "  // base is {} on a stable server, {} when its #ifdef define is off",
+            "  // base is {} here; {} under the other branch of its #ifdef",
             c.base_name().unwrap_or("?"),
-            c.alt_bases.join(", ")
+            c.alt_bases.join(" or ")
         ));
     }
     let collapsed = |m: &&Member| m.modifiers.iter().any(|x| x == "override") && m.cond.is_none();

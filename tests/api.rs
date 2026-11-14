@@ -1054,7 +1054,7 @@ fn class_header_doc_template_and_cond() {
         Some(
             [
                 "class Variant3 : Other".to_string(),
-                "  // base is Other on a stable server, Base when its #ifdef define is off".into()
+                "  // base is Other here; Base under the other branch of its #ifdef".into()
             ]
             .as_slice()
         ),
@@ -1569,7 +1569,15 @@ fn query_not_found_hint() {
         .starts_with("no class \"Nope\"")
     );
     // mods_only on a class that only vanilla has
-    assert!(err(&two, &class_q("Zeta", false, true)).starts_with("no class \"Zeta\""));
+    assert_eq!(
+        err(&two, &class_q("Zeta", false, true)),
+        "\"Zeta\" exists in vanilla, but no loaded mod declares it"
+    );
+    assert_eq!(
+        err(&two, &class_q("Other", true, true)),
+        "\"Other\" exists in vanilla, but no loaded mod declares it or its base classes"
+    );
+    assert!(err(&two, &class_q("Nope", true, true)).starts_with("no class \"Nope\""));
 }
 
 #[test]
@@ -1601,4 +1609,34 @@ fn query_serializes() {
     };
     let v = serde_json::to_value(&q).expect("json");
     assert_eq!(v["Class"]["name"], "A");
+}
+
+#[test]
+fn inherited_mods_only_walks_vanilla_bases() {
+    let idx = both();
+    // Zeta is vanilla only; its base Base has a mod part.
+    assert_eq!(
+        text(&idx, &class_q("Zeta", true, true), 100),
+        ["class Base  [cf 4_World]  [modded]", "  void CFExtra()"]
+    );
+}
+
+#[test]
+fn inherited_walks_across_indexes() {
+    let mut idx = both();
+    idx[1].classes.get_mut("CFWorld").expect("CFWorld").base = Some("Zeta".into());
+    let l = text(&idx, &class_q("CFWorld", true, false), 300);
+    let heads: Vec<&str> = l
+        .iter()
+        .filter(|x| x.starts_with("class "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(heads.len(), 4, "{heads:?}");
+    assert_eq!(heads[0], "class CFWorld : Zeta  [cf 4_World]");
+    assert!(
+        heads[1].starts_with("class Zeta : Base  [vanilla"),
+        "{heads:?}"
+    );
+    assert!(heads[2].starts_with("class Base  [vanilla"), "{heads:?}");
+    assert_eq!(heads[3], "class Base  [cf 4_World]  [modded]");
 }
