@@ -733,33 +733,30 @@ wider than 128 px, so a consumer cannot avoid it.
   `fn lzo_decompress(data: &[u8], out_len: usize) -> Result<Vec<u8>, Error>` in `paa.rs` wrap the new crate, so the
   crate is used in one place.
 
-- [ ] **Step 1: Pick the crate.** Candidates: `lzokay-native` (MIT), `lzallright`, `rust-lzo1x`, `lzo` (decoder
-  only), `decode-lzo` (decoder only). Review per AGENTS.md (licence on the `deny.toml` allow-list and compatible with
-  GPL-2.0-or-later *and* AGPL-3.0, i.e. permissive or GPL-2.0-or-later; safe Rust or justified `unsafe`; no panics on
-  hostile input in the decompressor; maintenance). A compressor and a decompressor may come from different crates.
-  If none passes, stop and report BLOCKED with the review.
-- [ ] **Step 2: Failing tests** (in `paa_api.rs`)
-
-```rust
-#[test] fn lzo_compressed_mipmaps_decompress_to_the_dxt_data() {
-    // 256×256 gradient → from_dynamic_image(Dxt5) → write → read → to_dynamic_image():
-    // pixels equal those of the same image converted to Dxt5 at 128×128 scale-free path… simpler:
-    // compare to_dynamic_image() of the new PAA with the decoded `img2paa_dxt5`-style result of the old build,
-    // stored as a binary snapshot `lzo_roundtrip.rgba` recorded BEFORE swapping the crate
-}
-#[test] fn hostile_lzo_streams_are_errors() { /* the existing paa_short_mipmap / huge fixtures + 64 random byte strings (fixed seed) as LZO mipmaps → Err, no panic */ }
-```
-
-  Record `lzo_roundtrip.rgba` with the old crate first (commit it in this task's first commit, `test:`), then swap.
-- [ ] **Step 3: Swap the crate.** Keep the rule "use the compressed data only if it is shorter" and the end-marker
-  rule (`11 00 00` last, nothing after it; `an_lzo_stream_ends_with_its_marker_and_nothing_after_it` must pass).
-- [ ] **Step 4: Verify.** `cargo test --workspace --locked`: PASS. Snapshots that may change, and only these: the
-  PAA byte snapshots of images wider than 128 px (the Task 1 PNGs are 64×64, so normally none). Any other change is
-  a regression. `cargo deny check licenses` shows no `GPL-2.0`-only crate:
-  `cargo tree -p dayzmake-core -e normal --format '{p} {l}' | grep -E 'GPL-2.0($| )'` → no output.
-- [ ] **Step 5: In-game note.** The new compressor's output differs from the old one byte-wise; the decompressed
-  mipmaps are identical. Add to the report that a PAA > 128 px made with the new build should be checked in the game
-  (Task 13 does it).
+- [ ] **Step 1: Review `lzokay-native`** (the user's choice) per AGENTS.md: licence (MIT), safe Rust or justified
+  `unsafe`, no panics or unbounded allocation on hostile input in the decompressor, maintenance, builds on Linux
+  and Windows with Rust 1.99. The review goes into the commit body.
+- [ ] **Step 2: Prove identical output before switching.** Add a temporary dev-dependency on `lzokay-native` next to
+  `lzo1x` and a test `lzokay_native_matches_lzo1x` (in `crates/dayzmake-core/tests/paa_api.rs`):
+  - compression: for every input of a fixed corpus — the DXT1 and DXT5 mipmap data of 256×256, 512×512 and
+    1024×1024 gradient and noise images (noise from a fixed-seed xorshift, no new dependency), all zeros, all `0xFF`,
+    a 1-byte, a 3-byte and a 70 000-byte input — `lzokay_native::compress(x) == lzo1x::compress(x, default level)`,
+    byte for byte;
+  - decompression: both crates decompress every compressed stream above to the same bytes; both return an error
+    (and do not panic) for the hostile inputs (the existing PAA fuzz fixtures' mipmap data and 64 fixed-seed random
+    byte strings).
+  **If compression is not byte-identical for every input, stop:** do not switch, do not try another crate; report
+  BLOCKED with the first differing input and both outputs' lengths. (The user only wants `lzokay-native` if it
+  produces exactly the same results.)
+- [ ] **Step 3: Swap the crate.** Replace `lzo1x` with `lzokay-native` behind the two internal wrappers. Keep the
+  rule "use the compressed data only if it is shorter" and the end-marker rule (`11 00 00` last, nothing after it;
+  `an_lzo_stream_ends_with_its_marker_and_nothing_after_it` must pass). The comparison test from Step 2 becomes a
+  test of the wrapper against stored expected bytes: before removing `lzo1x`, record the compressed corpus outputs
+  as binary snapshots (`lzo_<name>.bin`), then assert the wrapper reproduces them.
+- [ ] **Step 4: Verify.** `cargo test --workspace --locked`: PASS, **no snapshot changes at all** (PAA bytes
+  included). `cargo tree -p dayzmake-core -e normal --format '{p} {l}' | grep -E 'GPL-2.0($| )'` → no output.
+  Remove `GPL-2.0` from `deny.toml`'s allow-list if nothing else needs it; `make deny` passes.
+- [ ] **Step 5:** nothing to check in the game: the bytes are identical.
 - [ ] **Step 6: `make check`, commit** — `fix: replace the GPL-2.0-only lzo1x crate` (body: crate review, why).
 
 ---
@@ -920,9 +917,7 @@ make -C . && cargo build --release --locked   # new binary in $CARGO_TARGET_DIR/
   - PBOs with more than one non-prefix header extension: order in `inspect` output and in unpacked `$PBOPREFIX$`
     (Task 3; check the new order is the file order)
   - suppression summary lines on stderr (Task 5)
-  - LZO-compressed PAA mipmap bytes (Task 9b); decompressed pixels must be identical. Convert one PNG wider
-    than 128 px with the new binary and ask the user to load it in the game (a texture on a test item); record
-    the answer.
+  - none for PAA: Task 9b keeps LZO output byte-identical. Include a 1024×1024 PNG in the img2paa comparison.
   Anything else is a regression: stop, write a failing test in the owning task's test file, fix, rerun.
 - [ ] **Step 3: Clean up:** `git worktree remove "$OLD/src"`, `rm -rf "$OLD"`.
 - [ ] **Step 4: `make check`, commit** — `test: differential comparison against a released dayzmake`
