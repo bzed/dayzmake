@@ -578,6 +578,7 @@ fn tools() -> Value {
             &[
                 ("source", 's', "Rapified config."),
                 ("target", 's', "Write the text here; absent: return it."),
+                FORCE_ARG,
             ],
             &["source"],
         ),
@@ -588,6 +589,7 @@ fn tools() -> Value {
                 ("source", 's', "File to preprocess."),
                 ("target", 's', "Write the result here; absent: return it."),
                 ("include", 'a', "Folders to search for includes."),
+                FORCE_ARG,
             ],
             &["source"],
         ),

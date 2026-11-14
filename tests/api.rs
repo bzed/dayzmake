@@ -1194,6 +1194,60 @@ fn find_anchored_regex_matches_member_names() {
 }
 
 #[test]
+fn text_output_escapes_untrusted_control_characters() {
+    let src = "//! Evil \u{1b}[31mdoc\nclass Esc\n{\n\t//! member \u{1b}[2Jdoc\n\tvoid M();\n}\n";
+    let files = [ScriptFile {
+        module: 0,
+        path: "3_Game\\\u{1b}[1mx.c",
+        text: src,
+    }];
+    let mut idx = ApiIndex::new("vanilla", "T", "1");
+    index_scripts(&files, &stable(), &mut idx);
+    for q in [
+        class_q("Esc", false, false),
+        Query::Find {
+            regex: "Esc|doc".into(),
+            class: None,
+        },
+        Query::Src { name: "Esc".into() },
+    ] {
+        let lines = text(std::slice::from_ref(&idx), &q, 100);
+        assert_ne!(lines.len(), 0);
+        for l in &lines {
+            assert!(!l.contains('\u{1b}'), "{l:?}");
+        }
+    }
+    let lines = text(
+        std::slice::from_ref(&idx),
+        &class_q("Esc", false, false),
+        100,
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("\\u{1b}[2Jdoc")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn not_found_suggests_the_other_case() {
+    let idx = [vanilla()];
+    let e = err(&idx, &class_q("base", false, false));
+    assert!(
+        e.starts_with("no class \"base\"; did you mean Base?"),
+        "{e}"
+    );
+    let e = err(
+        &idx,
+        &Query::Enum {
+            name: "aistatus".into(),
+        },
+    );
+    assert!(e.contains("did you mean AIStatus?"), "{e}");
+    let e = err(&idx, &class_q("Nope", false, false));
+    assert!(e.contains("try: dayzmake api find Nope"), "{e}");
+}
+
+#[test]
 fn find_class_filter_and_cond() {
     let idx = [vanilla()];
     let q = Query::Find {
@@ -2449,6 +2503,18 @@ mod from_pbo {
             lines[2].starts_with("300  Gamma Textures  ") && !lines[2].ends_with("scripts"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn cli_api_mods_text_escapes_the_mod_name() {
+        let w = World::new();
+        ws_scripted(&w, 100, "ClassOne", "Evil \u{1b}[31mMod");
+        let (code, out, err) = w.run(&["api", "mods"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(!out.contains('\u{1b}'), "{out:?}");
+        assert!(out.contains("Evil \\u{1b}[31mMod"), "{out:?}");
+        let (_, json, _) = w.run(&["api", "mods", "--json"]);
+        assert!(json.contains("\\u001b[31m"), "{json}");
     }
 
     #[test]

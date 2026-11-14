@@ -744,3 +744,18 @@ fn mcp_mods_arguments_mention_the_slow_first_run() {
         "{api_mods}"
     );
 }
+
+#[test]
+fn mcp_every_tool_that_writes_a_target_offers_force() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let r = run(
+        &[json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
+        tmp.path(),
+    );
+    for t in r.replies[0]["result"]["tools"].as_array().expect("tools") {
+        let props = &t["inputSchema"]["properties"];
+        if props.get("target").is_some() {
+            assert!(props.get("force").is_some(), "{} has no force", t["name"]);
+        }
+    }
+}

@@ -327,3 +327,16 @@ fn cli_usage_lists_api() {
         assert!(out.contains(line), "{line} missing from {out}");
     }
 }
+
+/// The usage block of the README is the `USAGE` text of the binary.
+#[test]
+fn readme_usage_block_equals_usage() {
+    let readme =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).expect("README");
+    let block = readme
+        .split("## Usage\n")
+        .nth(1)
+        .and_then(|rest| rest.split("```\n").nth(1))
+        .expect("the usage block");
+    assert_eq!(block.trim(), dayzmake::run::USAGE.trim());
+}

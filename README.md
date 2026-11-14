@@ -19,6 +19,11 @@ is maintained here.
 
 **Status:** PAA commands not implemented, some options not implemented, testing.
 
+## Changes
+
+- `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
+  `not found`).
+
 ## Building
 
 The build requires `cargo`, Rust's package manager and the OpenSSL development libraries.
@@ -75,14 +80,22 @@ Usage:
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] <source> <targetfolder>
+    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
     dayzmake cat [-v] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>
     dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
     dayzmake verify [-v] <publickey> <pbo> [<signature>]
-    dayzmake api class|find|sub|enum|chain|src|defines|update|mods ...  (see "Script API index")
+    dayzmake api class [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--inherited] [--mods-only] [--json] <name>
+    dayzmake api find [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--class <class>] [--json] <regex>
+    dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
+    dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
+    dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
+    dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -105,6 +118,10 @@ Commands:
     verify      Verify a PBO's signature with the given public key.
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
+    api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
+                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                mods lists the installed mods.
+    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
     -v --verbose                Enable verbose output.
@@ -120,7 +137,23 @@ Options:
     -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
+    --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
+    --experimental              api: use the experimental branch instead of stable.
+    --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
+    -m --mod <mods>             api: also query mods, comma separated: cf, cot, dabs, expansion, aliases
+                                (those four, if installed), all (every installed mod with scripts; the
+                                first run can take a while: each mod is indexed once, then cached), a
+                                workshop id, a mod name or @dir name (see `api mods`) or a directory.
+                                Without -m only vanilla is queried.
+    --refresh                   api: rebuild the cached index.
+    --max <n>                   api: print at most n lines (or JSON items). [default: 120]
+    --inherited                 api class: also show the base classes.
+    --mods-only                 api class: show only what the mods declare.
+    --class <class>             api find: search only the members of this class or enum.
+    --all                       api sub: include indirect subclasses.
+    --cat                       api src: print the full source files.
+    --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ```
@@ -174,9 +207,12 @@ claude mcp add dayzmake -- dayzmake mcp
 
 Tools:
 
-- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_defines`, `api_update`:
-  the script API index (see above). They take `mods`, `experimental`, `dayz`, `refresh`, `json` and `max`
-  (default 120). Without `mods` only vanilla is queried; no tool defaults to `all`.
+- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_defines`, `api_update`,
+  `api_mods`: the script API index (see above). The first eight take `mods`, `experimental`, `dayz` and
+  `refresh`; `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
+  `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
+  tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with
+  `mods=all` warms them.
 - `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
   commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.

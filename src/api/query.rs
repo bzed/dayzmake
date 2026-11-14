@@ -17,6 +17,7 @@ use serde::Serialize;
 
 use super::model::{ApiIndex, Class, Enum, EnumItem, FileRef, Member, MemberKind};
 use crate::error;
+use crate::error::printable;
 
 /// Size limit of a compiled user regex, in bytes. The regex comes from an untrusted caller (MCP).
 const REGEX_SIZE_LIMIT: usize = 1 << 20;
@@ -156,7 +157,21 @@ fn compile(pattern: &str) -> Result<Regex, Error> {
 }
 
 fn not_found(indexes: &[ApiIndex], what: &str, name: &str) -> Error {
-    let mut msg = format!("no {what} \"{name}\"; try: dayzmake api find {name}");
+    let lower = name.to_lowercase();
+    let mut similar: Vec<&str> = indexes
+        .iter()
+        .flat_map(|i| i.classes.keys().chain(i.enums.keys()))
+        .map(String::as_str)
+        .filter(|n| *n != name && n.to_lowercase() == lower)
+        .collect();
+    similar.sort_unstable();
+    similar.dedup();
+    let mut msg = if similar.is_empty() {
+        format!("no {what} \"{name}\"; try: dayzmake api find {name}")
+    } else {
+        let list: Vec<&str> = similar.into_iter().take(3).collect();
+        format!("no {what} \"{name}\"; did you mean {}?", list.join(" or "))
+    };
     if indexes.len() < 2 {
         msg.push_str("\n  (searched vanilla only; add -m <mod> or -m all for mods)");
     }
@@ -581,7 +596,8 @@ pub fn render_text(result: &QueryResult, multi: bool, max: usize) -> Vec<String>
             "... {more} more lines (raise --max or narrow the query)"
         ));
     }
-    out
+    // Names, signatures, docs and paths come from files the user did not write.
+    out.iter().map(|l| printable(l)).collect()
 }
 
 /// Keeps at most `max` leaf items of `items` (each item counts one plus its children, see `count`; `trim` cuts the

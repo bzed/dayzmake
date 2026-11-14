@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::Serialize;
 
 use crate::error;
-use crate::error::warning;
+use crate::error::{printable, warning};
 use crate::pbo::{PBO, SelectedEntry, safe_relative_path};
 use cache::dir_hash;
 use model::ApiIndex;
@@ -73,8 +73,8 @@ pub fn mods_text(ctx: &ApiContext, json: bool) -> Result<String, Error> {
             format!(
                 "{}  {}  {}{}",
                 m.id.map_or_else(|| "-".to_string(), |i| i.to_string()),
-                m.name,
-                m.dir.display(),
+                printable(&m.name),
+                printable(&m.dir.display().to_string()),
                 if m.has_scripts { "  scripts" } else { "" }
             )
         })
@@ -437,7 +437,11 @@ pub fn answer(
     }
     let mut lines = Vec::new();
     if verbose {
-        lines.extend(indexes.iter().map(|i| format!("# {}: {}", i.name, i.build)));
+        lines.extend(
+            indexes
+                .iter()
+                .map(|i| printable(&format!("# {}: {}", i.name, i.build))),
+        );
     }
     lines.extend(render_text(&result, indexes.len() > 1, max));
     Ok(lines)

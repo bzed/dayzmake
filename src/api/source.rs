@@ -585,7 +585,7 @@ pub fn match_installed<'a>(
         hits = pick(false);
     }
     let list = |mods: &[&InstalledMod]| {
-        let mut names: Vec<String> = mods.iter().take(10).map(|m| m.name.clone()).collect();
+        let mut names: Vec<String> = mods.iter().take(10).map(|m| printable(&m.name)).collect();
         if mods.len() > 10 {
             names.push("...".to_string());
         }
