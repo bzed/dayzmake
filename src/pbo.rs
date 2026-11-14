@@ -777,8 +777,13 @@ impl PBO {
 fn list_files(directory: &PathBuf) -> Result<Vec<PathBuf>, Error> {
     let mut files: Vec<PathBuf> = Vec::new();
 
-    for entry in read_dir(directory)? {
-        let path = entry?.path();
+    // read_dir order depends on the file system; sort by file name so warnings come in a fixed order
+    let mut paths = read_dir(directory)?
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<Result<Vec<PathBuf>, _>>()?;
+    paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+    for path in paths {
         if path.is_dir() {
             for f in list_files(&path)? {
                 files.push(f);

@@ -342,3 +342,31 @@ fn readme_usage_block_equals_usage() {
         .expect("the usage block");
     assert_eq!(block.trim(), dayzmake::run::USAGE.trim());
 }
+
+#[test]
+fn build_warnings_come_in_sorted_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/config.cpp", "class B { y = 2; };\n");
+    // created out of order; each file warns once
+    for name in ["b", "a", "c"] {
+        write(
+            dir.path(),
+            &format!("m/{name}.rvmat"),
+            "class A { x = foo; };\n",
+        );
+    }
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let order: Vec<&str> = err
+        .lines()
+        .filter(|l| l.contains("unquoted-string"))
+        .map(|l| l.split(':').next().unwrap())
+        .collect();
+    assert_eq!(order.len(), 3, "{err}");
+    assert!(
+        order[0].contains("a.rvmat")
+            && order[1].contains("b.rvmat")
+            && order[2].contains("c.rvmat"),
+        "{err}"
+    );
+}
