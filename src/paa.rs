@@ -28,6 +28,28 @@ use texpresso::{Algorithm, Format, Params};
 
 const OFFS_TAGG: &str = "GGATSFFO"; // mipmap offsets (16 u32, zero padded)
 
+/// Largest decompressed mipmap accepted (an 8192x8192 DXT5 texture is 64 MiB).
+const MAX_MIPMAP_BYTES: usize = 256 * 1024 * 1024;
+
+/// Reads exactly `len` bytes without allocating `len` bytes up front, since `len` comes from
+/// the (untrusted) file and may be far larger than the input.
+fn read_bounded<I: Read>(input: &mut I, len: usize) -> Result<Vec<u8>, Error> {
+    let mut data = Vec::new();
+    input.take(len as u64).read_to_end(&mut data)?;
+    if data.len() != len {
+        return Err(error!("Unexpected end of PAA data."));
+    }
+    Ok(data)
+}
+
+/// A zeroed buffer for a decompressed mipmap, refusing sizes beyond `MAX_MIPMAP_BYTES`.
+fn zeroed_mipmap(len: usize) -> Result<Vec<u8>, Error> {
+    if len > MAX_MIPMAP_BYTES {
+        return Err(error!("Mipmap is too large to decompress ({len} bytes)."));
+    }
+    Ok(vec![0; len])
+}
+
 /// A PAA texture.
 #[derive(Debug)]
 pub struct Paa {
@@ -97,16 +119,14 @@ impl Paa {
                 .to_string();
 
             let tagg_size = input.read_u32::<LittleEndian>()? as usize;
-            let mut data = vec![0; tagg_size];
-            input.read_exact(&mut data)?;
+            let data = read_bounded(input, tagg_size)?;
 
             taggs.insert(tagg_name, data);
         }
 
         let palette_len = input.read_u16::<LittleEndian>()? as usize;
         let palette = if palette_len > 0 {
-            let mut pal_data = vec![0; palette_len];
-            input.read_exact(&mut pal_data)?;
+            let pal_data = read_bounded(input, palette_len)?;
             Some(pal_data)
         } else {
             None
@@ -133,8 +153,7 @@ impl Paa {
                 height = h;
             }
 
-            let mut mip_data = vec![0; size];
-            input.read_exact(&mut mip_data)?;
+            let mip_data = read_bounded(input, size)?;
 
             if (w & 0x8000) != 0 {
                 // LZO compressed. The decompressed size is the format's
@@ -152,7 +171,7 @@ impl Paa {
                         ));
                     }
                 };
-                let mut decompressed_data = vec![0; decompressed_size];
+                let mut decompressed_data = zeroed_mipmap(decompressed_size)?;
                 lzo1x::decompress(&mip_data, &mut decompressed_data)
                     .map_err(|e| error!("Failed to decompress LZO-compressed mipmap: {:?}", e))?;
                 mipmaps.push(decompressed_data);
@@ -197,7 +216,7 @@ impl Paa {
                     .palette
                     .as_ref()
                     .ok_or_else(|| error!("Paletted PAA without palette data"))?;
-                let mut rgba_data = Vec::with_capacity(width * height * 4);
+                let mut rgba_data = Vec::with_capacity(main_mipmap.len().saturating_mul(4));
                 for &index in main_mipmap {
                     let i = usize::from(index) * 4;
                     // Palette is BGRA
@@ -227,6 +246,11 @@ impl Paa {
             }
         };
 
+        // texpresso panics on a mipmap shorter than the block data its dimensions need; this also
+        // bounds the output buffer below by the size of the input.
+        if main_mipmap.len() < format.compressed_size(width, height) {
+            return Err(error!("PAA mipmap is too short for its dimensions"));
+        }
         let mut decompressed = vec![0u8; width * height * 4];
         format.decompress(main_mipmap, width, height, &mut decompressed);
 

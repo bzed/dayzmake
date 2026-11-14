@@ -134,3 +134,20 @@ fn an_lzo_stream_ends_with_its_marker_and_nothing_after_it() {
         );
     }
 }
+
+/// Found by fuzzing: a tag size of about 4 GiB made the reader allocate that much before it
+/// noticed the input was a few dozen bytes long. Reading must fail with an error instead.
+#[test]
+fn read_rejects_a_tag_size_larger_than_the_input() {
+    let data = include_bytes!("fixtures/fuzz/paa_huge_tagg.paa");
+    assert!(dayzmake::paa::Paa::read(&mut std::io::Cursor::new(&data[..])).is_err());
+}
+
+/// Found by fuzzing: a DXT mipmap shorter than its dimensions need made the decoder panic.
+#[test]
+fn to_dynamic_image_rejects_a_short_mipmap() {
+    let data = include_bytes!("fixtures/fuzz/paa_short_mipmap.paa");
+    if let Ok(paa) = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(&data[..])) {
+        assert!(paa.to_dynamic_image().is_err());
+    }
+}

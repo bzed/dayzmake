@@ -1,0 +1,50 @@
+[package]
+name = "dayzmake-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "GPL-2.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dayzmake = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "pbo_read"
+path = "fuzz_targets/pbo_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_rapified"
+path = "fuzz_targets/config_rapified.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "paa_read"
+path = "fuzz_targets/paa_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "p3d_read"
+path = "fuzz_targets/p3d_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sign_read"
+path = "fuzz_targets/sign_read.rs"
+test = false
+doc = false
+bench = false

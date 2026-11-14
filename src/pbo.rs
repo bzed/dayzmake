@@ -151,7 +151,9 @@ const PACKING_COMPRESSED: u32 = 0x4370_7273;
 /// The window starts out filled with spaces; the 4 byte checksum after the data is ignored.
 fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> {
     let truncated = || error!("Truncated compressed PBO entry.");
-    let mut out: Vec<u8> = Vec::with_capacity(original_size);
+    // original_size comes from the file: a back reference expands 2 bytes to at most 18, so the
+    // output cannot be larger than 9 times the input
+    let mut out: Vec<u8> = Vec::with_capacity(original_size.min(data.len().saturating_mul(9)));
     let mut pos = 0;
 
     while out.len() < original_size {
