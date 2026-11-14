@@ -383,7 +383,7 @@ fn duplicate_header_extension_keys_read_and_write_deterministically() {
         }
     };
     header(&mut bytes, b"", 0x5665_7273, 0);
-    bytes.extend_from_slice(b"prefix\0p\0k\x001\0k\x002\0\0");
+    bytes.extend_from_slice(b"prefix\0p\0k\x001\0j\0x\0k\x002\0\0");
     header(&mut bytes, b"a.txt", 0, 1);
     header(&mut bytes, b"", 0, 0);
     bytes.push(b'x');
@@ -396,7 +396,7 @@ fn duplicate_header_extension_keys_read_and_write_deterministically() {
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    assert_eq!(pairs, [("prefix", "p"), ("k", "2")]);
+    assert_eq!(pairs, [("prefix", "p"), ("k", "2"), ("j", "x")]);
     let first = pbo.to_cursor().expect("write").into_inner();
     let second = pbo.to_cursor().expect("write").into_inner();
     assert_eq!(first, second);
