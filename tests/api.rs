@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use dayzmake::api::model::{ApiIndex, Class, Enum, InputStamp, Member, MemberKind, Module};
 use dayzmake::api::parse::{ScriptFile, active_defines, collect_defines, index_scripts};
+use dayzmake::api::query::{
+    Query, QueryResult, SrcFile, render_json, render_text, run_query, src_files,
+};
 use dayzmake::api::steam::Branch;
 
 fn fixture(rel: &str) -> PathBuf {
@@ -935,4 +938,667 @@ fn elif_branch_is_evaluated() {
     let idx = vanilla_with(&linux);
     assert_eq!(cond(cls(&idx, "ElifC")), None);
     assert_eq!(cond(cls(&idx, "ElifD")), Some("!DIAG_DEVELOPER"));
+}
+
+// ---- query engine ----
+
+/// Vanilla plus the fixture mod (`cf`, module 3, defines `CF_FIXTURE`) as a second index.
+fn both() -> Vec<ApiIndex> {
+    let mut van = vanilla();
+    van.modules = vec![Module {
+        prefix: "scripts".into(),
+        pbo: "dta/scripts.pbo".into(),
+    }];
+    let files = read_scripts(&fixture("mod/JM/CF/Scripts"));
+    let set: BTreeSet<String> = ["CF_FIXTURE".to_string()].into();
+    let mut cf = ApiIndex::new("cf", "CF", "1");
+    let m = |p: &str, b: &str| Module {
+        prefix: p.into(),
+        pbo: b.into(),
+    };
+    cf.modules = vec![
+        m("a", "addons/a.pbo"),
+        m("b", "addons/b.pbo"),
+        m("c", "addons/c.pbo"),
+        m("jm\\cf\\scripts", "addons/jm_cf.pbo"),
+    ];
+    index_scripts(&script_files(&files, 3), &set, &mut cf);
+    cf.defines.insert(
+        "jm\\cf".into(),
+        vec!["CF_FIXTURE".into(), "CF_MODULE".into()],
+    );
+    vec![van, cf]
+}
+
+fn text(idx: &[ApiIndex], q: &Query, max: usize) -> Vec<String> {
+    let r = run_query(idx, q).expect("query");
+    render_text(&r, idx.len() > 1, max)
+}
+
+fn class_q(name: &str, inherited: bool, mods_only: bool) -> Query {
+    Query::Class {
+        name: name.into(),
+        inherited,
+        mods_only,
+    }
+}
+
+fn err(idx: &[ApiIndex], q: &Query) -> String {
+    run_query(idx, q).expect_err("must fail").to_string()
+}
+
+/// A tiny index of `(name, base)` classes without members.
+fn tiny(classes: &[(&str, Option<&str>)]) -> Vec<ApiIndex> {
+    let mut idx = ApiIndex::new("vanilla", "T", "1");
+    for (n, b) in classes {
+        idx.classes.insert(
+            (*n).to_string(),
+            Class {
+                name: (*n).to_string(),
+                type_params: Vec::new(),
+                base: b.map(ToString::to_string),
+                alt_bases: Vec::new(),
+                modded_only: false,
+                doc: None,
+                decls: Vec::new(),
+                members: Vec::new(),
+                cond: None,
+            },
+        );
+    }
+    vec![idx]
+}
+
+#[test]
+fn class_text_single_index() {
+    let idx = [vanilla()];
+    assert_eq!(
+        text(&idx, &class_q("Mixed", false, false), 100),
+        [
+            "class Mixed : Base",
+            "  void Always()",
+            "  void ClientHelper()  [#if !SERVER]",
+            "  void DiagHelper()  [#if DIAG_DEVELOPER]",
+            "  void ServerHelper()",
+            "  void Twice(int a)",
+        ]
+    );
+}
+
+#[test]
+fn class_header_doc_template_and_cond() {
+    let idx = [vanilla()];
+    let l = text(&idx, &class_q("Zeta", false, false), 100);
+    assert_eq!(l, ["class Zeta : Base", "  // Zeta documented."]);
+    let l = text(&idx, &class_q("Pair", false, false), 100);
+    assert_eq!(
+        l.first().map(String::as_str),
+        Some("class Pair<K,V> : Param<K>")
+    );
+    assert!(
+        l.contains(&"  void Put(K key,V value)".to_string()),
+        "{l:?}"
+    );
+    let l = text(&idx, &class_q("DiagOnly", false, false), 100);
+    assert_eq!(
+        l,
+        [
+            "class DiagOnly : Base  [#if DIAG_DEVELOPER]",
+            "  // Diag only.",
+            "  void DiagMethod()  [#if DIAG_DEVELOPER]",
+        ]
+    );
+    let l = text(&idx, &class_q("Variant3", false, false), 100);
+    assert_eq!(
+        l.get(..2),
+        Some(
+            [
+                "class Variant3 : Other".to_string(),
+                "  // base is Other on a stable server, Base when its #ifdef define is off".into()
+            ]
+            .as_slice()
+        ),
+        "{l:?}"
+    );
+}
+
+#[test]
+fn class_orders_fields_before_methods_and_collapses_overrides() {
+    let idx = [vanilla()];
+    let l = text(&idx, &class_q("Base", false, false), 200);
+    assert_eq!(
+        l.get(..2).map(<[String]>::to_vec),
+        Some(vec![
+            "class Base".to_string(),
+            "  // The base of everything.".to_string()
+        ])
+    );
+    let pos = |s: &str| {
+        l.iter()
+            .position(|x| x.trim_start().starts_with(s))
+            .expect(s)
+    };
+    assert!(
+        pos("int apple") < pos("int Banana"),
+        "case-insensitive: {l:?}"
+    );
+    assert!(
+        pos("static const int LIMIT") < pos("void Base"),
+        "fields before methods"
+    );
+    assert!(
+        l.contains(
+            &"  void Run(int x=5,string s=\"x,y\",array<int> list=null)  // Run it.".to_string()
+        ),
+        "{l:?}"
+    );
+    assert!(l.contains(&"  override: Run2".to_string()), "{l:?}");
+    assert!(!l.iter().any(|x| x.contains("void Run2")), "{l:?}");
+}
+
+#[test]
+fn class_inherited_walks_template_bases() {
+    let idx = [vanilla()];
+    let l = text(&idx, &class_q("Pair", true, false), 200);
+    let heads: Vec<&str> = l
+        .iter()
+        .filter(|x| x.starts_with("class "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(heads, ["class Pair<K,V> : Param<K>", "class Param<T>"]);
+    let l = text(&idx, &class_q("Zeta", true, false), 200);
+    let heads: Vec<&str> = l
+        .iter()
+        .filter(|x| x.starts_with("class "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(heads, ["class Zeta : Base", "class Base"]);
+}
+
+#[test]
+fn class_with_two_indexes_is_tagged() {
+    let idx = both();
+    let l = text(&idx, &class_q("Base", false, false), 300);
+    let heads: Vec<&str> = l
+        .iter()
+        .filter(|x| x.starts_with("class "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(heads.len(), 2, "{heads:?}");
+    assert!(
+        heads[0].starts_with("class Base  [vanilla 3_Game"),
+        "{heads:?}"
+    );
+    assert_eq!(heads[1], "class Base  [cf 4_World]  [modded]");
+    assert!(l.contains(&"  void CFExtra()".to_string()));
+}
+
+#[test]
+fn class_mods_only_skips_vanilla() {
+    let idx = both();
+    assert_eq!(
+        text(&idx, &class_q("Base", false, true), 100),
+        ["class Base  [cf 4_World]  [modded]", "  void CFExtra()",]
+    );
+    // inherited + mods_only still walks the base chain through vanilla, but prints only mod parts
+    let l = text(&idx, &class_q("CFSwitch", true, true), 100);
+    assert_eq!(
+        l.first().map(String::as_str),
+        Some("class CFSwitch : CFBase  [cf 3_Game]")
+    );
+    assert!(
+        l.contains(&"class CFBase  [cf 3_Game]".to_string()),
+        "{l:?}"
+    );
+    assert!(!l.iter().any(|x| x.contains("[vanilla")), "{l:?}");
+}
+
+#[test]
+fn find_matches_members_by_signature_and_doc() {
+    let idx = [vanilla()];
+    let q = Query::Find {
+        regex: "getinstance".into(),
+        class: None,
+    };
+    assert_eq!(text(&idx, &q, 100), ["Base: static Base GetInstance()"]);
+    let q = Query::Find {
+        regex: "^it\\.?$|run it".into(),
+        class: None,
+    };
+    assert_eq!(
+        text(&idx, &q, 100),
+        ["Base: void Run(int x=5,string s=\"x,y\",array<int> list=null)  // Run it."]
+    );
+    let q = Query::Find {
+        regex: "Twice".into(),
+        class: Some("Dup".into()),
+    };
+    assert_eq!(text(&idx, &q, 100), ["Dup: void Twice(int a)"]);
+}
+
+#[test]
+fn find_class_filter_and_cond() {
+    let idx = [vanilla()];
+    let q = Query::Find {
+        regex: "helper".into(),
+        class: Some("Mixed".into()),
+    };
+    assert_eq!(
+        text(&idx, &q, 100),
+        [
+            "Mixed: void DiagHelper()  [#if DIAG_DEVELOPER]",
+            "Mixed: void ClientHelper()  [#if !SERVER]",
+            "Mixed: void ServerHelper()",
+        ]
+    );
+}
+
+#[test]
+fn find_class_names_enum_items_and_top_level() {
+    let idx = both();
+    let q = Query::Find {
+        regex: "^CFBase$".into(),
+        class: None,
+    };
+    assert_eq!(text(&idx, &q, 100), ["[cf] class CFBase"]);
+    let q = Query::Find {
+        regex: "^EXTRA$".into(),
+        class: None,
+    };
+    assert_eq!(text(&idx, &q, 100), ["[vanilla] AIStatus: EXTRA"]);
+    let q = Query::Find {
+        regex: "^HEX$".into(),
+        class: None,
+    };
+    assert_eq!(text(&idx, &q, 100), ["[vanilla] AIStatus: HEX = 16"]);
+    let q = Query::Find {
+        regex: "FixtureNative|TParamArray|g_Counter".into(),
+        class: None,
+    };
+    let l = text(&idx, &q, 100);
+    assert_eq!(l.len(), 3, "{l:?}");
+    assert!(
+        l.iter()
+            .any(|x| x.starts_with("[vanilla] fn: ") && x.contains("FixtureNative")),
+        "{l:?}"
+    );
+    assert!(
+        l.iter()
+            .any(|x| x.starts_with("[vanilla] typedef: ") && x.contains("TParamArray")),
+        "{l:?}"
+    );
+    assert!(
+        l.iter()
+            .any(|x| x.starts_with("[vanilla] var: ") && x.contains("g_Counter")),
+        "{l:?}"
+    );
+    // a class filter excludes top-level declarations
+    let q = Query::Find {
+        regex: "FixtureNative".into(),
+        class: Some("Base".into()),
+    };
+    assert!(matches!(run_query(&idx, &q), Ok(QueryResult::Matches(m)) if m.is_empty()));
+    assert_eq!(text(&idx, &q, 100), ["no match"]);
+    assert_eq!(
+        text(&[vanilla()], &q, 100),
+        ["no match  (searched vanilla only; add -m <mod> or -m all for mods)"]
+    );
+}
+
+#[test]
+fn sub_direct_and_all() {
+    let idx = [vanilla()];
+    let q = Query::Sub {
+        name: "Param".into(),
+        all: false,
+    };
+    assert_eq!(text(&idx, &q, 100), ["Legacy Pair"]);
+    let t = tiny(&[
+        ("A", None),
+        ("B", Some("A")),
+        ("C", Some("B")),
+        ("D", Some("A<int>")),
+    ]);
+    let q = Query::Sub {
+        name: "A".into(),
+        all: false,
+    };
+    assert_eq!(text(&t, &q, 100), ["B D"]);
+    let q = Query::Sub {
+        name: "A".into(),
+        all: true,
+    };
+    assert_eq!(text(&t, &q, 100), ["B D C"]);
+    let q = Query::Sub {
+        name: "C".into(),
+        all: true,
+    };
+    assert_eq!(text(&t, &q, 100), ["no subclasses"]);
+    let cyc = tiny(&[("A", Some("B")), ("B", Some("A"))]);
+    let q = Query::Sub {
+        name: "A".into(),
+        all: true,
+    };
+    assert_eq!(text(&cyc, &q, 100), ["B A"]);
+}
+
+#[test]
+fn sub_spans_indexes() {
+    let idx = both();
+    let q = Query::Sub {
+        name: "CFBase".into(),
+        all: false,
+    };
+    assert_eq!(text(&idx, &q, 100), ["CFSwitch CFWorld"]);
+    let q = Query::Sub {
+        name: "Base".into(),
+        all: false,
+    };
+    let l = text(&idx, &q, 100);
+    assert!(l[0].split(' ').any(|n| n == "AIAgent"), "{l:?}");
+    assert!(
+        !l[0].split(' ').any(|n| n == "CFSwitch"),
+        "its base is CFBase when CF_FIXTURE is on: {l:?}"
+    );
+}
+
+#[test]
+fn enum_text() {
+    let idx = [vanilla()];
+    let q = Query::Enum {
+        name: "Counted".into(),
+    };
+    assert_eq!(
+        text(&idx, &q, 100),
+        ["enum Counted", "  A = 0", "  B = 4", "  C = 5", "  D = 6"]
+    );
+    let q = Query::Enum {
+        name: "Plain".into(),
+    };
+    assert_eq!(text(&idx, &q, 100)[0], "enum Plain : int");
+    let q = Query::Enum {
+        name: "AIStatus".into(),
+    };
+    let l = text(&idx, &q, 100);
+    assert_eq!(l[0], "enum AIStatus");
+    assert_eq!(l[1], "  IDLE = 0  // Not started");
+    let q = Query::Enum {
+        name: "CondEnum".into(),
+    };
+    assert_eq!(text(&idx, &q, 100)[0], "enum CondEnum");
+    let q = Query::Enum {
+        name: "DiagEnum".into(),
+    };
+    assert_eq!(
+        text(&idx, &q, 100)[0],
+        "enum DiagEnum  [#if DIAG_DEVELOPER]"
+    );
+}
+
+#[test]
+fn enum_with_two_indexes() {
+    let mut idx = both();
+    let mut counted = en(&idx[0], "Counted").clone();
+    counted.decls.clear();
+    idx[1].enums.insert("Counted".into(), counted);
+    let q = Query::Enum {
+        name: "Counted".into(),
+    };
+    let l = text(&idx, &q, 100);
+    let heads: Vec<&str> = l
+        .iter()
+        .filter(|x| x.starts_with("enum "))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(heads.len(), 2, "{heads:?}");
+    assert!(
+        heads[0].starts_with("enum Counted  [vanilla 3_Game"),
+        "{heads:?}"
+    );
+    assert_eq!(heads[1], "enum Counted  [cf]");
+}
+
+#[test]
+fn chain_walks_and_names_unknown_base() {
+    let idx = [vanilla()];
+    let q = Query::Chain {
+        name: "Zeta".into(),
+    };
+    assert_eq!(text(&idx, &q, 100), ["Zeta > Base"]);
+    let q = Query::Chain {
+        name: "Pair".into(),
+    };
+    assert_eq!(text(&idx, &q, 100), ["Pair > Param"]);
+    let q = Query::Chain {
+        name: "Variant3".into(),
+    };
+    assert_eq!(text(&idx, &q, 100), ["Variant3 > Other"]);
+    let q = Query::Chain {
+        name: "Variant".into(),
+    };
+    // Variant's base (Base) is reached
+    assert_eq!(text(&idx, &q, 100), ["Variant > Base"]);
+    let t = tiny(&[("A", Some("Missing"))]);
+    let q = Query::Chain { name: "A".into() };
+    assert_eq!(text(&t, &q, 100), ["A > Missing"]);
+}
+
+#[test]
+fn chain_stops_on_cycle() {
+    let t = tiny(&[("A", Some("B")), ("B", Some("A"))]);
+    let q = Query::Chain { name: "A".into() };
+    assert_eq!(text(&t, &q, 100), ["A > B"]);
+    let q = class_q("A", true, false);
+    assert_eq!(text(&t, &q, 100), ["class A : B", "class B : A"]);
+}
+
+#[test]
+fn src_lists_every_declaration() {
+    let idx = both();
+    let q = Query::Src {
+        name: "Base".into(),
+    };
+    let l = text(&idx, &q, 100);
+    assert_eq!(l[0], "[vanilla] dta/scripts.pbo scripts\\3_Game\\Base.c:3");
+    assert!(
+        l.iter()
+            .any(|x| x.starts_with("[vanilla] dta/scripts.pbo scripts\\4_World\\Modded.c:")),
+        "{l:?}"
+    );
+    assert!(
+        l.iter()
+            .any(|x| x.starts_with("[cf] addons/jm_cf.pbo jm\\cf\\scripts\\4_World\\CFWorld.c:")),
+        "{l:?}"
+    );
+    let files: Vec<SrcFile> = src_files(&idx, "Base");
+    assert_eq!(files[0].index, "vanilla");
+    assert_eq!(files[0].pbo, "dta/scripts.pbo");
+    assert_eq!(files[0].prefix, "scripts");
+    assert_eq!(files[0].path, "3_Game\\Base.c");
+    assert_eq!(files[0].line, 3);
+    // enums too
+    let q = Query::Src {
+        name: "Counted".into(),
+    };
+    assert_eq!(text(&idx, &q, 100).len(), 2, "one line per declaration");
+    assert_eq!(src_files(&idx, "Nope").len(), 0);
+}
+
+#[test]
+fn defines_filtered_by_regex() {
+    let idx = both();
+    let q = Query::Defines { regex: None };
+    assert_eq!(text(&idx, &q, 100), ["[cf] jm\\cf: CF_FIXTURE CF_MODULE"]);
+    let q = Query::Defines {
+        regex: Some("module".into()),
+    };
+    assert_eq!(text(&idx, &q, 100), ["[cf] jm\\cf: CF_MODULE"]);
+    let q = Query::Defines {
+        regex: Some("zzz".into()),
+    };
+    assert_eq!(text(&idx, &q, 100), ["no matching define"]);
+}
+
+#[test]
+fn max_cap_line() {
+    let idx = [vanilla()];
+    let l = text(&idx, &class_q("Mixed", false, false), 2);
+    assert_eq!(
+        l,
+        [
+            "class Mixed : Base",
+            "  void Always()",
+            "... 4 more lines (raise --max or narrow the query)",
+        ]
+    );
+    assert_eq!(text(&idx, &class_q("Mixed", false, false), 6).len(), 6);
+}
+
+#[test]
+fn json_output_parses_and_has_members() {
+    let idx = [vanilla()];
+    let r = run_query(&idx, &class_q("Mixed", false, false)).expect("q");
+    let v: serde_json::Value = serde_json::from_str(&render_json(&r, 100)).expect("json");
+    assert_eq!(v["truncated"], 0);
+    let c = &v["result"]["Classes"][0];
+    assert_eq!(c["index"], "vanilla");
+    assert_eq!(c["class"]["name"], "Mixed");
+    assert_eq!(c["class"]["members"].as_array().map(Vec::len), Some(5));
+    assert_eq!(c["class"]["members"][2]["cond"], "!SERVER");
+}
+
+#[test]
+fn json_truncation_count() {
+    let idx = [vanilla()];
+    // Mixed: 1 class + 5 members; max 3 keeps the class and 2 members, drops 3.
+    let r = run_query(&idx, &class_q("Mixed", false, false)).expect("q");
+    let v: serde_json::Value = serde_json::from_str(&render_json(&r, 3)).expect("json");
+    assert_eq!(v["truncated"], 3);
+    assert_eq!(
+        v["result"]["Classes"][0]["class"]["members"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
+    let v: serde_json::Value = serde_json::from_str(&render_json(&r, 0)).expect("json");
+    assert_eq!(v["truncated"], 6);
+    assert_eq!(v["result"]["Classes"].as_array().map(Vec::len), Some(0));
+    // flat results
+    let t = tiny(&[
+        ("A", None),
+        ("B", Some("A")),
+        ("C", Some("A")),
+        ("D", Some("A")),
+    ]);
+    let r = run_query(
+        &t,
+        &Query::Sub {
+            name: "A".into(),
+            all: false,
+        },
+    )
+    .expect("q");
+    let v: serde_json::Value = serde_json::from_str(&render_json(&r, 2)).expect("json");
+    assert_eq!(v["truncated"], 1);
+    assert_eq!(v["result"]["Names"], serde_json::json!(["B", "C"]));
+    let r = run_query(
+        &idx,
+        &Query::Find {
+            regex: "helper".into(),
+            class: Some("Mixed".into()),
+        },
+    )
+    .expect("q");
+    let v: serde_json::Value = serde_json::from_str(&render_json(&r, 1)).expect("json");
+    assert_eq!(
+        (
+            v["truncated"].as_u64(),
+            v["result"]["Matches"].as_array().map(Vec::len)
+        ),
+        (Some(2), Some(1))
+    );
+}
+
+#[test]
+fn query_not_found_hint() {
+    let one = [vanilla()];
+    assert_eq!(
+        err(&one, &class_q("Nope", false, false)),
+        "no class \"Nope\"; try: dayzmake api find Nope\n  (searched vanilla only; add -m <mod> or -m all for mods)"
+    );
+    let two = both();
+    assert_eq!(
+        err(&two, &class_q("Nope", false, false)),
+        "no class \"Nope\"; try: dayzmake api find Nope"
+    );
+    assert!(
+        err(
+            &one,
+            &Query::Enum {
+                name: "Nope".into()
+            }
+        )
+        .starts_with("no enum \"Nope\"; try: dayzmake api find Nope")
+    );
+    assert!(
+        err(
+            &one,
+            &Query::Src {
+                name: "Nope".into()
+            }
+        )
+        .starts_with("no class or enum \"Nope\"")
+    );
+    assert!(
+        err(
+            &one,
+            &Query::Chain {
+                name: "Nope".into()
+            }
+        )
+        .starts_with("no class \"Nope\"")
+    );
+    assert!(
+        err(
+            &one,
+            &Query::Sub {
+                name: "Nope".into(),
+                all: false
+            }
+        )
+        .starts_with("no class \"Nope\"")
+    );
+    // mods_only on a class that only vanilla has
+    assert!(err(&two, &class_q("Zeta", false, true)).starts_with("no class \"Zeta\""));
+}
+
+#[test]
+fn find_invalid_regex_is_an_error() {
+    let idx = [vanilla()];
+    let q = Query::Find {
+        regex: "(".into(),
+        class: None,
+    };
+    assert!(run_query(&idx, &q).is_err());
+    let q = Query::Defines {
+        regex: Some("[".into()),
+    };
+    assert!(run_query(&idx, &q).is_err());
+    // a huge pattern is rejected, not compiled without limit
+    let q = Query::Find {
+        regex: "(a{1000}){1000}{1000}".into(),
+        class: None,
+    };
+    assert!(run_query(&idx, &q).is_err());
+}
+
+#[test]
+fn query_serializes() {
+    let q = Query::Class {
+        name: "A".into(),
+        inherited: true,
+        mods_only: false,
+    };
+    let v = serde_json::to_value(&q).expect("json");
+    assert_eq!(v["Class"]["name"], "A");
 }
