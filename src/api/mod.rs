@@ -5,6 +5,8 @@ use std::fmt::Write as _;
 use std::io::Error;
 use std::path::PathBuf;
 
+use serde::Serialize;
+
 use crate::error;
 use crate::pbo::{PBO, safe_relative_path};
 use cache::dir_hash;
@@ -71,11 +73,30 @@ fn locate(ctx: &ApiContext) -> Result<Located, Error> {
             }
         }
     }
+    unique_names(&mut mods);
     Ok(Located {
         scripts_pbo,
         build,
         mods,
     })
+}
+
+/// Make the index names unique and different from `vanilla`: a clash gets `-<workshop id>`, else `-2`, `-3`, ...
+fn unique_names(mods: &mut [ModSource]) {
+    let mut used: Vec<String> = vec!["vanilla".to_string()];
+    for m in mods {
+        if used.contains(&m.name) {
+            let base = m.name.clone();
+            let mut candidate = m.workshop.map(|id| format!("{base}-{id}"));
+            let mut n = 2;
+            while candidate.as_ref().is_none_or(|c| used.contains(c)) {
+                candidate = Some(format!("{base}-{n}"));
+                n += 1;
+            }
+            m.name = candidate.unwrap_or(base);
+        }
+        used.push(m.name.clone());
+    }
 }
 
 fn mod_key(m: &ModSource, branch: Branch) -> String {
@@ -115,12 +136,29 @@ pub fn load_indexes(ctx: &ApiContext) -> Result<Vec<ApiIndex>, Error> {
     Ok(load_keyed(ctx)?.into_iter().map(|(_, i)| i).collect())
 }
 
-/// The full text of every file that declares the class or enum `name`, read from its PBO again.
+/// One source file that declares a class or enum, with its full text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SrcContent {
+    /// Name of the index (`vanilla` or the mod).
+    pub index: String,
+    /// PBO file relative to its install.
+    pub pbo: String,
+    /// PBO prefix, `\`-separated.
+    pub prefix: String,
+    /// Entry name inside the PBO, `\`-separated.
+    pub path: String,
+    /// 1-based line of the declaration.
+    pub line: u32,
+    /// The whole file, lossily decoded.
+    pub text: String,
+}
+
+/// Every file that declares the class or enum `name`, read from its PBO again.
 ///
 /// # Errors
 ///
 /// Returns an error when the name is unknown or a PBO cannot be read.
-pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
+pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Error> {
     let found = locate(ctx)?;
     let indexes = load_indexes(ctx)?;
     let files = src_files(&indexes, name);
@@ -128,8 +166,9 @@ pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
         return Err(error!("no class or enum named \"{name}\""));
     }
     let mut pbos: BTreeMap<PathBuf, PBO> = BTreeMap::new();
-    let mut out = String::new();
+    let mut out = Vec::new();
     for f in files {
+        // Index names are unique and a mod is never called `vanilla` (see `unique_names`).
         let path = if f.index == "vanilla" {
             found.scripts_pbo.clone()
         } else {
@@ -154,6 +193,27 @@ pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
             .transpose()?
             .flatten()
             .ok_or_else(|| error!("{} not found in {}", f.path, path.display()))?;
+        out.push(SrcContent {
+            index: f.index,
+            pbo: f.pbo,
+            prefix: f.prefix,
+            path: f.path,
+            line: f.line,
+            text: String::from_utf8_lossy(&data).into_owned(),
+        });
+    }
+    Ok(out)
+}
+
+/// The text form of [`src_contents`]: `// ==== [<index>] <pbo> <prefix>\<path>:<line>` and the file, a blank
+/// line between files.
+///
+/// # Errors
+///
+/// See [`src_contents`].
+pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
+    let mut out = String::new();
+    for f in src_contents(ctx, name)? {
         if !out.is_empty() {
             out.push('\n');
         }
@@ -162,9 +222,8 @@ pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
             "// ==== [{}] {} {}\\{}:{}",
             f.index, f.pbo, f.prefix, f.path, f.line
         ); // writing to a String cannot fail
-        let text = String::from_utf8_lossy(&data);
-        out.push_str(&text);
-        if !text.ends_with('\n') {
+        out.push_str(&f.text);
+        if !f.text.ends_with('\n') {
             out.push('\n');
         }
     }

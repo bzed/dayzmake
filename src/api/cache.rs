@@ -1,9 +1,10 @@
 //! The index cache: one JSON file per index, rebuilt automatically when an input file changes.
 
 use std::fmt::Write as _;
-use std::fs;
-use std::io::Error;
+use std::fs::{self, OpenOptions};
+use std::io::{Error, ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
 use super::model::{ApiIndex, INDEX_FORMAT, InputStamp};
@@ -70,19 +71,41 @@ pub fn stamps(inputs: &[PathBuf]) -> Result<Vec<InputStamp>, Error> {
 fn load(file: &Path, want: &[InputStamp]) -> Option<ApiIndex> {
     let bytes = fs::read(file).ok()?;
     let index: ApiIndex = serde_json::from_slice(&bytes).ok()?;
-    (index.format == INDEX_FORMAT && index.inputs == want).then_some(index)
+    (index.format == INDEX_FORMAT
+        && index.version == env!("CARGO_PKG_VERSION")
+        && index.inputs == want)
+        .then_some(index)
 }
 
-/// Write `index` to `file` through a temp file in the same directory and a rename.
+/// Counter that makes temp file names unique within the process.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `index` through an exclusively created temp file in the same directory and a rename.
 fn store(dir: &Path, key: &str, index: &ApiIndex) -> Result<(), Error> {
     let json = serde_json::to_vec(index).map_err(|e| error!("cannot serialize the index: {e}"))?;
-    let tmp = dir.join(format!(".{key}.{}.tmp", std::process::id()));
-    fs::write(&tmp, json).map_err(|e| error!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, dir.join(format!("{key}.json"))).map_err(|e| {
-        // The rename failed; do not leave the temp file behind. Its removal error adds nothing.
+    let mut attempts = 0;
+    let (tmp, mut file) = loop {
+        let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".{key}.{}.{n}.tmp", std::process::id()));
+        match OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => break (tmp, f),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists && attempts < 5 => attempts += 1,
+            Err(e) => return Err(error!("{}: {e}", tmp.display())),
+        }
+    };
+    // Whatever fails from here on, do not leave the temp file behind. Its removal error adds nothing.
+    let result = file
+        .write_all(&json)
+        .and_then(|()| file.sync_all())
+        .map_err(|e| error!("{}: {e}", tmp.display()))
+        .and_then(|()| {
+            fs::rename(&tmp, dir.join(format!("{key}.json")))
+                .map_err(|e| error!("cannot store the index {key}: {e}"))
+        });
+    if result.is_err() {
         let _ = fs::remove_file(&tmp);
-        error!("cannot store the index {key}: {e}")
-    })
+    }
+    result
 }
 
 /// The cached index `key`, or the result of `build` when there is none, it does not parse, has another

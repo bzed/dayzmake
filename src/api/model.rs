@@ -141,6 +141,9 @@ pub struct Enum {
 pub struct ApiIndex {
     /// Layout version, `INDEX_FORMAT`.
     pub format: u32,
+    /// The dayzmake version that built the index; the cache treats other versions as stale.
+    #[serde(default)]
+    pub version: String,
     /// `vanilla` or the mod name.
     pub name: String,
     /// Human-readable title.
@@ -171,6 +174,7 @@ impl ApiIndex {
     pub fn new(name: &str, title: &str, build: &str) -> Self {
         ApiIndex {
             format: INDEX_FORMAT,
+            version: env!("CARGO_PKG_VERSION").to_string(),
             name: name.to_string(),
             title: title.to_string(),
             build: build.to_string(),

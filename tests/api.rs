@@ -2088,4 +2088,89 @@ mod from_pbo {
         assert_eq!(out.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&out.stderr).contains("not installed"));
     }
+
+    #[test]
+    fn api_src_cat_json() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--cat", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let files = v["files"].as_array().expect("files");
+        assert_eq!(files[0]["index"], "vanilla");
+        assert!(files[0]["line"].is_number());
+        assert!(
+            files[0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("private void Secret(int a) { m_Secret = a; }")
+        );
+    }
+
+    #[test]
+    fn cache_version_change_rebuilds() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let file = w.cache_file("vanilla-stable.json");
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&fs::read(&file).expect("read")).expect("json");
+        v["version"] = serde_json::json!("0.0.0-old");
+        v["classes"] = serde_json::json!({});
+        fs::write(&file, serde_json::to_vec(&v).expect("ser")).expect("write");
+        let (code, out, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"));
+        let v: serde_json::Value =
+            serde_json::from_slice(&fs::read(&file).expect("read")).expect("json");
+        assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    fn one_class_mod(dir: &Path, class: &str) {
+        let src = tempfile::tempdir().expect("tmp");
+        fs::write(
+            src.path().join("X.c"),
+            format!("class {class}\n{{\n\tvoid Only{class}();\n}}\n"),
+        )
+        .expect("w");
+        make_pbo(src.path(), &[], Some("m\\x"), &dir.join("addons/x.pbo"));
+    }
+
+    #[test]
+    fn mod_named_vanilla_is_renamed() {
+        let w = World::new();
+        let dir = w.home.join("vanilla");
+        one_class_mod(&dir, "FromMod");
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "src", "FromMod", "-m", &m, "--cat", "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("// ==== [vanilla-2] addons/x.pbo"), "{out}");
+        assert!(out.contains("OnlyFromMod"), "{out}");
+        let (_, out, _) = w.run(&["api", "class", "FromMod", "-m", &m, "-v"]);
+        assert!(
+            out.contains("# vanilla: ") && out.contains("# vanilla-2: "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn duplicate_mod_names_get_suffix() {
+        let w = World::new();
+        let a = w.home.join("a/@M");
+        let b = w.home.join("b/@M");
+        one_class_mod(&a, "ClassA");
+        one_class_mod(&b, "ClassB");
+        let list = format!("{},{}", a.display(), b.display());
+        let (code, out, err) = w.run(&["api", "class", "ClassB", "-m", &list, "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("# _M: ") && out.contains("# _M-2: "), "{out}");
+        let (code, out, err) = w.run(&["api", "src", "ClassA", "-m", &list, "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("[_M] ") && out.contains("OnlyClassA"), "{out}");
+        let (code, out, err) = w.run(&["api", "src", "ClassB", "-m", &list, "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("[_M-2] ") && out.contains("OnlyClassB"),
+            "{out}"
+        );
+        assert!(!out.contains("OnlyClassA"));
+    }
 }

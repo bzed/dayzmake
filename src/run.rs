@@ -356,7 +356,14 @@ fn run_api(args: &Args) -> Result<(), Error> {
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
         if args.cmd_src && args.flag_cat {
-            print!("{}", api::cat_sources(&ctx, &args.arg_name)?);
+            if args.flag_json {
+                let files = api::src_contents(&ctx, &args.arg_name)?;
+                let json = serde_json::to_string(&serde_json::json!({ "files": files }))
+                    .map_err(|e| error!("cannot serialize: {e}"))?;
+                println!("{json}");
+            } else {
+                print!("{}", api::cat_sources(&ctx, &args.arg_name)?);
+            }
             return Ok(());
         }
         let name = args.arg_name.clone();
