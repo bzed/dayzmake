@@ -495,6 +495,47 @@ how it is stored or printed.
 
 ---
 
+## Task 4: Query all installed mods (user request 2026-11-14, runs after Task 3)
+
+### Task 4.1: Discover every installed mod and query them together
+
+**Files:**
+- Modify: `src/api/source.rs`, `src/api/mod.rs`, `src/api/cache.rs` (if needed), `src/run.rs`, `src/mcp.rs`
+  (`mods` argument docs + new `api_mods` tool), `README.md`
+- Test: `tests/api.rs`, `tests/mcp.rs`
+
+**Interfaces:**
+- Consumes: `ModSpec`/`parse_mods`/`resolve_mod`/`build_mod`/`cached`/`load_indexes` (Task 2.4), `workshop_dir`,
+  `find_game` (Task 2.1), MCP tool table (Task 3.2).
+- Produces in `src/api/source.rs`:
+  - `pub struct InstalledMod { pub id: Option<u64>, pub name: String /* meta.cpp name, else dir name */, pub dir: PathBuf, pub has_scripts: bool }`
+  - `pub fn installed_mods(branch: Branch, libraries: &[PathBuf], game: Option<&Path>) -> Vec<InstalledMod>` — every
+    dir in the branch's workshop content dir plus every `@*` dir in the game install dir (DayZ launcher links), deduplicated by
+    canonical path (symlinks resolved), sorted by name; `has_scripts` = any `addons/*.pbo` (case-insensitive) whose
+    header lists a `.c` entry (read headers only via `PBO::read`; unreadable PBO → warning, not an error).
+  - `parse_mods` changes: `all` = every installed mod with `has_scripts` (not just the four aliases); new
+    `aliases` = the four aliases (old `all` behavior); a token that is neither alias, digits, nor an existing path
+    is matched case-insensitively against `InstalledMod.name` and the `@dir` name (unique match required, else an
+    error listing up to 10 candidates).
+- Building many mods: indexes not in the cache are built in parallel with `std::thread::scope`, at most
+  `available_parallelism()` threads; a mod that fails to build is skipped with a warning (the query still runs).
+  Freshness checks stay per mod (stat only). Index names must be unique: on a name clash append `-<workshop id>`.
+- CLI: `dayzmake api mods [--experimental] [--dayz <dir>] [--json]` lists installed mods: `<id or ->  <name>  <dir>  [scripts]`.
+  The `-m all` help text says it may take a while the first time (every mod is indexed once, then cached).
+- MCP: new tool `api_mods` (experimental) and the `mods` argument description of every api tool mentions `all`,
+  `aliases`, ids, names and dirs.
+
+- [ ] **Step 1: Tests:** fake Steam root with a workshop dir holding 3 mods (2 with script PBOs, 1 textures-only) and
+  a game dir with one `@link` symlink to one of them (`#[cfg(unix)]`): `installed_mods_dedups_links`,
+  `installed_mods_flags_scripts`, `mods_all_queries_every_scripted_mod` (a class from each mod found by `api find`),
+  `mods_by_name_case_insensitive`, `mods_ambiguous_name_is_an_error`, `mods_aliases_keeps_old_all`,
+  `broken_mod_is_skipped_with_warning` (garbage `.pbo`), `index_name_clash_gets_id_suffix`, `cli_api_mods_lists`,
+  `cli_api_mods_json`, `mcp_api_mods_tool`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** → PASS; `make check`. Manual smoke on the
+  real install: `time dayzmake api mods | wc -l`, `time dayzmake api find '^OnRPC' -m all --max 20` twice (first
+  run builds caches, second must be fast); report both times and the mod count in the task report.
+- [ ] **Step 5: Commit** `api: query all installed mods`.
+
 ## Final: whole-branch review (orchestrator, not a subagent task)
 
 - Review `git diff main...feature/untrusted-api-mcp` against this plan and the Review Focus list, fix findings,
