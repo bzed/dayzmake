@@ -721,3 +721,26 @@ fn mcp_api_source_cat_chunks_and_target() {
     assert!(!is_error(&t.replies[0]), "{}", text(&t.replies[0]));
     assert_eq!(fs::read_to_string(&target).expect("read"), full);
 }
+
+#[test]
+fn mcp_mods_arguments_mention_the_slow_first_run() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let r = run(
+        &[json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})],
+        tmp.path(),
+    );
+    let tools = r.replies[0]["result"]["tools"].as_array().expect("tools");
+    let find = |name: &str| tools.iter().find(|t| t["name"] == name).expect("tool");
+    let mods = find("api_class")["inputSchema"]["properties"]["mods"]["description"]
+        .as_str()
+        .expect("mods");
+    assert!(
+        mods.contains("first run") && mods.contains("api_update"),
+        "{mods}"
+    );
+    let api_mods = find("api_mods")["description"].as_str().expect("desc");
+    assert!(
+        api_mods.contains("first run") && api_mods.contains("api_update"),
+        "{api_mods}"
+    );
+}

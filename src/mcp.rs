@@ -328,7 +328,7 @@ const API_COMMON: [(&str, char, &str); 4] = [
     (
         "mods",
         's',
-        "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; can take a while the first time, each mod is indexed once and then cached), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+        "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
     ),
     (
         "experimental",
@@ -492,14 +492,14 @@ fn tools() -> Value {
         ),
         api_tool(
             "api_update",
-            "Rebuild the cached indexes now.",
+            "Rebuild the cached indexes now. With mods=all this indexes every installed mod, which warms the caches for later queries.",
             &[],
             &[],
             (false, false)
         ),
         tool(
             "api_mods",
-            "List the installed mods (workshop id, name, directory, whether they have scripts); the names and ids can be used in the mods argument of the other api tools. Reading them is quick; querying all of them with mods=all can take a while the first time.",
+            "List the installed mods (workshop id, name, directory, whether they have scripts); the names and ids can be used in the mods argument of the other api tools. Reading them is quick; querying all of them with mods=all builds the caches on the first run and can take a while; api_update with mods=all warms them.",
             &[
                 (
                     "experimental",
