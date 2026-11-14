@@ -302,8 +302,15 @@ how it is stored or printed.
 - Produces:
   - `pub enum Query { Class { name: String, inherited: bool, mods_only: bool }, Find { regex: String, class: Option<String> }, Sub { name: String, all: bool }, Enum { name: String }, Chain { name: String }, Src { name: String }, Defines { regex: Option<String> } }`
   - `pub struct SrcFile { pub index: String /* ApiIndex.name */, pub pbo: String, pub prefix: String, pub path: String, pub line: u32 }`
-  - `pub fn run_query(indexes: &[ApiIndex], query: &Query, max: usize) -> Result<Vec<String>, Error>` — `indexes[0]`
-    is vanilla; output lines, capped at `max` with a final `... N more lines (raise --max or narrow the query)`.
+  - `#[derive(Debug, Serialize)] pub enum QueryResult { Classes(Vec<ClassView>), Matches(Vec<Match>), Names(Vec<String>), Chain(Vec<String>), Enums(Vec<EnumView>), Sources(Vec<SrcFile>), Defines(Vec<DefineSet>) }`
+    — owned data carrying the index name next to the model data: `ClassView { index: String, class: Class }`,
+    `Match { index: String, scope: String /* class name, "fn", "var", "typedef" or enum name */, member: Option<Member>, item: Option<EnumItem>, class_name_match: bool }`,
+    `EnumView { index: String, en: Enum }`, `DefineSet { index: String, prefix: String, names: Vec<String> }`.
+  - `pub fn run_query(indexes: &[ApiIndex], query: &Query) -> Result<QueryResult, Error>` — `indexes[0]` is vanilla.
+  - `pub fn render_text(result: &QueryResult, multi: bool, max: usize) -> Vec<String>` — the text format below,
+    capped at `max` lines with a final `... N more lines (raise --max or narrow the query)`.
+  - `pub fn render_json(result: &QueryResult, max: usize) -> String` — `{"result": <QueryResult>, "truncated": N}`
+    via `serde_json`; items beyond `max` are dropped and counted in `truncated` (0 when complete).
   - `pub fn src_files(indexes: &[ApiIndex], name: &str) -> Vec<SrcFile>` (class or enum; every declaration).
 - Output format (decided here; compact, one declaration per line, readable by humans and LLMs):
   - class header: `class Name<T> : Base  [vanilla 3_Game]` (tag = index name, layers of its declarations;
@@ -321,7 +328,8 @@ how it is stored or printed.
     `  (searched vanilla only; add -m <mod> or -m all for mods)`. Invalid regex → `Err`, never a panic.
 - [ ] **Step 1: Tests** in `tests/api.rs` on indexes built from the fixtures (vanilla + the fixture mod as a second
   index): one test per query kind and option (`inherited`, `mods_only`, `class` filter, `all`, `max` cap line),
-  asserting exact output lines; `query_not_found_hint`, `find_invalid_regex_is_an_error`,
+  asserting exact `render_text` lines; `json_output_parses_and_has_members`, `json_truncation_count` for
+  `render_json`; `query_not_found_hint`, `find_invalid_regex_is_an_error`,
   `chain_stops_on_cycle` (classes A : B, B : A → terminates).
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4: Run** → PASS; `make fmt lint test`.
 - [ ] **Step 5: Commit** `api: query the script API index`.
@@ -378,7 +386,9 @@ how it is stored or printed.
   ```
   `--max` default 120. `--dayz <dir>`: a DayZ client/server install dir (uses `<dir>/dta/scripts.pbo`), skips Steam
   discovery for vanilla. `api update` forces a rebuild and prints `<key>: <classes> classes, <build>` per index.
-  Query errors exit 1 with the message on stderr. `--verbose` prints `# <index>: <build>` lines first.
+  Every query command also takes `[--json]` (add it to each `api` usage line except `update`): prints
+  `render_json` instead of `render_text`; errors stay on stderr as text. Query errors exit 1 with the message on
+  stderr. `--verbose` prints `# <index>: <build>` lines first (text mode only).
 
 - [ ] **Step 1: Tests** in `tests/api.rs` (fixture PBOs built at test time with `PBO::from_directory` from the
   fixture trees; a fake Steam root with `appmanifest_221100.acf` (`buildid 111`) and `appmanifest_1024020.acf`
@@ -387,7 +397,7 @@ how it is stored or printed.
   `branches_have_separate_caches`, `cache_reused_when_unchanged` (cache file mtime unchanged on the 2nd run),
   `cache_rebuilds_on_pbo_change`, `cache_write_is_atomic` (no temp files left; a corrupt `.json` is replaced),
   `cache_format_bump_rebuilds`, `api_src_cat_prints_full_file` (contains a method body line from the fixture),
-  `api_src_shows_line_numbers`, `api_mod_by_dir`, `api_mod_unsafe_prefix_skipped` (prefix `..\\evil` → warning, other
+  `api_src_shows_line_numbers`, `api_class_json` (stdout parses as JSON, members present), `api_mod_by_dir`, `api_mod_unsafe_prefix_skipped` (prefix `..\\evil` → warning, other
   PBO indexed, nothing written outside the cache dir), `api_missing_install_message` (exit 1, stderr names the branch
   and `--dayz`); `tests/cli.rs::cli_usage_lists_api`.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement**; printing only in `run.rs`.
