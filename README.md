@@ -146,7 +146,7 @@ dayzmake api update                           # rebuild the cache now
 ```
 
 - **Branch:** stable by default, `--experimental` for the experimental branch. The two branches have separate
-  indexes and caches. The install is found through Steam (`STEAM_ROOT` first); `--dayz <dir>` names a DayZ client or
+  indexes and caches. The install is found through Steam (`STEAM_ROOT` first; on Windows then the registry's `SteamPath`, `%ProgramFiles(x86)%\Steam` and `%ProgramFiles%\Steam`); `--dayz <dir>` names a DayZ client or
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;

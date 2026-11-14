@@ -58,7 +58,8 @@ pub struct AppInstall {
 }
 
 /// Steam roots of this machine: `$STEAM_ROOT` first, then the native, Debian/Ubuntu, Flatpak and
-/// Snap locations and macOS. Only existing roots with a `steamapps` directory, deduplicated.
+/// Snap locations and macOS; on Windows also the registry's Steam path and `%ProgramFiles(x86)%\Steam`,
+/// `%ProgramFiles%\Steam`. Only existing roots with a `steamapps` directory, deduplicated.
 #[must_use]
 pub fn steam_roots() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
@@ -78,6 +79,8 @@ pub fn steam_roots() -> Vec<PathBuf> {
             candidates.push(home.join(rel));
         }
     }
+    #[cfg(windows)]
+    candidates.extend(windows_steam_roots());
     let mut roots: Vec<PathBuf> = Vec::new();
     for c in candidates {
         if !c.join("steamapps").is_dir() {
@@ -91,6 +94,27 @@ pub fn steam_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Steam locations on Windows: the registry's `SteamPath`, then the default install folders. This code is
+/// only compiled on Windows.
+#[cfg(windows)]
+fn windows_steam_roots() -> Vec<PathBuf> {
+    use winreg::RegKey;
+    use winreg::enums::HKEY_CURRENT_USER;
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Ok(key) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Software\\Valve\\Steam")
+        && let Ok(path) = key.get_value::<String, _>("SteamPath")
+    {
+        out.push(PathBuf::from(path));
+    }
+    for var in ["ProgramFiles(x86)", "ProgramFiles"] {
+        if let Some(dir) = std::env::var_os(var).filter(|v| !v.is_empty()) {
+            out.push(PathBuf::from(dir).join("Steam"));
+        }
+    }
+    out
+}
+
 /// Read an untrusted text file: at most 1 MiB, invalid UTF-8 replaced.
 fn read_capped(path: &Path) -> Option<String> {
     let mut buf = Vec::new();
@@ -102,7 +126,7 @@ fn read_capped(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// The values of every `"key" "value"` line, with `\\` unescaped to `\`.
+/// The raw values of every `"key" "value"` line (see [`vdf_values_unescaped`] for paths).
 fn vdf_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
     text.lines()
         .filter_map(|line| {
@@ -117,7 +141,7 @@ fn vdf_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
         .collect()
 }
 
-/// Like [`vdf_values`] but owned and unescaped.
+/// Like [`vdf_values`] but owned, with the `\\` escapes of Windows paths turned into `\`.
 fn vdf_values_unescaped(text: &str, key: &str) -> Vec<String> {
     vdf_values(text, key)
         .into_iter()
@@ -217,6 +241,13 @@ mod tests {
         if with_pbo {
             fs::write(d.join("dta/scripts.pbo"), b"x").unwrap();
         }
+    }
+
+    #[test]
+    fn vdf_paths_are_unescaped() {
+        let text = "\"libraryfolders\"\n{\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\\\\x\"\n\t}\n}\n";
+        assert_eq!(vdf_values(text, "path"), ["D:\\\\SteamLibrary\\\\x"]);
+        assert_eq!(vdf_values_unescaped(text, "path"), ["D:\\SteamLibrary\\x"]);
     }
 
     #[test]
