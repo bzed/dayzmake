@@ -4,15 +4,20 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Error;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::Serialize;
 
 use crate::error;
+use crate::error::warning;
 use crate::pbo::{PBO, safe_relative_path};
 use cache::dir_hash;
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
-use source::{ModSource, ModSpec, build_mod, build_vanilla, parse_mods, resolve_mod};
+use source::{
+    InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, installed_mods, installed_source,
+    match_installed, parse_mods, resolve_mod,
+};
 use steam::{Branch, find_game, libraries, steam_roots};
 
 /// What to load: the branch, where DayZ is, which mods.
@@ -22,7 +27,8 @@ pub struct ApiContext {
     pub branch: Branch,
     /// A DayZ client or server directory (`<dir>/dta/scripts.pbo`); Steam discovery is skipped when set.
     pub dayz: Option<PathBuf>,
-    /// Comma separated mod list (see `source::parse_mods`); empty means vanilla only.
+    /// Comma separated mod list (see `source::parse_mods`); empty means vanilla only. `all` indexes every
+    /// installed mod with scripts, which can take a while the first time.
     pub mods: String,
     /// Rebuild the indexes even when the cache is current.
     pub refresh: bool,
@@ -33,6 +39,47 @@ struct Located {
     scripts_pbo: PathBuf,
     build: String,
     mods: Vec<ModSource>,
+}
+
+/// Where the game is installed: `--dayz` or the Steam install.
+fn game_dir(ctx: &ApiContext, libs: &[PathBuf]) -> Option<PathBuf> {
+    ctx.dayz
+        .clone()
+        .or_else(|| find_game(ctx.branch, libs).map(|g| g.dir))
+}
+
+/// Every installed mod of the context, for `dayzmake api mods`.
+#[must_use]
+pub fn list_mods(ctx: &ApiContext) -> Vec<InstalledMod> {
+    let libs = libraries(&steam_roots());
+    installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref())
+}
+
+/// `dayzmake api mods`: one line per installed mod (`<id or ->  <name>  <dir>  [scripts]`), or JSON
+/// (`{"mods": [...]}`).
+///
+/// # Errors
+///
+/// Returns an error when the JSON cannot be produced.
+pub fn mods_text(ctx: &ApiContext, json: bool) -> Result<String, Error> {
+    let mods = list_mods(ctx);
+    if json {
+        return serde_json::to_string(&serde_json::json!({ "mods": mods }))
+            .map_err(|e| error!("cannot serialize: {e}"));
+    }
+    Ok(mods
+        .iter()
+        .map(|m| {
+            format!(
+                "{}  {}  {}{}",
+                m.id.map_or_else(|| "-".to_string(), |i| i.to_string()),
+                m.name,
+                m.dir.display(),
+                if m.has_scripts { "  scripts" } else { "" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 fn locate(ctx: &ApiContext) -> Result<Located, Error> {
@@ -63,13 +110,39 @@ fn locate(ctx: &ApiContext) -> Result<Located, Error> {
             .split(',')
             .map(|t| t.trim().to_ascii_lowercase())
             .collect();
-        for spec in parse_mods(&ctx.mods)? {
-            match resolve_mod(&spec, ctx.branch, &libs) {
-                Ok(m) => mods.push(m),
-                // `all` means the installed aliases; an alias that is named explicitly must be there.
-                Err(_) if matches!(&spec, ModSpec::Alias(a, _) if !explicit.iter().any(|e| e == a)) =>
-                    {}
-                Err(e) => return Err(e),
+        let specs = parse_mods(&ctx.mods)?;
+        let installed = if specs
+            .iter()
+            .any(|s| matches!(s, ModSpec::All | ModSpec::Name(_)))
+        {
+            installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref())
+        } else {
+            Vec::new()
+        };
+        let mut add = |m: ModSource| {
+            let canon = m.dir.canonicalize().unwrap_or_else(|_| m.dir.clone());
+            if !mods
+                .iter()
+                .any(|o| o.dir.canonicalize().unwrap_or_else(|_| o.dir.clone()) == canon)
+            {
+                mods.push(m);
+            }
+        };
+        for spec in specs {
+            match &spec {
+                ModSpec::All => {
+                    for m in installed.iter().filter(|m| m.has_scripts) {
+                        add(installed_source(m)?);
+                    }
+                }
+                ModSpec::Name(token) => add(installed_source(match_installed(token, &installed)?)?),
+                _ => match resolve_mod(&spec, ctx.branch, &libs) {
+                    Ok(m) => add(m),
+                    // `aliases` means the installed aliases; an alias that is named explicitly must be there.
+                    Err(_) if matches!(&spec, ModSpec::Alias(a, _) if !explicit.iter().any(|e| e == a)) =>
+                        {}
+                    Err(e) => return Err(e),
+                },
             }
         }
     }
@@ -103,14 +176,65 @@ fn mod_key(m: &ModSource, branch: Branch) -> String {
     format!("mod-{}-{}-{}", m.name, branch.name(), dir_hash(&m.dir))
 }
 
-/// The indexes with their cache keys: vanilla first, then the selected mods.
-///
-/// # Errors
-///
-/// Returns an error when the install or a selected mod is missing or a PBO or the cache cannot be read.
-pub fn load_keyed(ctx: &ApiContext) -> Result<Vec<(String, ApiIndex)>, Error> {
-    let found = locate(ctx)?;
-    let mut out = Vec::new();
+/// How many mod indexes are built at once.
+fn workers(jobs: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(jobs)
+        .max(1)
+}
+
+/// The cached or freshly built index of every mod, in the order of `mods`. A mod that fails is skipped with a
+/// warning; so is one whose worker thread panicked.
+fn load_mods(found: &Located, branch: Branch, refresh: bool) -> Vec<Option<(String, ApiIndex)>> {
+    let next = AtomicUsize::new(0);
+    let mut out: Vec<Option<(String, ApiIndex)>> = found.mods.iter().map(|_| None).collect();
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..workers(found.mods.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(m) = found.mods.get(i) else {
+                            break;
+                        };
+                        let key = mod_key(m, branch);
+                        match cache::cached(&key, &m.pbos, refresh, || build_mod(m, branch)) {
+                            Ok(index) => done.push((i, key, index)),
+                            Err(e) => warning(
+                                format!("skipping mod {}: {e}", m.name),
+                                Some("api-bad-mod"),
+                                (Some(m.dir.display().to_string()), None),
+                            ),
+                        }
+                    }
+                    done
+                })
+            })
+            .collect();
+        for handle in handles {
+            match handle.join() {
+                Ok(done) => {
+                    for (i, key, index) in done {
+                        if let Some(slot) = out.get_mut(i) {
+                            *slot = Some((key, index));
+                        }
+                    }
+                }
+                Err(_) => warning(
+                    "an indexing thread panicked; its mods are skipped",
+                    Some("api-bad-mod"),
+                    (None, None),
+                ),
+            }
+        }
+    });
+    out
+}
+
+/// The indexes of vanilla and of the located mods, with their cache keys.
+fn load_located(ctx: &ApiContext, found: &Located) -> Result<Vec<(String, ApiIndex)>, Error> {
     let key = format!("vanilla-{}", ctx.branch.name());
     let index = cache::cached(
         &key,
@@ -118,13 +242,24 @@ pub fn load_keyed(ctx: &ApiContext) -> Result<Vec<(String, ApiIndex)>, Error> {
         ctx.refresh,
         || build_vanilla(&found.scripts_pbo, ctx.branch, &found.build),
     )?;
-    out.push((key, index));
-    for m in &found.mods {
-        let key = mod_key(m, ctx.branch);
-        let index = cache::cached(&key, &m.pbos, ctx.refresh, || build_mod(m, ctx.branch))?;
-        out.push((key, index));
-    }
+    let mut out = vec![(key, index)];
+    out.extend(
+        load_mods(found, ctx.branch, ctx.refresh)
+            .into_iter()
+            .flatten(),
+    );
     Ok(out)
+}
+
+/// The indexes with their cache keys: vanilla first, then the selected mods. The mods that are not cached
+/// are indexed in parallel.
+///
+/// # Errors
+///
+/// Returns an error when the install or a selected mod is missing or the vanilla PBO or the cache cannot be
+/// read. A mod that cannot be indexed is skipped with a warning.
+pub fn load_keyed(ctx: &ApiContext) -> Result<Vec<(String, ApiIndex)>, Error> {
+    load_located(ctx, &locate(ctx)?)
 }
 
 /// The indexes to query: vanilla at position 0, then the selected mods. Stale caches are rebuilt.
@@ -160,7 +295,10 @@ pub struct SrcContent {
 /// Returns an error when the name is unknown or a PBO cannot be read.
 pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Error> {
     let found = locate(ctx)?;
-    let indexes = load_indexes(ctx)?;
+    let indexes: Vec<ApiIndex> = load_located(ctx, &found)?
+        .into_iter()
+        .map(|(_, i)| i)
+        .collect();
     let files = src_files(&indexes, name);
     if files.is_empty() {
         return Err(error!("no class or enum named \"{name}\""));

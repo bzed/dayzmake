@@ -32,6 +32,29 @@ struct PBOHeader {
     data_size: u32,
 }
 
+/// Longest entry name or header extension string `PBO::read_headers` accepts.
+const MAX_HEADER_STRING: usize = 4096;
+/// Most entries `PBO::read_headers` accepts.
+const MAX_HEADER_ENTRIES: usize = 1 << 20;
+/// Most header extensions `PBO::read_headers` accepts.
+const MAX_HEADER_EXTENSIONS: usize = 1024;
+
+/// A NUL terminated string of at most `MAX_HEADER_STRING` bytes.
+fn read_bounded_cstring<I: Read>(input: &mut I) -> Result<Vec<u8>, Error> {
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut buf = [0u8; 1];
+    loop {
+        input.read_exact(&mut buf)?;
+        if buf[0] == 0 {
+            return Ok(bytes);
+        }
+        if bytes.len() >= MAX_HEADER_STRING {
+            return Err(error!("PBO header string is too long."));
+        }
+        bytes.push(buf[0]);
+    }
+}
+
 /// Decodes an entry name. Names that are not valid UTF-8 are decoded as windows-1252, which maps all
 /// 256 byte values to distinct characters, so the original bytes are returned as well.
 fn decode_name(bytes: Vec<u8>) -> (String, Option<Vec<u8>>) {
@@ -346,6 +369,56 @@ impl PBO {
             headers,
             checksum: Some(checksum),
         })
+    }
+
+    /// Reads only the header block of a PBO: the header extensions and the entry names, in file order.
+    /// The entry data is never read, so this is cheap for PBOs of any size. Pass a buffered reader.
+    ///
+    /// The input is untrusted: every name is limited to `MAX_HEADER_STRING` bytes, the number of entries
+    /// and extensions are limited, and nothing is allocated from a size in the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header block is truncated, malformed or exceeds the limits.
+    pub fn read_headers<I: Read>(
+        input: &mut I,
+    ) -> Result<(HashMap<String, String>, Vec<String>), Error> {
+        let mut extensions: HashMap<String, String> = HashMap::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut first = true;
+        loop {
+            let name = read_bounded_cstring(input)?;
+            let mut fields = [0u8; 20];
+            input.read_exact(&mut fields)?;
+            let packing_method = fields
+                .first_chunk::<4>()
+                .map_or(0, |b| u32::from_le_bytes(*b));
+            if packing_method == 0x5665_7273 {
+                if !first {
+                    return Err(error!("Duplicate version header in PBO."));
+                }
+                loop {
+                    let key = decode_name(read_bounded_cstring(input)?).0;
+                    if key.is_empty() {
+                        break;
+                    }
+                    if extensions.len() >= MAX_HEADER_EXTENSIONS {
+                        return Err(error!("PBO has too many header extensions."));
+                    }
+                    let value = decode_name(read_bounded_cstring(input)?).0;
+                    extensions.insert(key, value);
+                }
+            } else if name.is_empty() {
+                break;
+            } else {
+                if names.len() >= MAX_HEADER_ENTRIES {
+                    return Err(error!("PBO has too many entries."));
+                }
+                names.push(decode_name(name).0);
+            }
+            first = false;
+        }
+        Ok((extensions, names))
     }
 
     /// Constructs a PBO from a directory with optional binarization.

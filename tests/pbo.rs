@@ -374,3 +374,31 @@ fn inspect_and_cat_write_to_the_given_writer() {
     dayzmake::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
     assert_eq!(out, b"hello");
 }
+
+#[test]
+fn read_headers_lists_names_without_the_data() {
+    let pbo = crafted_pbo(&[("a.txt", b"hello"), ("sub\\b.c", b"x")], Some("pre"));
+    let (ext, names) = PBO::read_headers(&mut &pbo[..]).unwrap();
+    assert_eq!(ext.get("prefix").map(String::as_str), Some("pre"));
+    assert_eq!(names, ["a.txt", "sub\\b.c"]);
+    // Only the header block is needed: cut off right after it.
+    let end = pbo.len() - 6 - 21;
+    let (_, names) = PBO::read_headers(&mut &pbo[..end]).unwrap();
+    assert_eq!(names.len(), 2);
+}
+
+#[test]
+fn read_headers_rejects_hostile_input() {
+    assert!(PBO::read_headers(&mut &b""[..]).is_err());
+    assert!(PBO::read_headers(&mut &b"abc"[..]).is_err());
+    // an endless name
+    let long = vec![b'a'; 100_000];
+    assert!(PBO::read_headers(&mut &long[..]).is_err());
+    // too many entries: each header is a one byte name, a NUL and 20 bytes
+    let mut many = Vec::new();
+    for _ in 0..=(1 << 20) {
+        many.extend_from_slice(b"a\0");
+        many.extend_from_slice(&[0; 20]);
+    }
+    assert!(PBO::read_headers(&mut &many[..]).is_err());
+}

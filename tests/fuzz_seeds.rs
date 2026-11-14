@@ -27,6 +27,8 @@ fn seeds(target: &str) -> io::Result<Vec<Vec<u8>>> {
 #[test]
 fn pbo_read_seeds() -> io::Result<()> {
     for data in seeds("pbo_read")? {
+        let mut headers = &data[..];
+        let _ = PBO::read_headers(&mut headers);
         let mut input = &data[..];
         if let Ok(pbo) = PBO::read(&mut input) {
             for name in pbo.files.keys() {

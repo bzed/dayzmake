@@ -45,6 +45,7 @@ Usage:
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
+    dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -68,7 +69,8 @@ Commands:
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
-                with -m, from mods: class, find, sub, enum, chain, src, defines, update.
+                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
@@ -89,8 +91,11 @@ Options:
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
-    -m --mod <mods>             api: also query mods: cf, cot, dabs, expansion, all (those installed),
-                                a workshop id or a mod directory; comma separated.
+    -m --mod <mods>             api: also query mods, comma separated: cf, cot, dabs, expansion, aliases
+                                (those four, if installed), all (every installed mod with scripts; the
+                                first run can take a while: each mod is indexed once, then cached), a
+                                workshop id, a mod name or @dir name (see `api mods`) or a directory.
+                                Without -m only vanilla is queried.
     --refresh                   api: rebuild the cached index.
     --max <n>                   api: print at most n lines (or JSON items). [default: 120]
     --inherited                 api class: also show the base classes.
@@ -136,6 +141,7 @@ pub struct Args {
     cmd_src: bool,
     cmd_defines: bool,
     cmd_update: bool,
+    cmd_mods: bool,
     flag_experimental: bool,
     flag_dayz: Option<String>,
     flag_mod: Option<String>,
@@ -344,6 +350,13 @@ fn run_api(args: &Args) -> Result<(), Error> {
     };
     #[expect(clippy::print_stdout, reason = "CLI command output")]
     {
+        if args.cmd_mods {
+            let text = api::mods_text(&ctx, args.flag_json)?;
+            if !text.is_empty() {
+                println!("{text}");
+            }
+            return Ok(());
+        }
         if args.cmd_update {
             for line in api::update_lines(&ctx)? {
                 println!("{line}");

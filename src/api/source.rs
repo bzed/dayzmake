@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
-use std::io::{Cursor, Error, Read};
+use std::io::{BufReader, Cursor, Error, Read};
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
@@ -38,10 +38,15 @@ pub enum ModSpec {
     Workshop(u64),
     /// A mod directory.
     Dir(PathBuf),
+    /// Every installed mod that has scripts.
+    All,
+    /// The name of an installed mod (its `meta.cpp` name or its `@dir` name), matched case-insensitively.
+    Name(String),
 }
 
-/// Parse a comma separated mod list: an alias (`cf`, `cot`, `dabs`, `expansion`), `all` (the four aliases),
-/// a workshop id (digits) or a directory. Duplicates are dropped.
+/// Parse a comma separated mod list: an alias (`cf`, `cot`, `dabs`, `expansion`), `aliases` (all four),
+/// `all` (every installed mod with scripts), a workshop id (digits), an existing path or anything with a
+/// path separator (a directory), or else the name of an installed mod. Duplicates are dropped.
 ///
 /// # Errors
 ///
@@ -59,6 +64,8 @@ pub fn parse_mods(spec: &str) -> Result<Vec<ModSpec>, Error> {
         }
         let lower = token.to_ascii_lowercase();
         if lower == "all" {
+            add(ModSpec::All);
+        } else if lower == "aliases" {
             for (name, id) in ALIASES {
                 add(ModSpec::Alias(name, id));
             }
@@ -69,8 +76,10 @@ pub fn parse_mods(spec: &str) -> Result<Vec<ModSpec>, Error> {
                 .parse::<u64>()
                 .map_err(|_| error!("workshop id \"{token}\" is out of range"))?;
             add(ModSpec::Workshop(id));
-        } else {
+        } else if Path::new(token).exists() || token.contains(['/', '\\']) {
             add(ModSpec::Dir(PathBuf::from(token)));
+        } else {
+            add(ModSpec::Name(token.to_string()));
         }
     }
     Ok(out)
@@ -135,6 +144,11 @@ pub fn resolve_mod(
             workshop_mod_dir(&id.to_string(), *id, branch, libraries)?,
             Some(*id),
         ),
+        ModSpec::All | ModSpec::Name(_) => {
+            return Err(error!(
+                "mod {spec:?} must be resolved against the installed mods"
+            ));
+        }
         ModSpec::Dir(path) => {
             let dir = path
                 .canonicalize()
@@ -302,6 +316,33 @@ fn config_text(pbo: &PBO, origin: &str) -> String {
     String::new()
 }
 
+/// The extension and entry names of a PBO, read from its header block only.
+fn pbo_entry_names(path: &Path) -> Result<Vec<String>, Error> {
+    let file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+    PBO::read_headers(&mut BufReader::new(file))
+        .map(|(_, names)| names)
+        .map_err(|e| error!("{}: {e}", path.display()))
+}
+
+/// The extension of an entry name (either path separator).
+fn entry_extension(name: &str) -> Option<&str> {
+    name.rsplit(['/', '\\'])
+        .next()?
+        .rsplit_once('.')
+        .map(|(_, e)| e)
+}
+
+/// Whether the PBO has a `.c` script or a `config.*` entry (header block only; nothing else is read).
+fn has_sources(path: &Path) -> Result<bool, Error> {
+    Ok(pbo_entry_names(path)?.iter().any(|n| {
+        entry_extension(n).is_some_and(|e| e.eq_ignore_ascii_case("c"))
+            || n.rsplit(['/', '\\'])
+                .next()
+                .and_then(|f| f.split_once('.'))
+                .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("config"))
+    }))
+}
+
 /// One readable PBO of a mod.
 struct ModPbo {
     prefix: String,
@@ -341,6 +382,18 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
     let mut pbos: Vec<ModPbo> = Vec::new();
     for path in &m.pbos {
         let origin = path.display().to_string();
+        match has_sources(path) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                warning(
+                    format!("skipping unreadable PBO: {e}"),
+                    Some("api-bad-pbo"),
+                    (Some(origin), None),
+                );
+                continue;
+            }
+        }
         let pbo = match read_pbo(path) {
             Ok(p) => p,
             Err(e) => {
@@ -403,4 +456,193 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
     }
     index_scripts(&files, &defines, &mut index);
     Ok(index)
+}
+
+/// A mod found on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct InstalledMod {
+    /// Workshop id, when the mod lives in the workshop content directory.
+    pub id: Option<u64>,
+    /// The `name` of its `meta.cpp`, else the directory name.
+    pub name: String,
+    /// The mod directory (symlinks resolved).
+    pub dir: PathBuf,
+    /// Whether one of its PBOs has a `.c` entry.
+    pub has_scripts: bool,
+    /// The name of the `@` directory in the game install that links to it, when there is one.
+    pub link: Option<String>,
+}
+
+/// Whether any `addons/*.pbo` of `dir` lists a `.c` entry. Only the PBO headers are read; an unreadable PBO
+/// is a warning.
+fn dir_has_scripts(dir: &Path) -> bool {
+    let Some(addons) = child_ignore_case(dir, "addons").filter(|a| a.is_dir()) else {
+        return false;
+    };
+    let Ok(rd) = fs::read_dir(addons) else {
+        return false;
+    };
+    let mut pbos: Vec<PathBuf> = rd
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pbo")))
+        .collect();
+    pbos.sort();
+    for path in pbos {
+        match pbo_entry_names(&path) {
+            Ok(names) => {
+                if names
+                    .iter()
+                    .any(|n| entry_extension(n).is_some_and(|e| e.eq_ignore_ascii_case("c")))
+                {
+                    return true;
+                }
+            }
+            Err(e) => warning(
+                format!("cannot read the PBO header: {e}"),
+                Some("api-bad-pbo"),
+                (Some(path.display().to_string()), None),
+            ),
+        }
+    }
+    false
+}
+
+/// Every mod in the branch's workshop content directory plus every `@*` directory of the game install (the
+/// DayZ launcher links mods there), deduplicated by canonical path and sorted by name. Only directory
+/// listings, `meta.cpp` and PBO header blocks are read.
+#[must_use]
+pub fn installed_mods(
+    branch: Branch,
+    libraries: &[PathBuf],
+    game: Option<&Path>,
+) -> Vec<InstalledMod> {
+    let subdirs = |dir: &Path, only_at: bool| -> Vec<(String, PathBuf)> {
+        let Ok(rd) = fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        rd.filter_map(Result::ok)
+            .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+            .filter(|(n, p)| (!only_at || n.starts_with('@')) && p.is_dir())
+            .collect()
+    };
+    let workshop = workshop_dir(branch, libraries);
+    let workshop_canon = workshop.as_deref().and_then(|w| w.canonicalize().ok());
+    let mut found: Vec<InstalledMod> = Vec::new();
+    let candidates = workshop
+        .iter()
+        .flat_map(|w| subdirs(w, false))
+        .map(|(n, p)| (n, p, false))
+        .chain(
+            game.iter()
+                .flat_map(|g| subdirs(g, true))
+                .map(|(n, p)| (n, p, true)),
+        );
+    for (entry, path, is_link) in candidates {
+        let Ok(dir) = path.canonicalize() else {
+            continue;
+        };
+        if let Some(have) = found.iter_mut().find(|m| m.dir == dir) {
+            if is_link {
+                have.link.get_or_insert(entry);
+            }
+            continue;
+        }
+        let id = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|n| n.parse::<u64>().ok())
+            .filter(|_| dir.parent() == workshop_canon.as_deref());
+        let dir_name = dir
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        found.push(InstalledMod {
+            id,
+            name: meta_name(&dir).unwrap_or_else(|| if is_link { entry.clone() } else { dir_name }),
+            has_scripts: dir_has_scripts(&dir),
+            link: is_link.then_some(entry),
+            dir,
+        });
+    }
+    found.sort_by_cached_key(|m| (m.name.to_lowercase(), m.dir.clone()));
+    found
+}
+
+/// The installed mod named `token`: an exact (case-insensitive) match of its name or `@dir` name, else a
+/// unique substring match.
+///
+/// # Errors
+///
+/// Returns an error when nothing matches or the match is not unique; it lists up to 10 candidates.
+pub fn match_installed<'a>(
+    token: &str,
+    installed: &'a [InstalledMod],
+) -> Result<&'a InstalledMod, Error> {
+    let want = token.to_lowercase();
+    let pick = |exact: bool| -> Vec<&'a InstalledMod> {
+        installed
+            .iter()
+            .filter(|m| {
+                [Some(m.name.as_str()), m.link.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|n| {
+                        let n = n.to_lowercase();
+                        if exact { n == want } else { n.contains(&want) }
+                    })
+            })
+            .collect()
+    };
+    let mut hits = pick(true);
+    if hits.is_empty() {
+        hits = pick(false);
+    }
+    let list = |mods: &[&InstalledMod]| {
+        let mut names: Vec<String> = mods.iter().take(10).map(|m| m.name.clone()).collect();
+        if mods.len() > 10 {
+            names.push("...".to_string());
+        }
+        names.join(", ")
+    };
+    match hits.as_slice() {
+        [one] => Ok(one),
+        [] => {
+            let all: Vec<&InstalledMod> = installed.iter().collect();
+            Err(error!(
+                "no installed mod is named \"{token}\" (installed: {}); see `dayzmake api mods`",
+                if all.is_empty() {
+                    "none".to_string()
+                } else {
+                    list(&all)
+                }
+            ))
+        }
+        many => Err(error!(
+            "\"{token}\" matches more than one installed mod: {}",
+            list(many)
+        )),
+    }
+}
+
+/// The alias of a workshop id, if it has one.
+fn alias_of(id: u64) -> Option<&'static str> {
+    ALIASES.iter().find(|(_, i)| *i == id).map(|(n, _)| *n)
+}
+
+/// An installed mod as a source: the index name is the alias for the well-known ids, else its sanitized name.
+///
+/// # Errors
+///
+/// Returns an error when the directory vanished.
+pub fn installed_source(m: &InstalledMod) -> Result<ModSource, Error> {
+    let mut source = resolve_mod(&ModSpec::Dir(m.dir.clone()), Branch::Stable, &[])?;
+    let name =
+        m.id.and_then(alias_of)
+            .map_or_else(|| sanitize(&m.name), str::to_string);
+    if !name.is_empty() {
+        source.name = name;
+    }
+    source.workshop = m.id;
+    Ok(source)
 }

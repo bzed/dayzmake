@@ -2030,8 +2030,12 @@ mod from_pbo {
             parse_mods("cf").expect("cf"),
             vec![ModSpec::Alias("cf", 1_559_212_036)]
         );
-        let all = parse_mods("all,CF").expect("all");
+        let all = parse_mods("aliases,CF").expect("aliases");
         assert_eq!(all.len(), 4);
+        assert_eq!(
+            parse_mods("all,CF").expect("all"),
+            vec![ModSpec::All, ModSpec::Alias("cf", 1_559_212_036)]
+        );
         assert_eq!(
             parse_mods("123,some/dir").expect("list"),
             vec![ModSpec::Workshop(123), ModSpec::Dir("some/dir".into())]
@@ -2063,7 +2067,7 @@ mod from_pbo {
             &ws.join("1559212036/Addons/jm_cf.pbo"),
         );
         let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
-            .args(["api", "class", "CFBase", "-m", "all", "-v"])
+            .args(["api", "class", "CFBase", "-m", "aliases", "-v"])
             .env("STEAM_ROOT", &w.root)
             .env("DAYZMAKE_CACHE", &w.cache)
             .env("HOME", &w.home)
@@ -2172,5 +2176,239 @@ mod from_pbo {
             "{out}"
         );
         assert!(!out.contains("OnlyClassA"));
+    }
+
+    // ---- installed mods ----
+
+    const WS: &str = "steamapps/workshop/content/221100";
+
+    /// A workshop mod `id` with one script class `class` and a `meta.cpp` name.
+    fn ws_scripted(w: &World, id: u64, class: &str, name: &str) -> PathBuf {
+        let dir = w.root.join(WS).join(id.to_string());
+        one_class_mod(&dir, class);
+        fs::write(dir.join("meta.cpp"), format!("name = \"{name}\";\n")).expect("meta");
+        dir
+    }
+
+    /// A workshop mod `id` with a texture-only PBO.
+    fn ws_textures(w: &World, id: u64, name: &str) -> PathBuf {
+        let dir = w.root.join(WS).join(id.to_string());
+        let src = tempfile::tempdir().expect("tmp");
+        fs::write(src.path().join("a.paa"), "x").expect("w");
+        make_pbo(src.path(), &[], Some("t\\x"), &dir.join("addons/t.pbo"));
+        fs::write(dir.join("meta.cpp"), format!("name = \"{name}\";\n")).expect("meta");
+        dir
+    }
+
+    fn installed(w: &World) -> Vec<dayzmake::api::source::InstalledMod> {
+        let game = w.root.join("steamapps/common/DayZ");
+        dayzmake::api::source::installed_mods(
+            Branch::Stable,
+            std::slice::from_ref(&w.root),
+            Some(&game),
+        )
+    }
+
+    /// Three workshop mods (100 and 200 with scripts, 300 textures only) and an `@Link` to 200.
+    fn three_mods(w: &World) {
+        ws_scripted(w, 100, "ClassOne", "Alpha Mod");
+        ws_scripted(w, 200, "ClassTwo", "Beta Mod");
+        ws_textures(w, 300, "Gamma Textures");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            w.root.join(WS).join("200"),
+            w.root.join("steamapps/common/DayZ/@Link"),
+        )
+        .expect("symlink");
+    }
+
+    #[test]
+    fn installed_mods_dedups_links() {
+        let w = World::new();
+        three_mods(&w);
+        let mods = installed(&w);
+        assert_eq!(mods.len(), 3, "{mods:?}");
+        assert_eq!(
+            mods.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(),
+            ["Alpha Mod", "Beta Mod", "Gamma Textures"]
+        );
+        assert_eq!(mods[1].id, Some(200));
+    }
+
+    #[test]
+    fn installed_mods_flags_scripts() {
+        let w = World::new();
+        three_mods(&w);
+        let flags: Vec<bool> = installed(&w).iter().map(|m| m.has_scripts).collect();
+        assert_eq!(flags, [true, true, false]);
+    }
+
+    #[test]
+    fn installed_mods_in_game_dir_without_workshop_id() {
+        let w = World::new();
+        let dir = w.root.join("steamapps/common/DayZ/@Local");
+        one_class_mod(&dir, "LocalClass");
+        let mods = installed(&w);
+        assert_eq!(mods.len(), 1);
+        assert_eq!((mods[0].id, mods[0].name.as_str()), (None, "@Local"));
+        assert!(mods[0].has_scripts);
+    }
+
+    #[test]
+    fn mods_all_queries_every_scripted_mod() {
+        let w = World::new();
+        three_mods(&w);
+        let (code, out, err) = w.run(&["api", "find", "^Class(One|Two)$", "-m", "all", "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("class ClassOne") && out.contains("class ClassTwo"),
+            "{out}"
+        );
+        assert!(!out.contains("Gamma"), "{out}");
+        // Without -m only vanilla is queried.
+        let (code, out, err) = w.run(&["api", "find", "^Class(One|Two)$"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(!out.contains("class ClassOne"), "{out}");
+    }
+
+    #[test]
+    fn mods_by_name_case_insensitive() {
+        let w = World::new();
+        three_mods(&w);
+        let (code, out, err) = w.run(&["api", "class", "ClassOne", "-m", "ALPHA mod"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class ClassOne"), "{out}");
+        let (code, out, err) = w.run(&["api", "class", "ClassTwo", "-m", "@link"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class ClassTwo"), "{out}");
+    }
+
+    #[test]
+    fn mods_ambiguous_name_is_an_error() {
+        let w = World::new();
+        three_mods(&w);
+        let (code, _, err) = w.run(&["api", "class", "ClassOne", "-m", "mod"]);
+        assert_eq!(code, 1);
+        assert!(
+            err.contains("more than one") && err.contains("Alpha Mod") && err.contains("Beta Mod"),
+            "{err}"
+        );
+        let (code, _, err) = w.run(&["api", "class", "ClassOne", "-m", "nonexistent-thing"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("no installed mod"), "{err}");
+    }
+
+    #[test]
+    fn mods_aliases_keeps_old_all() {
+        let w = World::new();
+        let ws = w.root.join(WS);
+        make_pbo(
+            &fixture("mod/JM/CF"),
+            &[],
+            Some("jm\\cf"),
+            &ws.join("1559212036/Addons/jm_cf.pbo"),
+        );
+        ws_scripted(&w, 100, "ClassOne", "Alpha Mod");
+        let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", "aliases", "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("# cf:") && !out.contains("# alpha"), "{out}");
+        // `all` names the alias mod `cf` too.
+        let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", "all", "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("# cf:") && out.matches("# ").count() == 3,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn broken_mod_is_skipped_with_warning() {
+        let w = World::new();
+        three_mods(&w);
+        let bad = w.root.join(WS).join("400");
+        fs::create_dir_all(bad.join("addons")).expect("mkdir");
+        fs::write(bad.join("addons/garbage.pbo"), b"not a pbo at all").expect("w");
+        let (code, out, err) = w.run(&["api", "find", "^Class(One|Two)$", "-m", "all"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("class ClassOne") && out.contains("class ClassTwo"),
+            "{out}"
+        );
+        assert!(err.contains("garbage.pbo"), "{err}");
+        // An explicit selection of the broken mod still answers, without it.
+        let (code, _, err) = w.run(&["api", "class", "ClassOne", "-m", "400,100"]);
+        assert_eq!(code, 0, "{err}");
+    }
+
+    #[test]
+    fn texture_pbos_are_not_read_completely() {
+        let w = World::new();
+        // A PBO whose header says the entry has 4 GiB; a full read would fail with a truncation error.
+        let dir = w.root.join(WS).join("500/addons");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let mut bytes: Vec<u8> = Vec::new();
+        // version header: empty name, "Vers", four u32, then an empty extension list
+        bytes.push(0);
+        bytes.extend_from_slice(&0x5665_7273u32.to_le_bytes());
+        bytes.extend_from_slice(&[0; 16]);
+        bytes.push(0);
+        // the entry: name, method, original size, reserved, timestamp, data size
+        bytes.extend_from_slice(b"tex.paa\0");
+        bytes.extend_from_slice(&[0; 16]);
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        // the terminating header, and no data at all
+        bytes.push(0);
+        bytes.extend_from_slice(&[0; 20]);
+        fs::write(dir.join("tex.pbo"), bytes).expect("w");
+        ws_scripted(&w, 100, "ClassOne", "Alpha Mod");
+        let (code, out, err) = w.run(&["api", "find", "^Class(One|Two)$", "-m", "500,100"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class ClassOne"), "{out}");
+        assert!(!err.contains("tex.pbo"), "{err}");
+    }
+
+    #[test]
+    fn index_name_clash_gets_id_suffix() {
+        let w = World::new();
+        ws_scripted(&w, 100, "ClassOne", "Same Name");
+        ws_scripted(&w, 200, "ClassTwo", "Same Name");
+        let (code, out, err) = w.run(&["api", "find", "^Class(One|Two)$", "-m", "all", "-v"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.contains("# Same_Name: ") && out.contains("# Same_Name-200: "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn cli_api_mods_lists() {
+        let w = World::new();
+        three_mods(&w);
+        let (code, out, err) = w.run(&["api", "mods"]);
+        assert_eq!(code, 0, "{err}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "{out}");
+        assert!(
+            lines[0].starts_with("100  Alpha Mod  ") && lines[0].ends_with("  scripts"),
+            "{out}"
+        );
+        assert!(
+            lines[2].starts_with("300  Gamma Textures  ") && !lines[2].ends_with("scripts"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn cli_api_mods_json() {
+        let w = World::new();
+        three_mods(&w);
+        let (code, out, err) = w.run(&["api", "mods", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let mods = v["mods"].as_array().expect("mods");
+        assert_eq!(mods.len(), 3);
+        assert_eq!(mods[0]["id"], 100);
+        assert_eq!(mods[0]["has_scripts"], true);
+        assert_eq!(mods[2]["has_scripts"], false);
     }
 }

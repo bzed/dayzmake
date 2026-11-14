@@ -283,7 +283,7 @@ const API_COMMON: [(&str, char, &str); 4] = [
     (
         "mods",
         's',
-        "Also query these mods: cf, cot, dabs, expansion, all (those installed), a workshop id or a mod directory; comma separated. Without it only vanilla is queried.",
+        "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; can take a while the first time, each mod is indexed once and then cached), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
     ),
     (
         "experimental",
@@ -433,6 +433,24 @@ fn tools() -> Value {
             &[],
             &[],
             (false, false)
+        ),
+        tool(
+            "api_mods",
+            "List the installed mods (workshop id, name, directory, whether they have scripts); the names and ids can be used in the mods argument of the other api tools. Reading them is quick; querying all of them with mods=all can take a while the first time.",
+            &[
+                (
+                    "experimental",
+                    'b',
+                    "Use the experimental branch instead of stable."
+                ),
+                (
+                    "dayz",
+                    's',
+                    "DayZ client/server directory instead of the Steam install.",
+                ),
+                JSON_ARG,
+            ],
+            &[]
         ),
         tool(
             "pbo_inspect",
@@ -798,6 +816,9 @@ fn api_context(args: &Args, refresh: bool) -> Result<ApiContext, Error> {
 }
 
 fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
+    if name == "api_mods" {
+        return api::mods_text(&api_context(args, false)?, bool_arg(args, "json")?);
+    }
     if name == "api_update" {
         return Ok(api::update_lines(&api_context(args, true)?)?.join("\n"));
     }

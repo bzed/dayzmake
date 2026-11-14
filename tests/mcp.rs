@@ -134,6 +134,7 @@ fn mcp_initialize_and_list_tools() {
         "api_source",
         "api_defines",
         "api_update",
+        "api_mods",
         "pbo_inspect",
         "pbo_cat",
         "pbo_unpack",
@@ -151,7 +152,7 @@ fn mcp_initialize_and_list_tools() {
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 22);
+    assert_eq!(names.len(), 23);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());
@@ -546,4 +547,55 @@ fn mcp_truncates_huge_output() {
         "{}",
         &t[t.len() - 60..]
     );
+}
+
+#[test]
+fn mcp_api_mods_tool() {
+    let w = fake_steam();
+    let dir = w.root.join("steamapps/workshop/content/221100/100");
+    fs::create_dir_all(dir.join("addons")).expect("mkdir");
+    fs::write(
+        dir.join("addons/x.pbo"),
+        make_pbo(&[("X.c", b"class McpMod\n{\n}\n")]),
+    )
+    .expect("pbo");
+    fs::write(dir.join("meta.cpp"), "name = \"Mcp Mod\";\n").expect("meta");
+    let r = run_raw(
+        lines(&[
+            call(1, "api_mods", &json!({})),
+            call(2, "api_mods", &json!({"json":true})),
+            call(3, "api_class", &json!({"name":"McpMod","mods":"all"})),
+            json!({"jsonrpc":"2.0","id":4,"method":"tools/list"}),
+        ]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("Mcp Mod"),
+        "{}",
+        text(&r.replies[0])
+    );
+    let j: Value = serde_json::from_str(text(&r.replies[1])).expect("json text");
+    assert_eq!(j["mods"][0]["id"], 100);
+    assert!(
+        text(&r.replies[2]).contains("class McpMod"),
+        "{}",
+        text(&r.replies[2])
+    );
+    let tools = r.replies[3]["result"]["tools"].as_array().expect("tools");
+    for t in tools
+        .iter()
+        .filter(|t| t["name"] == "api_mods" || t["name"] == "api_class")
+    {
+        let desc = t["description"].as_str().unwrap_or_default().to_string()
+            + t["inputSchema"]["properties"]["mods"]["description"]
+                .as_str()
+                .unwrap_or_default();
+        assert!(desc.contains("while"), "{t}");
+    }
 }
