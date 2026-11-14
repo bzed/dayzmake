@@ -5,6 +5,9 @@ use std::fs;
 use std::io::{self, Cursor};
 use std::path::Path;
 
+use dayzmake::api::model::ApiIndex;
+use dayzmake::api::parse::{ScriptFile, active_defines, collect_defines, index_scripts};
+use dayzmake::api::steam::{Branch, vdf_values, vdf_values_unescaped};
 use dayzmake::config::Config;
 use dayzmake::p3d::P3D;
 use dayzmake::paa::Paa;
@@ -72,6 +75,41 @@ fn sign_read_seeds() -> io::Result<()> {
         let _ = BIPrivateKey::read(&mut &data[..]);
         let _ = BIPublicKey::read(&mut &data[..]);
         let _ = BISign::read(&mut &data[..]);
+    }
+    Ok(())
+}
+
+#[test]
+fn api_parse_seeds() -> io::Result<()> {
+    for data in seeds("api_parse")? {
+        let text = String::from_utf8_lossy(&data);
+        let files = [
+            ScriptFile {
+                module: 0,
+                path: "3_Game\\a.c",
+                text: &text,
+            },
+            ScriptFile {
+                module: 0,
+                path: "4_World\\b.c",
+                text: &text,
+            },
+        ];
+        let _ = collect_defines(&text, &files);
+        let mut index = ApiIndex::new("fuzz", "fuzz", "fuzz");
+        index_scripts(&files, &active_defines(Branch::Stable), &mut index);
+    }
+    Ok(())
+}
+
+#[test]
+fn steam_vdf_seeds() -> io::Result<()> {
+    for data in seeds("steam_vdf")? {
+        let text = String::from_utf8_lossy(&data);
+        for key in ["path", "installdir", "buildid"] {
+            let _ = vdf_values(&text, key);
+            let _ = vdf_values_unescaped(&text, key);
+        }
     }
     Ok(())
 }

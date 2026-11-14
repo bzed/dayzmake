@@ -127,7 +127,8 @@ fn read_capped(path: &Path) -> Option<String> {
 }
 
 /// The raw values of every `"key" "value"` line (see [`vdf_values_unescaped`] for paths).
-fn vdf_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
+#[must_use]
+pub fn vdf_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
     text.lines()
         .filter_map(|line| {
             let rest = line
@@ -142,7 +143,8 @@ fn vdf_values<'a>(text: &'a str, key: &str) -> Vec<&'a str> {
 }
 
 /// Like [`vdf_values`] but owned, with the `\\` escapes of Windows paths turned into `\`.
-fn vdf_values_unescaped(text: &str, key: &str) -> Vec<String> {
+#[must_use]
+pub fn vdf_values_unescaped(text: &str, key: &str) -> Vec<String> {
     vdf_values(text, key)
         .into_iter()
         .map(|v| v.replace("\\\\", "\\"))

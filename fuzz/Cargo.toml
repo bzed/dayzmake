@@ -48,3 +48,17 @@ path = "fuzz_targets/sign_read.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "api_parse"
+path = "fuzz_targets/api_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "steam_vdf"
+path = "fuzz_targets/steam_vdf.rs"
+test = false
+doc = false
+bench = false

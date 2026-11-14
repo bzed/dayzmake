@@ -33,11 +33,13 @@ test:
 
 # Each target runs FUZZ_TIME seconds (10 by default; `make fuzz FUZZ_TIME=60` for longer).
 fuzz:
-	@if [ -d fuzz ]; then \
+	@if [ -d fuzz ] && $(CARGO) +nightly fuzz --help >/dev/null 2>&1; then \
 	  cd fuzz && for t in $$($(CARGO) +nightly fuzz list 2>/dev/null); do \
 	    mkdir -p $(TMPDIR)/dayzmake-fuzz/$$t; \
 	    $(CARGO) +nightly fuzz run --target $(FUZZ_HOST) $$t $(TMPDIR)/dayzmake-fuzz/$$t corpus/$$t -- -max_total_time=$(FUZZ_TIME) || exit 1; \
 	  done; \
+	else \
+	  echo "skipping fuzz: cargo-fuzz or nightly missing"; \
 	fi
 
 cover:
