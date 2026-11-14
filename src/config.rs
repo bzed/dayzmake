@@ -13,6 +13,9 @@ use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::preprocess;
 
+/// Deepest class or array nesting accepted when reading a rapified config.
+const MAX_RAPIFIED_DEPTH: u32 = 128;
+
 /// State shared with the grammar for `__EVAL` / `__EXEC`.
 #[derive(Default)]
 pub struct EvalCtx {
@@ -397,7 +400,12 @@ impl ConfigArray {
         Ok(written)
     }
 
-    fn read_rapified<I: Read + Seek>(input: &mut I) -> Result<ConfigArray, Error> {
+    fn read_rapified<I: Read + Seek>(input: &mut I, depth: u32) -> Result<ConfigArray, Error> {
+        if depth > MAX_RAPIFIED_DEPTH {
+            return Err(error!(
+                "Rapified arrays are nested deeper than {MAX_RAPIFIED_DEPTH} levels."
+            ));
+        }
         let num_elements: u32 = input.read_compressed_int()?;
         // never preallocate the full length from untrusted input
         let mut elements: Vec<ConfigArrayElement> =
@@ -420,7 +428,7 @@ impl ConfigArray {
                 ));
             } else if element_type == 3 {
                 elements.push(ConfigArrayElement::ArrayElement(
-                    ConfigArray::read_rapified(input)?,
+                    ConfigArray::read_rapified(input, depth + 1)?,
                 ));
             } else {
                 return Err(error!("Unrecognized array element type: {}", element_type));
@@ -657,6 +665,11 @@ impl ConfigClass {
     }
 
     fn read_rapified<I: Read + Seek>(input: &mut I, level: u32) -> Result<ConfigClass, Error> {
+        if level > MAX_RAPIFIED_DEPTH {
+            return Err(error!(
+                "Rapified classes are nested deeper than {MAX_RAPIFIED_DEPTH} levels."
+            ));
+        }
         let mut fp = 0;
         if level == 0 {
             input.seek(SeekFrom::Start(16))?;
@@ -711,7 +724,7 @@ impl ConfigClass {
                 }
 
                 let name = input.read_cstring()?;
-                let mut array = ConfigArray::read_rapified(input)
+                let mut array = ConfigArray::read_rapified(input, 0)
                     .prepend_error("Failed to read rapified array:")?;
                 array.is_expansion = entry_type == 5;
 

@@ -88,3 +88,21 @@ fn integer_overflow_is_an_error() {
     let result = Config::from_string(String::from("x = 0x1FFFFFFFF;\n"), None, &Vec::new());
     assert!(result.is_err());
 }
+
+/// Found by fuzzing: a class body offset that points back into itself recursed until the
+/// stack overflowed. Reading must fail with an error instead.
+#[test]
+fn read_rapified_rejects_cyclic_class_bodies() {
+    let data = include_bytes!("fixtures/fuzz/config_class_cycle.bin");
+    assert!(Config::read_rapified(&mut Cursor::new(&data[..])).is_err());
+}
+
+/// Deeply nested arrays must be rejected, not recursed into until the stack overflows.
+#[test]
+fn read_rapified_rejects_deeply_nested_arrays() {
+    // header, empty parent name, one entry: an array entry named "a" whose array nests 1M deep
+    let mut data = b"\0raP\0\0\0\0\x08\0\0\0\0\0\0\0".to_vec();
+    data.extend_from_slice(&[0, 1, 2, b'a', 0, 1]);
+    data.extend(std::iter::repeat_n([3u8, 1], 1_000_000).flatten());
+    assert!(Config::read_rapified(&mut Cursor::new(&data[..])).is_err());
+}
