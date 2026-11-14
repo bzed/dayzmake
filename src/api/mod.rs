@@ -7,3 +7,5 @@ pub mod steam;
 pub mod model;
 /// Enforce Script declaration parser.
 pub mod parse;
+/// Scanner: comments, docs and conditional compilation.
+mod scan;

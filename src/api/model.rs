@@ -56,11 +56,15 @@ pub struct Class {
     pub modded_only: bool,
     /// First doc comment sentence of the first documented declaration.
     pub doc: Option<String>,
-    /// Declarations in load order; `decls[0]` is the main one, modded parts follow. One entry per file.
+    /// Declarations in load order; `decls[0]` is the main one (an active one if there is one), modded parts and
+    /// declarations in inactive branches follow. One entry per file.
     pub decls: Vec<FileRef>,
     /// Members in first-seen order. Declarations that repeat a member (modded overrides) are not listed twice;
-    /// the first declaration wins, so a later `override` flag is lost.
+    /// the first declaration wins (an active one beats an inactive one), so a later `override` flag is lost.
     pub members: Vec<Member>,
+    /// Condition of the innermost inactive `#ifdef` branch the declaration is in, as written (`DIAG_DEVELOPER`,
+    /// `!SERVER`); `None` when it is active for the indexed defines.
+    pub cond: Option<String>,
 }
 
 impl Class {
@@ -100,6 +104,9 @@ pub struct Member {
     pub obsolete: bool,
     /// Where it is declared.
     pub decl: FileRef,
+    /// Condition of the innermost inactive `#ifdef` branch the declaration is in, as written (`DIAG_DEVELOPER`,
+    /// `!SERVER`); `None` when it is active for the indexed defines.
+    pub cond: Option<String>,
 }
 
 /// One item of an enum.
@@ -124,6 +131,9 @@ pub struct Enum {
     pub decls: Vec<FileRef>,
     /// Items in declaration order.
     pub items: Vec<EnumItem>,
+    /// Condition of the innermost inactive `#ifdef` branch the declaration is in, as written (`DIAG_DEVELOPER`,
+    /// `!SERVER`); `None` when it is active for the indexed defines.
+    pub cond: Option<String>,
 }
 
 /// The index of one script set.

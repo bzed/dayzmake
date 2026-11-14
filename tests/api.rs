@@ -438,6 +438,8 @@ fn typedefs_functions_globals() {
             "native string FixtureString(Param p)",
             "private void HiddenFn()",
             "void OldAdd(int a=1,int b=2)",
+            "void Balanced()",
+            "void ParamSplit(int a)",
             "void MissionHelper(int x)",
         ]
     );
@@ -710,12 +712,14 @@ fn mod_scripts_use_defines_and_local_defines() {
     );
     assert!(has(cls(&idx, "Base"), "CFExtra"));
     assert_eq!(cls(&idx, "CFWorld").base.as_deref(), Some("CFBase"));
-    assert!(
-        idx.classes.contains_key("LocalDefined"),
+    assert_eq!(
+        cls(&idx, "LocalDefined").cond,
+        None,
         "#define earlier in the same file"
     );
-    assert!(
-        !idx.classes.contains_key("TooEarly"),
+    assert_eq!(
+        cls(&idx, "TooEarly").cond.as_deref(),
+        Some("CF_LATER"),
         "#define after the #ifdef does not count"
     );
 
@@ -775,4 +779,160 @@ fn real_style_header_regression() {
         (Some("Y<int>"), Some("Y"), Some("Doc."))
     );
     assert_eq!(x.decls[0].line, 2);
+}
+
+fn cond(c: &Class) -> Option<&str> {
+    c.cond.as_deref()
+}
+
+#[test]
+fn inactive_branch_class_is_kept_with_cond() {
+    let idx = vanilla();
+    let diag = cls(&idx, "DiagOnly");
+    assert_eq!(cond(diag), Some("DIAG_DEVELOPER"));
+    assert_eq!(diag.base.as_deref(), Some("Base"));
+    assert_eq!(diag.doc.as_deref(), Some("Diag only."));
+    assert_eq!(diag.decls[0].line, 3);
+    let dm = mem(diag, "DiagMethod");
+    assert_eq!(
+        (dm.cond.as_deref(), dm.decl.line),
+        (Some("DIAG_DEVELOPER"), 5)
+    );
+    // The class under `#ifdef GAME_TEMPLATE` of the fixture core is inactive too.
+    assert_eq!(cond(cls(&idx, "Base")), None);
+    let diag_enum = en(&idx, "DiagEnum");
+    assert_eq!(diag_enum.cond.as_deref(), Some("DIAG_DEVELOPER"));
+    assert_eq!(
+        diag_enum.items.iter().map(|i| i.value).collect::<Vec<_>>(),
+        [Some(0), Some(1)]
+    );
+    // The active defines decide.
+    let mut with = stable();
+    with.insert("DIAG_DEVELOPER".to_string());
+    let idx = vanilla_with(&with);
+    assert_eq!(cond(cls(&idx, "DiagOnly")), None);
+    assert_eq!(en(&idx, "DiagEnum").cond, None);
+}
+
+#[test]
+fn inactive_branch_member_is_tagged() {
+    let idx = vanilla();
+    let mixed = cls(&idx, "Mixed");
+    assert_eq!(cond(mixed), None);
+    let tags: Vec<_> = mixed
+        .members
+        .iter()
+        .map(|m| (m.name.as_str(), m.cond.as_deref()))
+        .collect();
+    assert_eq!(
+        tags,
+        [
+            ("Always", None),
+            ("DiagHelper", Some("DIAG_DEVELOPER")),
+            ("ClientHelper", Some("!SERVER")),
+            ("ServerHelper", None),
+            ("Twice", None),
+        ]
+    );
+    // Inactive items of an enum do not shift the values of the others.
+    let items: Vec<_> = en(&idx, "CondEnum")
+        .items
+        .iter()
+        .map(|i| (i.name.as_str(), i.value))
+        .collect();
+    assert_eq!(items, [("A", Some(0)), ("C", Some(1))]);
+    // Parts of a header in another branch are not part of its signature.
+    let f = idx
+        .functions
+        .iter()
+        .find(|m| m.name == "ParamSplit")
+        .expect("ParamSplit");
+    assert_eq!(f.signature, "void ParamSplit(int a)");
+    // A branch whose braces do not balance is dropped instead of swallowing what follows.
+    assert!(
+        idx.functions
+            .iter()
+            .any(|m| m.name == "Balanced" && m.cond.is_none())
+    );
+    assert!(!idx.functions.iter().any(|m| m.name == "Unbalanced"));
+}
+
+#[test]
+fn active_wins_over_inactive_duplicate() {
+    let idx = vanilla();
+    // The same method in an inactive and an active branch is listed once, as active.
+    let dup = cls(&idx, "Dup");
+    assert_eq!(dup.members.len(), 1);
+    assert_eq!(dup.members[0].cond, None);
+    // Inactive class first, active class later: the active data wins, the other base is an alternative.
+    let a = cls(&idx, "DupClass");
+    assert_eq!(
+        (cond(a), a.base.as_deref(), a.alt_bases.as_slice()),
+        (None, Some("Base"), ["Other".to_string()].as_slice())
+    );
+    assert_eq!(a.decls.len(), 1, "same file");
+    let names: Vec<_> = a
+        .members
+        .iter()
+        .map(|m| (m.name.as_str(), m.cond.as_deref()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("InactiveOnly", Some("DIAG_DEVELOPER")),
+            ("ActiveOnly", None)
+        ]
+    );
+    // Active class first, inactive later: the inactive base is only an alternative.
+    let b = cls(&idx, "DupClass2");
+    assert_eq!(
+        (cond(b), b.base.as_deref(), b.alt_bases.as_slice()),
+        (None, Some("Base"), ["Other".to_string()].as_slice())
+    );
+    assert!(has(b, "ActiveFirst") && has(b, "InactiveSecond"));
+    assert_eq!(
+        mem(b, "InactiveSecond").cond.as_deref(),
+        Some("DIAG_DEVELOPER")
+    );
+}
+
+#[test]
+fn ifndef_else_cond_text() {
+    let idx = vanilla();
+    assert_eq!(
+        cond(cls(&idx, "ClientOnly")),
+        Some("!SERVER"),
+        "#ifndef SERVER"
+    );
+    assert_eq!(cond(cls(&idx, "ServerOnly")), None);
+    // With the define off, the `#else` branch is the inactive one: `!SERVER` negated again.
+    let idx = vanilla_with(&BTreeSet::new());
+    assert_eq!(cond(cls(&idx, "ClientOnly")), None);
+    assert_eq!(cond(cls(&idx, "ServerOnly")), Some("SERVER"));
+}
+
+#[test]
+fn elif_branch_is_evaluated() {
+    let idx = vanilla();
+    assert_eq!(cond(cls(&idx, "ElifA")), Some("DIAG_DEVELOPER"));
+    assert_eq!(cond(cls(&idx, "ElifB")), None);
+    assert_eq!(
+        cond(cls(&idx, "ElifC")),
+        Some("PLATFORM_LINUX"),
+        "an earlier branch was taken"
+    );
+    assert_eq!(cond(cls(&idx, "ElifD")), Some("!DIAG_DEVELOPER"));
+    assert_eq!(
+        cond(cls(&idx, "Complex")),
+        None,
+        "complex expressions count as true"
+    );
+    let idx = vanilla_with(&BTreeSet::new());
+    assert_eq!(cond(cls(&idx, "ElifC")), Some("PLATFORM_LINUX"));
+    assert_eq!(cond(cls(&idx, "ElifD")), None);
+    let mut linux = BTreeSet::new();
+    linux.insert("PLATFORM_LINUX".to_string());
+    let idx = vanilla_with(&linux);
+    assert_eq!(cond(cls(&idx, "ElifC")), None);
+    assert_eq!(cond(cls(&idx, "ElifD")), Some("!DIAG_DEVELOPER"));
 }

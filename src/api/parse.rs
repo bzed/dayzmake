@@ -13,13 +13,9 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::model::{ApiIndex, Class, Enum, EnumItem, FileRef, Member, MemberKind};
+use super::scan::{DOC_END, DOC_MAX, DOC_START, at, cond_at, find_byte, scan, skip_string, sub};
 use super::steam::Branch;
 
-/// Longest doc text kept, in characters.
-const DOC_MAX: usize = 240;
-/// Start and end of a doc comment in the cleaned text.
-const DOC_START: u8 = 1;
-const DOC_END: u8 = 2;
 /// Script layer directories, in load order.
 const LAYERS: [&str; 5] = ["1_Core", "2_GameLib", "3_Game", "4_World", "5_Mission"];
 /// Keywords that are modifiers when they precede a member name.
@@ -72,16 +68,12 @@ const ACTIVE_DEFINES: [&str; 7] = [
 struct Patterns {
     header: Regex,
     token: Regex,
-    variant: Regex,
     comma: Regex,
     equals: Regex,
     lt: Regex,
     gt: Regex,
     noise: Regex,
     override_static: Regex,
-    brief: Regex,
-    tag: Regex,
-    copyright: Regex,
     defines_array: Regex,
     quoted: Regex,
     define_line: Regex,
@@ -95,16 +87,12 @@ static RE: LazyLock<Patterns> = LazyLock::new(|| {
     )
     .unwrap(),
     token: Regex::new(r"~?[\w.]+(?:<[^>]*>)?(?:\[\])?|\S").unwrap(),
-    variant: Regex::new(r"^\s*(?:modded\s+)?class\s+(\w+)\s*(?:extends|:)\s*([\w.]+)").unwrap(),
     comma: Regex::new(r"\s*,\s*").unwrap(),
     equals: Regex::new(r"\s*=\s*").unwrap(),
     lt: Regex::new(r"\s*<\s*").unwrap(),
     gt: Regex::new(r"\s*>").unwrap(),
     noise: Regex::new(r"\b(?:autoptr|ref|owned|notnull|reference)\s+").unwrap(),
     override_static: Regex::new(r"\b(?:override|static)\s+").unwrap(),
-    brief: Regex::new(r"[@\\](?:brief|class)\s*").unwrap(),
-    tag: Regex::new(r"[@\\](?:code|param|return|see|details|note)\b").unwrap(),
-    copyright: Regex::new(r"©|\(c\)\s*\d{4}|[Cc]opyright|[Ll]icense").unwrap(),
     defines_array: Regex::new(r"\bdefines\[\]\s*=\s*\{([^}]*)\}").unwrap(),
     quoted: Regex::new(r#""([^"]+)""#).unwrap(),
     define_line: Regex::new(r"(?m)^[ \t]*#define[ \t]+(\w+)").unwrap(),
@@ -173,9 +161,9 @@ pub fn index_scripts(files: &[ScriptFile<'_>], defines: &BTreeSet<String>, into:
     });
     let mut indexer = Indexer {
         member_keys: HashMap::new(),
-        typedef_keys: signatures(&into.typedefs),
-        function_keys: signatures(&into.functions),
-        global_keys: signatures(&into.globals),
+        typedef_keys: index_keys(&into.typedefs, |m| m.signature.clone()),
+        function_keys: index_keys(&into.functions, |m| m.signature.clone()),
+        global_keys: index_keys(&into.globals, |m| m.signature.clone()),
         into,
         defines,
     };
@@ -184,269 +172,11 @@ pub fn index_scripts(files: &[ScriptFile<'_>], defines: &BTreeSet<String>, into:
     }
 }
 
-fn signatures(members: &[Member]) -> HashSet<String> {
-    members.iter().map(|m| m.signature.clone()).collect()
-}
-
 /// Position of the layer directory in the path; paths without one sort last.
 fn layer_rank(path: &str) -> usize {
     path.split(['\\', '/'])
         .find_map(|part| LAYERS.iter().position(|l| *l == part))
         .unwrap_or(LAYERS.len())
-}
-
-// ---------------------------------------------------------------------------------------------------------
-// Byte helpers: no indexing, out of range reads give 0 or an empty slice.
-
-fn at(b: &[u8], i: usize) -> u8 {
-    b.get(i).copied().unwrap_or(0)
-}
-
-fn sub(s: &str, from: usize, to: usize) -> &str {
-    s.get(from..to).unwrap_or_default()
-}
-
-fn find_byte(b: &[u8], from: usize, byte: u8) -> Option<usize> {
-    b.get(from..)?
-        .iter()
-        .position(|&x| x == byte)
-        .map(|p| p + from)
-}
-
-/// End of the string literal that opens at `i`: just past the closing quote, or at the newline or end of
-/// input of an unterminated string.
-fn skip_string(b: &[u8], i: usize) -> usize {
-    let mut j = i + 1;
-    while j < b.len() {
-        match at(b, j) {
-            b'"' => return j + 1,
-            b'\n' => return j,
-            b'\\' => j += 2,
-            _ => j += 1,
-        }
-    }
-    b.len()
-}
-
-// ---------------------------------------------------------------------------------------------------------
-// Scanner
-
-/// One level of `#ifdef` nesting.
-struct Cond {
-    /// The enclosing region is active.
-    parent: bool,
-    /// The `#if` condition (or an earlier branch) was true.
-    taken: bool,
-    /// The current branch is active.
-    active: bool,
-}
-
-struct Scanned {
-    /// Source without comments, preprocessor lines and inactive branches; newlines are kept.
-    text: String,
-    /// `(class, base)` of `class X extends Y` headers in inactive branches.
-    variants: Vec<(String, String)>,
-}
-
-fn is_active(conds: &[Cond]) -> bool {
-    conds.last().is_none_or(|c| c.active)
-}
-
-fn directive(
-    line: &str,
-    conds: &mut Vec<Cond>,
-    seen: &mut BTreeSet<String>,
-    defines: &BTreeSet<String>,
-) {
-    let rest = line.trim_start();
-    let word_end = rest
-        .find(|c: char| !c.is_ascii_alphabetic())
-        .unwrap_or(rest.len());
-    let word = sub(rest, 0, word_end);
-    let arg = rest.get(word_end..).unwrap_or_default().trim_start();
-    let name = arg
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .next()
-        .unwrap_or_default();
-    match word {
-        "ifdef" | "ifndef" => {
-            let parent = is_active(conds);
-            let taken = (defines.contains(name) || seen.contains(name)) == (word == "ifdef");
-            conds.push(Cond {
-                parent,
-                taken,
-                active: parent && taken,
-            });
-        }
-        // Expressions are not evaluated: the first branch counts as taken.
-        "if" => {
-            let parent = is_active(conds);
-            conds.push(Cond {
-                parent,
-                taken: true,
-                active: parent,
-            });
-        }
-        "elif" => {
-            if let Some(c) = conds.last_mut() {
-                c.active = false;
-                c.taken = true;
-            }
-        }
-        "else" => {
-            if let Some(c) = conds.last_mut() {
-                c.active = c.parent && !c.taken;
-                c.taken = true;
-            }
-        }
-        "endif" => {
-            conds.pop();
-        }
-        "define" if is_active(conds) && !name.is_empty() => {
-            seen.insert(name.to_string());
-        }
-        _ => {}
-    }
-}
-
-/// Push a text slice, replacing the doc marker bytes so source text can never forge a marker.
-fn push_clean(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend(bytes.iter().map(|&c| {
-        if c == DOC_START || c == DOC_END {
-            b' '
-        } else {
-            c
-        }
-    }));
-}
-
-fn push_doc(out: &mut Vec<u8>, text: &str) {
-    out.push(DOC_START);
-    push_clean(out, text.as_bytes());
-    out.push(DOC_END);
-}
-
-/// First sentence of a block comment doc; empty when it is a file header (copyright, license, file name).
-fn block_doc(content: &str) -> String {
-    let mut joined = String::with_capacity(content.len());
-    for (n, line) in content.split('\n').enumerate() {
-        joined.push(' ');
-        joined.push_str(if n == 0 {
-            line
-        } else {
-            line.trim_start().trim_start_matches('*')
-        });
-    }
-    let text = joined.split_whitespace().collect::<Vec<_>>().join(" ");
-    let text = RE.brief.replace_all(&text, "");
-    let mut cut = text.len();
-    let mut chars = text.char_indices().peekable();
-    while let Some((idx, c)) = chars.next() {
-        if matches!(c, '.' | '!' | '?') && chars.peek().is_some_and(|(_, n)| n.is_whitespace()) {
-            cut = idx + 1;
-            break;
-        }
-    }
-    if let Some(m) = RE.tag.find(&text) {
-        cut = cut.min(m.start());
-    }
-    let first = sub(&text, 0, cut).trim();
-    if RE.copyright.is_match(first)
-        || std::path::Path::new(first)
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("c"))
-    {
-        String::new()
-    } else {
-        first.to_string()
-    }
-}
-
-fn scan(src: &str, defines: &BTreeSet<String>) -> Scanned {
-    let b = src.as_bytes();
-    let n = b.len();
-    let mut out: Vec<u8> = Vec::with_capacity(n);
-    let mut variants = Vec::new();
-    let mut conds: Vec<Cond> = Vec::new();
-    let mut seen = BTreeSet::new();
-    let (mut i, mut bol) = (0, true);
-    while i < n {
-        if !is_active(&conds) {
-            // Inactive text is skipped line by line; only directives and class headers matter.
-            let end = find_byte(b, i, b'\n').unwrap_or(n);
-            let line = sub(src, i, end);
-            if let Some(d) = line.trim_start().strip_prefix('#') {
-                directive(d, &mut conds, &mut seen, defines);
-            } else if let Some(c) = RE.variant.captures(line) {
-                let get = |k| c.get(k).map_or(String::new(), |m| m.as_str().to_string());
-                variants.push((get(1), get(2)));
-            }
-            if end < n {
-                out.push(b'\n');
-            }
-            i = end + 1;
-            bol = true;
-            continue;
-        }
-        let c = at(b, i);
-        if bol && (c == b' ' || c == b'\t') {
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        if bol && c == b'#' {
-            let end = find_byte(b, i, b'\n').unwrap_or(n);
-            directive(sub(src, i + 1, end), &mut conds, &mut seen, defines);
-            i = end;
-            continue;
-        }
-        let own_line = bol;
-        bol = c == b'\n';
-        if c == b'"' {
-            let end = skip_string(b, i);
-            push_clean(&mut out, b.get(i..end).unwrap_or_default());
-            i = end;
-        } else if c == b'/' && at(b, i + 1) == b'/' {
-            let end = find_byte(b, i, b'\n').unwrap_or(n);
-            // A doc comment after code on the same line documents nothing that follows.
-            if own_line
-                && src
-                    .get(i..)
-                    .is_some_and(|s| s.starts_with("//!") && !s.starts_with("//!<"))
-            {
-                let text: String = sub(src, i + 3, end).trim().chars().take(DOC_MAX).collect();
-                push_doc(&mut out, &text);
-            }
-            i = end;
-        } else if c == b'/' && at(b, i + 1) == b'*' {
-            let close = b
-                .get(i + 2..)
-                .and_then(|r| r.windows(2).position(|w| w == b"*/"))
-                .map(|p| p + i + 2);
-            let end = close.unwrap_or(n);
-            let is_doc = src
-                .get(i..)
-                .is_some_and(|s| s.starts_with("/*!") || s.starts_with("/**"));
-            if own_line && is_doc && end >= i + 3 {
-                let text: String = block_doc(sub(src, i + 3, end))
-                    .chars()
-                    .take(DOC_MAX)
-                    .collect();
-                push_doc(&mut out, &text);
-            }
-            let stop = (end + 2).min(n);
-            let lines = sub(src, i, stop).matches('\n').count();
-            out.extend(std::iter::repeat_n(b'\n', lines));
-            i = stop;
-        } else {
-            push_clean(&mut out, &[c]);
-            i += 1;
-        }
-    }
-    Scanned {
-        text: String::from_utf8_lossy(&out).into_owned(),
-        variants,
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -730,6 +460,7 @@ fn member_of(c: &Cleaned, decl: FileRef) -> Option<Member> {
         doc: doc_value(c.doc.as_deref()),
         obsolete: c.obsolete,
         decl,
+        cond: None,
     })
 }
 
@@ -799,19 +530,44 @@ fn enum_items(text: &str, from: usize, to: usize) -> Vec<(usize, usize)> {
 struct Indexer<'a> {
     into: &'a mut ApiIndex,
     defines: &'a BTreeSet<String>,
-    /// Member keys per class, filled when a class is first touched.
-    member_keys: HashMap<String, HashSet<String>>,
-    typedef_keys: HashSet<String>,
-    function_keys: HashSet<String>,
-    global_keys: HashSet<String>,
+    /// Member key to index in `Class::members`, per class, filled when a class is first touched.
+    member_keys: HashMap<String, HashMap<String, usize>>,
+    typedef_keys: HashMap<String, usize>,
+    function_keys: HashMap<String, usize>,
+    global_keys: HashMap<String, usize>,
 }
 
-/// Where a statement is: file, source text and line table.
+/// Where a statement is: file, source text, line table and conditions.
 struct Place<'a> {
     file: &'a ScriptFile<'a>,
     text: &'a str,
     /// Offsets of the newlines of `text`.
     newlines: Vec<usize>,
+    /// Condition changes of `text`, see `Scanned::changes`.
+    changes: &'a [(usize, Option<String>)],
+}
+
+/// Add a member unless its key is taken. An active declaration replaces an inactive one.
+fn add_member(list: &mut Vec<Member>, keys: &mut HashMap<String, usize>, key: String, m: Member) {
+    if let Some(&at) = keys.get(&key) {
+        if let Some(old) = list.get_mut(at)
+            && old.cond.is_some()
+            && m.cond.is_none()
+        {
+            *old = m;
+        }
+    } else {
+        keys.insert(key, list.len());
+        list.push(m);
+    }
+}
+
+fn index_keys(members: &[Member], key: fn(&Member) -> String) -> HashMap<String, usize> {
+    let mut keys = HashMap::new();
+    for (i, m) in members.iter().enumerate() {
+        keys.entry(key(m)).or_insert(i);
+    }
+    keys
 }
 
 impl Place<'_> {
@@ -824,12 +580,49 @@ impl Place<'_> {
         }
     }
 
-    /// The header of a statement as a cleaned text and its location.
-    fn head(&self, st: &Stmt) -> (Cleaned, FileRef) {
+    fn cond_at(&self, pos: usize) -> Option<String> {
+        cond_at(self.changes, pos).map(str::to_string)
+    }
+
+    /// Text of the header of a statement, without the parts that belong to another condition than its
+    /// first token (`void F(int a #ifdef X , int b #endif )` keeps one signature).
+    fn header(&self, st: &Stmt, first: usize) -> String {
+        let whole = sub(self.text, st.start, st.head_end);
+        let from = self.changes.partition_point(|(p, _)| *p <= st.start);
+        let inner: Vec<&(usize, Option<String>)> = self
+            .changes
+            .iter()
+            .skip(from)
+            .take_while(|(p, _)| *p < st.head_end)
+            .collect();
+        if inner.is_empty() {
+            return whole.to_string();
+        }
+        let want = self.cond_at(first);
+        let mut out = String::with_capacity(whole.len());
+        let mut cursor = st.start;
+        let mut cond = self.cond_at(st.start);
+        for (pos, next) in inner
+            .into_iter()
+            .map(|c| (c.0, &c.1))
+            .chain([(st.head_end, &None)])
+        {
+            if cursor < first || cond == want {
+                out.push_str(sub(self.text, cursor, pos));
+            }
+            cursor = pos;
+            cond.clone_from(next);
+        }
+        out
+    }
+
+    /// The header of a statement as a cleaned text, its location and its condition.
+    fn head(&self, st: &Stmt) -> (Cleaned, FileRef, Option<String>) {
         let pos = first_token(self.text.as_bytes(), st.start, st.head_end);
         (
-            clean(sub(self.text, st.start, st.head_end)),
+            clean(&self.header(st, pos)),
             self.file_ref(pos),
+            self.cond_at(pos),
         )
     }
 }
@@ -848,26 +641,30 @@ impl Indexer<'_> {
             file,
             text: &scanned.text,
             newlines,
+            changes: &scanned.changes,
         };
         let mut declared = BTreeSet::new();
         for st in split(&scanned.text, 0, scanned.text.len()) {
             self.statement(&place, &st, &mut declared);
         }
         for (name, other) in scanned.variants {
-            if !declared.contains(&name) {
-                continue;
-            }
-            if let Some(class) = self.into.classes.get_mut(&name)
-                && class.base_name() != Some(other.as_str())
-                && !class.alt_bases.contains(&other)
-            {
-                class.alt_bases.push(other);
+            if declared.contains(&name) {
+                self.add_alt_base(&name, other);
             }
         }
     }
 
+    fn add_alt_base(&mut self, class: &str, other: String) {
+        if let Some(class) = self.into.classes.get_mut(class)
+            && class.base_name() != Some(other.split('<').next().unwrap_or(&other))
+            && !class.alt_bases.contains(&other)
+        {
+            class.alt_bases.push(other);
+        }
+    }
+
     fn statement(&mut self, place: &Place<'_>, st: &Stmt, declared: &mut BTreeSet<String>) {
-        let (c, decl) = place.head(st);
+        let (c, decl, cond) = place.head(st);
         if c.text.is_empty() {
             return;
         }
@@ -879,7 +676,14 @@ impl Indexer<'_> {
             let doc = doc_value(c.doc.as_deref());
             match (get(2), st.body) {
                 (Some("enum"), Some((from, to))) => {
-                    self.enum_decl(place, &name, modded, base, decl, (from, to));
+                    let h = EnumHeader {
+                        name,
+                        modded,
+                        base,
+                        decl,
+                        cond,
+                    };
+                    self.enum_decl(place, h, (from, to));
                 }
                 (Some("class" | "struct"), body) => {
                     let tparams = get(4)
@@ -891,18 +695,16 @@ impl Indexer<'_> {
                         .map(String::from)
                         .collect();
                     declared.insert(name.clone());
-                    self.class_decl(
-                        place,
-                        ClassHeader {
-                            name,
-                            modded,
-                            type_params,
-                            base,
-                            doc,
-                            decl,
-                        },
-                        body,
-                    );
+                    let h = ClassHeader {
+                        name,
+                        modded,
+                        type_params,
+                        base,
+                        doc,
+                        decl,
+                        cond,
+                    };
+                    self.class_decl(place, h, body);
                 }
                 _ => {}
             }
@@ -922,25 +724,28 @@ impl Indexer<'_> {
             let member = Member {
                 kind: MemberKind::Field,
                 name,
-                signature,
+                signature: signature.clone(),
                 modifiers: Vec::new(),
                 doc: doc_value(c.doc.as_deref()),
                 obsolete: false,
                 decl,
+                cond,
             };
-            if self.typedef_keys.insert(member.signature.clone()) {
-                self.into.typedefs.push(member);
-            }
+            add_member(
+                &mut self.into.typedefs,
+                &mut self.typedef_keys,
+                signature,
+                member,
+            );
             return;
         }
-        if let Some(member) = member_of(&c, decl) {
+        if let Some(mut member) = member_of(&c, decl) {
+            member.cond = cond;
             let (keys, list) = match member.kind {
                 MemberKind::Method => (&mut self.function_keys, &mut self.into.functions),
                 MemberKind::Field => (&mut self.global_keys, &mut self.into.globals),
             };
-            if keys.insert(member.signature.clone()) {
-                list.push(member);
-            }
+            add_member(list, keys, member.signature.clone(), member);
         }
     }
 
@@ -948,13 +753,14 @@ impl Indexer<'_> {
         let mut members = Vec::new();
         if let Some((from, to)) = body {
             for st in split(place.text, from, to) {
-                let (c, decl) = place.head(&st);
+                let (c, decl, cond) = place.head(&st);
                 // Private members are unreachable from mods.
-                members.extend(
-                    member_of(&c, decl).filter(|m| !m.modifiers.iter().any(|x| x == "private")),
-                );
+                let member =
+                    member_of(&c, decl).filter(|m| !m.modifiers.iter().any(|x| x == "private"));
+                members.extend(member.map(|m| Member { cond, ..m }));
             }
         }
+        let active = h.cond.is_none();
         let class = self
             .into
             .classes
@@ -968,68 +774,111 @@ impl Indexer<'_> {
                 doc: None,
                 decls: Vec::new(),
                 members: Vec::new(),
+                cond: h.cond.clone(),
             });
         if !h.modded {
             class.modded_only = false;
         }
-        if class.base.is_none() {
-            class.base = h.base;
-        }
-        if class.type_params.is_empty() {
-            class.type_params = h.type_params;
-        }
-        if class.doc.is_none() {
-            class.doc = h.doc;
-        }
-        if !class
+        let known = class
             .decls
             .iter()
-            .any(|d| d.module == h.decl.module && d.path == h.decl.path)
-        {
-            class.decls.push(h.decl);
+            .any(|d| d.module == h.decl.module && d.path == h.decl.path);
+        if active && class.cond.is_some() {
+            // The first active declaration takes over from inactive ones; their base stays as an alternative.
+            if let Some(old) = class.base.take()
+                && Some(&old) != h.base.as_ref()
+                && !class.alt_bases.contains(&old)
+            {
+                class.alt_bases.push(old);
+            }
+            class.base = h.base;
+            if !h.type_params.is_empty() {
+                class.type_params = h.type_params;
+            }
+            if h.doc.is_some() {
+                class.doc = h.doc;
+            }
+            class.cond = None;
+            if !known {
+                class.decls.insert(0, h.decl);
+            }
+        } else {
+            if class.base.is_none() {
+                class.base = h.base;
+            } else if let Some(other) = h.base.filter(|b| !active && Some(b) != class.base.as_ref())
+                && !class.alt_bases.contains(&other)
+            {
+                class.alt_bases.push(other);
+            }
+            if class.type_params.is_empty() {
+                class.type_params = h.type_params;
+            }
+            if class.doc.is_none() {
+                class.doc = h.doc;
+            }
+            if !known {
+                class.decls.push(h.decl);
+            }
         }
         let keys = self
             .member_keys
             .entry(h.name)
-            .or_insert_with(|| class.members.iter().map(member_key).collect());
+            .or_insert_with(|| index_keys(&class.members, member_key));
         for m in members {
-            if keys.insert(member_key(&m)) {
-                class.members.push(m);
-            }
+            add_member(&mut class.members, keys, member_key(&m), m);
         }
     }
 
-    fn enum_decl(
-        &mut self,
-        place: &Place<'_>,
-        name: &str,
-        modded: bool,
-        base: Option<String>,
-        decl: FileRef,
-        body: (usize, usize),
-    ) {
+    fn enum_decl(&mut self, place: &Place<'_>, h: EnumHeader, body: (usize, usize)) {
+        let active = h.cond.is_none();
         let e = self
             .into
             .enums
-            .entry(name.to_string())
+            .entry(h.name.clone())
             .or_insert_with(|| Enum {
-                name: name.to_string(),
+                name: h.name.clone(),
                 base: None,
                 decls: Vec::new(),
                 items: Vec::new(),
+                cond: h.cond.clone(),
             });
-        if e.base.is_none() {
-            e.base = base;
+        let mut skip_items = false;
+        if active && e.cond.is_some() {
+            // An active declaration replaces what inactive ones contributed.
+            e.cond = None;
+            e.items.clear();
+            e.base = h.base;
+            e.decls.insert(0, h.decl);
+        } else {
+            if e.base.is_none() {
+                e.base = h.base;
+            }
+            e.decls.push(h.decl);
+            skip_items = !active && e.cond.is_none();
         }
-        e.decls.push(decl);
+        if skip_items {
+            return;
+        }
         // A modded enum continues counting after the last item of the enum it extends.
-        let mut value = if modded {
+        let mut value = if h.modded {
             e.items.last().map_or(Some(-1), |i| i.value)
         } else {
             Some(-1)
         };
         for (from, to) in enum_items(place.text, body.0, body.1) {
-            let c = clean(sub(place.text, from, to));
+            // Items of another `#ifdef` branch than the enum itself would shift the values of the others.
+            let pos = first_token(place.text.as_bytes(), from, to);
+            if place.cond_at(pos) != h.cond {
+                continue;
+            }
+            let c = clean(&place.header(
+                &Stmt {
+                    start: from,
+                    head_end: to,
+                    body: None,
+                },
+                pos,
+            ));
             let (item, expr) = c.text.split_once('=').unwrap_or((c.text.as_str(), ""));
             let item = item.trim();
             if item.is_empty() {
@@ -1056,4 +905,13 @@ struct ClassHeader {
     base: Option<String>,
     doc: Option<String>,
     decl: FileRef,
+    cond: Option<String>,
+}
+
+struct EnumHeader {
+    name: String,
+    modded: bool,
+    base: Option<String>,
+    decl: FileRef,
+    cond: Option<String>,
 }
