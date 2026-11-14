@@ -289,3 +289,21 @@ fn unpack_duplicate_target_warns() {
     assert!(err.contains("duplicate-entry"), "{err}");
     assert_eq!(fs::read(tmp.path().join("target/A.txt")).unwrap(), b"1");
 }
+
+#[cfg(unix)]
+#[test]
+fn unpack_use_prefix_does_not_follow_symlinked_prefix() {
+    let pbo = crafted_pbo(&[("a.txt", b"x")], Some("my\\mod"));
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("outside")).unwrap();
+    fs::create_dir_all(tmp.path().join("target")).unwrap();
+    std::os::unix::fs::symlink("../outside", tmp.path().join("target/my")).unwrap();
+    fs::write(tmp.path().join("in.pbo"), &pbo).unwrap();
+    let (code, err) = run_dayzmake(
+        &["unpack", "-f", "--use-prefix", "in.pbo", "target"],
+        tmp.path(),
+    );
+    assert_ne!(code, 0, "{err}");
+    assert!(!tmp.path().join("outside/mod").exists());
+    assert!(!tmp.path().join("outside/$PBOPREFIX$").exists());
+}

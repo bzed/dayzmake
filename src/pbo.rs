@@ -789,6 +789,11 @@ pub fn cmd_unpack<I: Read>(
             Some(prefix) => {
                 let relative = safe_relative_path(prefix)
                     .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
+                if crosses_symlink(output, &relative) {
+                    return Err(error!(
+                        "PBO prefix {prefix:?} goes through a symlink; refusing to unpack."
+                    ));
+                }
                 output.join(relative)
             }
             None => output.to_path_buf(),
