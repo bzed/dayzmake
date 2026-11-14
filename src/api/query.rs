@@ -33,7 +33,7 @@ pub enum Query {
         /// Skip vanilla (`indexes[0]`).
         mods_only: bool,
     },
-    /// Case-insensitive regex over member signatures and docs, class names and enum items.
+    /// Case-insensitive regex over member names, signatures and docs, class names and enum items.
     Find {
         /// The regex.
         regex: String,
@@ -297,8 +297,11 @@ fn class_query(
 }
 
 fn find_query(indexes: &[ApiIndex], rx: &Regex, class: Option<&str>) -> QueryResult {
-    let hit =
-        |m: &Member| rx.is_match(&m.signature) || m.doc.as_deref().is_some_and(|d| rx.is_match(d));
+    let hit = |m: &Member| {
+        rx.is_match(&m.name)
+            || rx.is_match(&m.signature)
+            || m.doc.as_deref().is_some_and(|d| rx.is_match(d))
+    };
     let mut out = Vec::new();
     for i in indexes {
         let mk = |scope: &str,

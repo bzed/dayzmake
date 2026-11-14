@@ -1177,6 +1177,23 @@ fn find_matches_members_by_signature_and_doc() {
 }
 
 #[test]
+fn find_anchored_regex_matches_member_names() {
+    let idx = [vanilla()];
+    let q = Query::Find {
+        regex: "^GetInstance$".into(),
+        class: None,
+    };
+    assert_eq!(text(&idx, &q, 100), ["Base: static Base GetInstance()"]);
+    let q = Query::Find {
+        regex: "^m_Count".into(),
+        class: Some("Base".into()),
+    };
+    let l = text(&idx, &q, 100);
+    assert_eq!(l.len(), 1, "{l:?}");
+    assert!(l[0].contains("m_Count"), "{l:?}");
+}
+
+#[test]
 fn find_class_filter_and_cond() {
     let idx = [vanilla()];
     let q = Query::Find {

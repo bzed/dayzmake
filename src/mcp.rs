@@ -425,7 +425,7 @@ fn tools() -> Value {
         ),
         api_tool(
             "api_find",
-            "Case-insensitive regex over member signatures, docs, class names and enum items.",
+            "Case-insensitive regex over member names, signatures, docs, class names and enum items (so ^OnRPC finds the OnRPC methods).",
             &[
                 ("regex", 's', "The regular expression."),
                 (
