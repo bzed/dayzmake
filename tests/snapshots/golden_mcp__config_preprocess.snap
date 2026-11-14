@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(10 + i as u64)
+---
+{
+  "content": [
+    {
+      "text": "\n\nclass CfgPatches\n{\nclass golden_addon\n{\nunits[] = {};\nweapons[] = {\"golden_a\", \"golden_b\"};\nrequiredAddons[] = {\"DZ_Data\"};\n};\n};\n\nclass Base;\nclass CfgGolden\n{\nclass Parent\n{\nscale = ((2) * (3));\nsum = __EVAL(1+2);\nratio = 0.75;\noffset = -5;\nname = \"parent\";\n};\nclass Child: Parent\n{\nname = \"child\";\ndelete Obsolete;\nlabel = unquotedvalue;\nmode = 1;\n};\n};\n\n",
+      "type": "text"
+    }
+  ],
+  "isError": false
+}

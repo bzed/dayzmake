@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(10 + i as u64)
+---
+{
+  "content": [
+    {
+      "text": "warnings:\nIn file ./config.cpp:18: warning: String value \"((2) * (3))\" is not quoted properly. [unquoted-string]\nIn file ./config.cpp:28: warning: String value \"unquotedvalue\" is not quoted properly. [unquoted-string]\nIn file data/model.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]\n\nwrote ../build.pbo",
+      "type": "text"
+    }
+  ],
+  "isError": false
+}

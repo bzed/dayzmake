@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(10 + i as u64)
+---
+{
+  "content": [
+    {
+      "text": "No Steam installation found (set STEAM_ROOT, or DAYZ_TOOLS to the DayZ Tools folder).",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}
