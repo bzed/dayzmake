@@ -1,0 +1,162 @@
+# AGENTS.md
+
+Rules for anyone (human or agent) changing dayzmake. dayzmake is a DayZ modding CLI (build, sign, verify,
+pack, unpack, binarize, derapify, PAA conversion). It is a fork of armake2 by KoffeinFlummi, licensed
+**GPL-2.0-or-later**; keep the licence and the original copyright holders (`Cargo.toml`, `LICENSE`). It reads
+PBO, config, P3D, PAA and key/signature files from mods the user did not write, so every reader must treat its
+input as hostile.
+
+## Repository layout
+
+| Path | Content |
+|---|---|
+| `src/*.rs` | the library (`lib.rs`) and the binary entry point (`main.rs`) |
+| `src/pbo.rs`, `config.rs`, `p3d.rs`, `paa.rs`, `sign.rs`, `io.rs` | the file-format readers and writers |
+| `src/preprocess.rs`, `eval.rs`, `binarize.rs`, `run.rs`, `error.rs` | preprocessor, `__EVAL`, binarize bridge, CLI, errors |
+| `tests/` | integration tests (public API and the CLI) |
+| `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
+| `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
+| `benches/` | `criterion` benchmarks (`preprocess`, `config`) |
+| `fuzz/` | `cargo-fuzz` crate: targets for the untrusted-input readers, with seed corpora |
+| `docs/superpowers/` | design notes and plans |
+
+Toolchain: Rust **1.99**, edition 2024, pinned in `rust-toolchain.toml`. `Cargo.lock` is committed and CI builds
+with `--locked`. Fuzzing and Miri need `nightly` (see below).
+
+## Project ground rules
+
+- **No game data in the repo.** Test fixtures are synthetic, or BI tool output made from our own inputs
+  (`tests/fixtures/bi/README.md`). Game files are read from the user's install at run time.
+- **Clean-room:** no code from BI tools. Formats come from public documentation and from observing game files
+  and tool output on our own inputs. armake2 code stays under its own licence.
+- Using the DayZ client, server and DayZ Tools for development and manual testing is allowed. Prefer your own
+  folders (a server tree, a mod folder) over changes inside an install, never edit or delete game files, remove
+  what you linked when you are done. Local DayZ test servers never use the default ports. The automated tests
+  only read what the repo provides.
+- Temporary and build folders go under `/tmp` or `/var/tmp` (`tempfile` crate or `mktemp -d`), never under
+  `$HOME`. The `Makefile` sets `TMPDIR` and `CARGO_TARGET_DIR` accordingly.
+- Linux first; everything except clearly marked platform code (`winreg`, Proton/Wine paths) must also build on
+  Windows.
+- **Reuse before you write:** check for an existing crate first and review it (see *Dependencies*).
+- The licence stays GPL-2.0-or-later. Do not add code or dependencies under an incompatible licence.
+
+## Tests
+
+- **Test first.** A new feature or bug fix comes with a test that fails without it (red, then green).
+- Test behaviour through the public API: integration tests in `tests/`. Unit tests in `#[cfg(test)] mod tests`
+  are for private helpers that hold real logic.
+- Tests are **deterministic**: no `sleep` to wait for state, fixed seeds for random input, no network access.
+- Tests write only under a `tempfile::TempDir`. They never touch `$HOME`, the user's config, a Steam directory or
+  a running server. CLI tests set `HOME` and the `XDG_*` variables to temp dirs.
+- Code that calls external tools (`binarize.exe`, Proton, DayZ) is tested in CI against fakes. Tests that need the
+  real tools are `#[ignore = "needs <tool>"]` and run explicitly; they do not replace the faked tests.
+- Parsers for untrusted input (PBO, config, P3D, PAA, keys, signatures) have a fuzz target (`make fuzz`).
+  A crash found by fuzzing gets a regression test in `tests/` with the minimised input, in the same commit as
+  the fix. The fuzz corpus seeds also run as ordinary tests in `make test` (`tests/fuzz_seeds.rs`).
+
+## Coverage
+
+- Total line coverage stays **at or above 70 %** (`COVERAGE_MIN` in the `Makefile`, `cargo llvm-cov`). A change
+  must not lower it; raise the floor when coverage grows.
+- CI uploads the report to **Codecov** (`codecov.yml`: `project` `threshold: 0%`, `patch` `threshold: 5%`).
+- Never lower the threshold, and never exclude code (`--ignore-filename-regex`, `#[coverage(off)]`) to reach it.
+
+## Safe Rust
+
+The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds the test exceptions.
+
+**Lints**
+- Strict by design: `cargo clippy` runs with `-D warnings`; `clippy::all` and `clippy::pedantic` are enabled.
+  Don't relax the lint set to get a change through.
+- Silence a lint locally with `#[expect(lint, reason = "...")]`, not `#[allow]`
+  (`clippy::allow_attributes_without_reason` is on). Never silence a lint crate-wide to make CI pass.
+
+**`unsafe`**
+- `unsafe_code = "forbid"`. If `unsafe` is ever really needed (FFI, a measured hot path) it needs the
+  maintainer's approval first, then: its own module, a `// SAFETY:` comment on every block, and tests under Miri
+  (`make miri`).
+
+**Untrusted input never panics**
+- All file contents (PBO, config, P3D, PAA, keys, signatures, include files) and CLI input are untrusted.
+  Library code returns errors instead of panicking: no `unwrap`, `expect`, `panic!`, `unreachable!`, `todo!` or
+  unchecked slice indexing on such data (`unwrap_used`, `expect_used`, `panic`, `indexing_slicing` are lints;
+  `clippy.toml` allows them in tests).
+- Sizes and offsets read from files use checked arithmetic (`checked_add`, `checked_mul`) and `TryFrom`
+  conversions. No truncating or sign-changing `as` casts (`cast_possible_truncation`, `cast_sign_loss`,
+  `cast_possible_wrap` are denied). The release profile keeps `overflow-checks = true`.
+- Never allocate from a length field before checking it against the remaining input and a sane limit
+  (`Vec::with_capacity(len_from_file)` is a bug). Stream large files instead of reading them whole.
+- Recursion on file-controlled depth (config classes, preprocessor includes and macros) has a depth limit.
+- Floating point: no `==` on floats (`clippy::float_cmp`); sort with `total_cmp`.
+
+**Files, paths and processes**
+- PBO entry names are validated before use: reject absolute paths, drive letters, `..` components and empty
+  names; normalise `\` separators; only then join to an output directory.
+- Write build output atomically where a half-written file would be harmful (temp file in the same directory,
+  then rename).
+- Run external tools with `std::process::Command` and an argument list, never through a shell. Check the exit
+  status, put stderr into the error.
+- Check for missing external tools up front and name the tool and the setting to change.
+
+**Errors and output**
+- Library code returns `std::io::Error` built with the `error!` macro and adds context with `prepend_error`
+  (file, offset, object). `main`/`run` decide whether to print and exit.
+- Don't swallow errors: `let _ = fallible()` and `.ok()` on a `Result` need a comment saying why.
+- Only the CLI layer prints (`print_stdout`/`print_stderr` are lints; the places that print carry
+  `#[expect(..., reason)]`).
+- **Same input, same output:** builds are byte-for-byte reproducible. No `HashMap`/`HashSet` iteration order in
+  output (sort first or use an ordered map), no timestamps in generated files unless a format requires them.
+
+**Concurrency**
+- No `static mut`, no new global mutable state; pass state explicitly. (The warning counters in `error.rs` are
+  the one existing exception.)
+
+**Secrets**
+- Signing keys (`*.biprivatekey`) and other secrets never go into the repo, logs or error messages. The one
+  throwaway test key under `tests/fixtures/bi/sign/` is the exception. `secrets/` is in `.gitignore`.
+
+**Dependencies**
+- **Look for a crate first (strict).** Before implementing a feature, parser, algorithm or helper, check whether
+  a suitable crate exists (crates.io, lib.rs, RustSec). Writing it ourselves is only allowed when none exists or
+  every candidate fails the review below; the commit message says which were considered and why rejected.
+- **Review every crate before using it (strict).** Read its source, not just the README:
+  - *security*: open RustSec advisories, handling of untrusted input (panics, unchecked indexing, allocation
+    from length fields, unbounded recursion), justified `unsafe`, no surprising build scripts;
+  - *maintenance*: recent releases, issues answered, not deprecated, archived or yanked, healthy bus factor;
+  - *our standards*: tests, errors instead of panics, builds on Linux and Windows with Rust 1.99, deterministic
+    output, a licence on the `deny.toml` allow-list (GPL-2.0-or-later compatible).
+  A crate that fails the review is not used. The review result goes into the commit message that adds it.
+- Add dependencies with `cargo add` (latest stable), only the features needed. No git or path dependencies.
+- `cargo deny` checks licences, RustSec advisories, duplicates and sources; run `make deny` after any
+  `Cargo.toml` change.
+
+## Documentation
+
+- Public items have rustdoc comments (`missing_docs` is on); `make doc` builds them with warnings as errors.
+- A commit that changes behaviour or the CLI updates `README.md` and the `USAGE` text in `src/run.rs` together.
+
+## Commits
+
+- One logical change per commit, with `make check` passing.
+- Conventional prefixes: `feat:`, `fix:`, `test:`, `docs:`, `build:`, `ci:`, `refactor:`, `chore:`, `release:`.
+- The commit includes its tests and the documentation update it needs.
+
+## Before pushing
+
+Run `make check`. It must pass, because CI runs the same steps:
+
+| Step | Target | Notes |
+|---|---|---|
+| formatting | `make fmt-check` | fix with `make fmt` |
+| lint | `make lint` | `cargo clippy --all-targets --locked -- -D warnings` |
+| rustdoc | `make doc` | `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
+| dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
+| tests | `make test` | all targets plus doctests; includes the fuzz seeds |
+| fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |
+| coverage | `make coverage-check` | `cargo llvm-cov`; total coverage must stay at or above 70 % |
+
+CI additionally runs **CodeQL** (`.github/workflows/codeql.yml`). New alerts block the merge; fix them or
+dismiss them in GitHub with a written reason. When the change touches `unsafe` code, also run `make miri`.
+
+SPDX/REUSE headers are not used in this repository (the files are mostly inherited from armake2 and keep their
+original copyright holders); the licence is declared once, in `Cargo.toml` and `LICENSE`.
