@@ -543,7 +543,8 @@ fn mcp_truncates_huge_output() {
     let t = text(&r.replies[0]);
     assert!(t.len() < 200_100, "{}", t.len());
     assert!(
-        t.ends_with("bytes total]") && t.contains("[truncated: 3000"),
+        t.ends_with("call again with offset=200000]")
+            && t.contains("[truncated: showing bytes 0-200000 of 3000"),
         "{}",
         &t[t.len() - 60..]
     );
@@ -598,4 +599,125 @@ fn mcp_api_mods_tool() {
                 .unwrap_or_default();
         assert!(desc.contains("while"), "{t}");
     }
+}
+
+/// Fetches `file` of `a.pbo` in chunks, following the `offset=` hint of each truncation note.
+fn fetch_in_chunks(tool: &str, base: &Value, tmp: &Path) -> String {
+    let mut out = String::new();
+    let mut offset = 0u64;
+    for round in 0..10 {
+        let mut args = base.clone();
+        args["offset"] = json!(offset);
+        let r = run(&[call(1, tool, &args)], tmp);
+        assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+        let t = text(&r.replies[0]);
+        let Some((body, note)) = t.rsplit_once("\n[truncated: ") else {
+            let body = t.rsplit_once("\n[showing bytes ").map_or(t, |(b, _)| b);
+            out.push_str(body);
+            return out;
+        };
+        out.push_str(body);
+        assert!(note.contains("call again with offset="), "{note}");
+        offset = note
+            .split("offset=")
+            .nth(1)
+            .and_then(|n| n.trim_end_matches(']').parse().ok())
+            .expect("an offset");
+        assert!(round < 9, "too many chunks");
+    }
+    out
+}
+
+#[test]
+fn mcp_pbo_cat_chunks_reassemble_the_file() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let original = "class A { // é\n};\n".repeat(20_000);
+    assert!(original.len() > 300_000);
+    fs::write(
+        tmp.path().join("a.pbo"),
+        make_pbo(&[("big.c", original.as_bytes())]),
+    )
+    .expect("write");
+    let got = fetch_in_chunks(
+        "pbo_cat",
+        &json!({"pbo":"a.pbo","file":"big.c"}),
+        tmp.path(),
+    );
+    assert_eq!(got, original);
+    // an explicit length
+    let r = run(
+        &[call(
+            1,
+            "pbo_cat",
+            &json!({"pbo":"a.pbo","file":"big.c","offset":6,"length":4}),
+        )],
+        tmp.path(),
+    );
+    assert!(
+        text(&r.replies[0]).starts_with("A { "),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(
+        text(&r.replies[0]).contains("offset=10]"),
+        "{}",
+        text(&r.replies[0])
+    );
+}
+
+#[test]
+fn mcp_api_source_cat_chunks_and_target() {
+    let w = fake_steam();
+    let env = [
+        ("STEAM_ROOT", w.root.as_path()),
+        ("DAYZMAKE_CACHE", w.cache.as_path()),
+        ("HOME", w.home.as_path()),
+    ];
+    let whole = run_raw(
+        lines(&[call(1, "api_source", &json!({"name":"Base","cat":true}))]),
+        &env,
+        &w.home,
+    );
+    let full = text(&whole.replies[0]).to_string();
+    // two chunks of 100 bytes each, reassembled
+    let a = run_raw(
+        lines(&[call(
+            1,
+            "api_source",
+            &json!({"name":"Base","cat":true,"length":100}),
+        )]),
+        &env,
+        &w.home,
+    );
+    let first = text(&a.replies[0]);
+    let (body1, note) = first.rsplit_once("\n[truncated: ").expect("truncated");
+    assert!(note.contains("showing bytes 0-100 of"), "{note}");
+    assert!(note.contains("offset=100]"), "{note}");
+    let b = run_raw(
+        lines(&[call(
+            1,
+            "api_source",
+            &json!({"name":"Base","cat":true,"offset":100}),
+        )]),
+        &env,
+        &w.home,
+    );
+    let (body2, last) = text(&b.replies[0])
+        .rsplit_once("\n[showing bytes ")
+        .expect("a closing note");
+    assert!(last.starts_with("100-"), "{last}");
+    assert_eq!(format!("{body1}{body2}"), full);
+    // target writes the file instead
+    let target = w.home.join("Base.c");
+    let t = run_raw(
+        lines(&[call(
+            1,
+            "api_source",
+            &json!({"name":"Base","cat":true,"target":s(&target)}),
+        )]),
+        &env,
+        &w.home,
+    );
+    assert!(!is_error(&t.replies[0]), "{}", text(&t.replies[0]));
+    assert_eq!(fs::read_to_string(&target).expect("read"), full);
 }

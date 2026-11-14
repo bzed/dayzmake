@@ -213,6 +213,12 @@ fn dispatch(method: &str, params: Option<&Value>) -> Result<Value, (i64, String)
 
 /// Runs a tool and wraps its output (or its failure) as an MCP tool result.
 fn run_tool(name: &str, args: &Args) -> Value {
+    let (offset, length) = match window_args(name, args) {
+        Ok(w) => w,
+        Err(e) => {
+            return json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true});
+        }
+    };
     // A panic in a tool must not kill the server. The closure only borrows plain data and the
     // global state it touches (warning capture, proton flag) is reset below or by its guards.
     let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -221,38 +227,77 @@ fn run_tool(name: &str, args: &Args) -> Value {
     binarize::set_proton(false);
     binarize::cleanup();
     let (text, is_error) = match outcome {
-        Ok((Ok(out), warnings)) => (with_warnings(out, &warnings), false),
-        Ok((Err(e), warnings)) => (with_warnings(e.to_string(), &warnings), true),
+        Ok((Ok(out), warnings)) => (
+            with_warnings(&window(&out, offset, length), &warnings),
+            false,
+        ),
+        Ok((Err(e), warnings)) => (
+            with_warnings(&window(&e.to_string(), 0, MAX_OUTPUT), &warnings),
+            true,
+        ),
         Err(_) => (
             format!("internal error: the tool \"{name}\" panicked"),
             true,
         ),
     };
-    json!({"content": [{"type": "text", "text": truncate(text)}], "isError": is_error})
+    json!({"content": [{"type": "text", "text": text}], "isError": is_error})
 }
 
-fn with_warnings(mut text: String, warnings: &[String]) -> String {
-    if !warnings.is_empty() {
-        text.push_str("\n\nwarnings:\n");
-        text.push_str(&warnings.join("\n"));
+/// The captured warnings come first, so cutting the output never drops them.
+fn with_warnings(text: &str, warnings: &[String]) -> String {
+    if warnings.is_empty() {
+        return text.to_string();
     }
-    text
+    format!("warnings:\n{}\n\n{text}", warnings.join("\n"))
 }
 
-/// Cuts the text at `MAX_OUTPUT` bytes (on a character boundary) and says how long it was.
-fn truncate(text: String) -> String {
+/// The byte window (`offset`, `length`) the call asks for. Only the tools that return whole files
+/// (`api_source` with `cat`, `pbo_cat`) take `offset` and `length`; the others start at 0.
+fn window_args(name: &str, args: &Args) -> Result<(usize, usize), Error> {
+    if !matches!(name, "api_source" | "pbo_cat") {
+        return Ok((0, MAX_OUTPUT));
+    }
+    let number = |key: &str, default: usize| -> Result<usize, Error> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(default),
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| error!("argument \"{key}\" must be a non-negative integer")),
+        }
+    };
+    Ok((
+        number("offset", 0)?,
+        number("length", MAX_OUTPUT)?.min(MAX_OUTPUT),
+    ))
+}
+
+/// At most `length` bytes of `text` from byte `offset` on, cut on character boundaries (the start moves
+/// forward, the end back). Says what was left out and which `offset` fetches the rest.
+fn window(text: &str, offset: usize, length: usize) -> String {
     let total = text.len();
-    if total <= MAX_OUTPUT {
-        return text;
+    if offset == 0 && total <= length {
+        return text.to_string();
     }
-    let mut end = MAX_OUTPUT;
+    if offset >= total {
+        return format!("[offset {offset} is past the end of the {total} bytes]");
+    }
+    let mut start = offset;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let mut end = start.saturating_add(length).min(total);
     while !text.is_char_boundary(end) {
         end -= 1;
     }
-    format!(
-        "{}\n[truncated: {total} bytes total]",
-        text.get(..end).unwrap_or_default()
-    )
+    let body = text.get(start..end).unwrap_or_default();
+    if end < total {
+        format!(
+            "{body}\n[truncated: showing bytes {start}-{end} of {total}; call again with offset={end}]"
+        )
+    } else {
+        format!("{body}\n[showing bytes {start}-{end} of {total}]")
+    }
 }
 
 // ---- tool definitions ----
@@ -304,6 +349,16 @@ const MAX_ARG: (&str, char, &str) = (
     "At most this many lines or items (default 120).",
 );
 const FORCE_ARG: (&str, char, &str) = ("force", 'b', "Overwrite existing target files.");
+const OFFSET_ARG: (&str, char, &str) = (
+    "offset",
+    'i',
+    "Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest.",
+);
+const LENGTH_ARG: (&str, char, &str) = (
+    "length",
+    'i',
+    "Return at most this many bytes (default and maximum 200000).",
+);
 
 fn api_tool(
     name: &str,
@@ -416,6 +471,14 @@ fn tools() -> Value {
                     'b',
                     "Return the full source files (with json: the files as JSON)."
                 ),
+                OFFSET_ARG,
+                LENGTH_ARG,
+                (
+                    "target",
+                    's',
+                    "With cat: write the files to this file instead of returning them."
+                ),
+                FORCE_ARG,
             ],
             &["name"],
             (true, true)
@@ -470,6 +533,8 @@ fn tools() -> Value {
                     "Write the entry to this file instead of returning it (required for binary data)."
                 ),
                 FORCE_ARG,
+                OFFSET_ARG,
+                LENGTH_ARG,
             ],
             &["pbo", "file"],
         ),
@@ -847,7 +912,13 @@ fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
         "api_source" => {
             let name = str_arg(args, "name")?;
             if bool_arg(args, "cat")? {
-                return api::src_cat(&ctx, &name, json);
+                let text = api::src_cat(&ctx, &name, json)?;
+                return match opt_path(args, "target")? {
+                    Some(target) => {
+                        write_target(&target, text.as_bytes(), bool_arg(args, "force")?)
+                    }
+                    None => Ok(text),
+                };
             }
             Query::Src { name }
         }
@@ -941,7 +1012,45 @@ mod tests {
     #[test]
     fn truncation_keeps_characters_whole() {
         let text = "é".repeat(MAX_OUTPUT);
-        let cut = truncate(text);
-        assert!(cut.contains("[truncated: 400000 bytes total]"));
+        let cut = window(&text, 0, MAX_OUTPUT);
+        assert!(
+            cut.contains(
+                "[truncated: showing bytes 0-200000 of 400000; call again with offset=200000]"
+            ),
+            "{}",
+            &cut[cut.len() - 90..]
+        );
+        // an odd length cuts back to a boundary and the next offset follows from it
+        let cut = window(&text, 0, 5);
+        assert!(
+            cut.starts_with("éé\n") && cut.contains("offset=4]"),
+            "{cut}"
+        );
+    }
+
+    #[test]
+    fn chunks_reassemble_the_text() {
+        let text = "aé\n".repeat(1000);
+        let mut out = String::new();
+        let mut offset = 0;
+        while offset < text.len() {
+            let w = window(&text, offset, 777);
+            let (body, note) = w.rsplit_once('\n').expect("a note line");
+            out.push_str(body);
+            offset = note
+                .split("offset=")
+                .nth(1)
+                .and_then(|n| n.trim_end_matches(']').parse().ok())
+                .unwrap_or(text.len());
+        }
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn warnings_come_before_the_cut() {
+        let warnings = vec!["w1 [x]".to_string()];
+        let out = with_warnings(&window(&"a".repeat(500), 0, 10), &warnings);
+        assert!(out.starts_with("warnings:\nw1 [x]\n\n"), "{out}");
+        assert!(out.contains("[truncated:"), "{out}");
     }
 }

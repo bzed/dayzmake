@@ -182,8 +182,9 @@ Tools:
 
 The tools take file paths as given (relative to the server's working directory) and act with the permissions of
 the user running the server: they can read, create and, with `force`, overwrite any file that user can. Only
-register the server with a client you trust to do that. Output is capped at 200 000 bytes, warnings are appended
-to the result, and failures are results with `isError: true`.
+register the server with a client you trust to do that. Output is capped at 200 000 bytes; `api_source` (with `cat`) and `pbo_cat` take `offset` and `length`
+(bytes) to fetch the rest, and `api_source` takes `target` to write the files instead. Warnings come first in
+the result, so a cut never drops them, and failures are results with `isError: true`.
 
 ## Inspecting models and checking their textures
 
