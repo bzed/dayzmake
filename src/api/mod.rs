@@ -1,6 +1,6 @@
 //! `dayzmake api`: build and query an index of the DayZ script API.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Error;
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::error;
 use crate::error::warning;
-use crate::pbo::{PBO, safe_relative_path};
+use crate::pbo::{PBO, SelectedEntry, safe_relative_path};
 use cache::dir_hash;
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
@@ -176,10 +176,14 @@ fn mod_key(m: &ModSource, branch: Branch) -> String {
     format!("mod-{}-{}-{}", m.name, branch.name(), dir_hash(&m.dir))
 }
 
+/// Most mod indexes built at once. Each worker holds the scripts of one mod in memory.
+const MAX_WORKERS: usize = 4;
+
 /// How many mod indexes are built at once.
 fn workers(jobs: usize) -> usize {
     std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
+        .min(MAX_WORKERS)
         .min(jobs)
         .max(1)
 }
@@ -303,11 +307,11 @@ pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Err
     if files.is_empty() {
         return Err(error!("no class or enum named \"{name}\""));
     }
-    let mut pbos: BTreeMap<PathBuf, PBO> = BTreeMap::new();
-    let mut out = Vec::new();
-    for f in files {
+    // Resolve every file to its PBO, then read each PBO once, seeking to just the needed entries.
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for f in &files {
         // Index names are unique and a mod is never called `vanilla` (see `unique_names`).
-        let path = if f.index == "vanilla" {
+        paths.push(if f.index == "vanilla" {
             found.scripts_pbo.clone()
         } else {
             let m = found
@@ -318,19 +322,34 @@ pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Err
             let rel = safe_relative_path(&f.pbo)
                 .ok_or_else(|| error!("unsafe PBO path \"{}\" in the index", f.pbo))?;
             m.dir.join(rel)
-        };
-        if !pbos.contains_key(&path) {
-            let mut file =
-                std::fs::File::open(&path).map_err(|e| error!("{}: {e}", path.display()))?;
-            let pbo = PBO::read(&mut file).map_err(|e| error!("{}: {e}", path.display()))?;
-            pbos.insert(path.clone(), pbo);
+        });
+    }
+    let mut read: BTreeMap<PathBuf, Vec<SelectedEntry>> = BTreeMap::new();
+    for path in &paths {
+        if read.contains_key(path) {
+            continue;
         }
-        let data = pbos
-            .get(&path)
-            .map(|p| p.file_data(&f.path))
-            .transpose()?
-            .flatten()
-            .ok_or_else(|| error!("{} not found in {}", f.path, path.display()))?;
+        let wanted: BTreeSet<&str> = files
+            .iter()
+            .zip(&paths)
+            .filter(|(_, p)| *p == path)
+            .map(|(f, _)| f.path.as_str())
+            .collect();
+        let mut file = std::fs::File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+        let sel = PBO::read_entries(&mut file, |n| wanted.contains(n))
+            .map_err(|e| error!("{}: {e}", path.display()))?;
+        read.insert(path.clone(), sel.entries);
+    }
+    let mut out = Vec::new();
+    for (f, path) in files.into_iter().zip(&paths) {
+        let data = match read
+            .get_mut(path)
+            .and_then(|entries| entries.iter_mut().find(|(n, _)| *n == f.path))
+        {
+            Some((_, Ok(data))) => data.clone(),
+            Some((_, Err(e))) => return Err(error!("{}: {e}", f.path)),
+            None => return Err(error!("{} not found in {}", f.path, path.display())),
+        };
         out.push(SrcContent {
             index: f.index,
             pbo: f.pbo,

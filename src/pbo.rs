@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs::{File, create_dir_all, read_dir};
-use std::io::{Cursor, Error, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Cursor, Error, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -18,7 +18,7 @@ static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap()
 use crate::binarize;
 use crate::config::{Config, is_rapified};
 use crate::error::{ErrorExt, printable, warning};
-use crate::io::{ReadExt, WriteExt};
+use crate::io::WriteExt;
 use crate::p3d;
 
 struct PBOHeader {
@@ -139,7 +139,7 @@ pub struct PBO {
 
 impl PBOHeader {
     fn read<I: Read>(input: &mut I) -> Result<PBOHeader, Error> {
-        let (filename, raw_filename) = decode_name(input.read_cstring_bytes()?);
+        let (filename, raw_filename) = decode_name(read_bounded_cstring(input)?);
         Ok(PBOHeader {
             filename,
             raw_filename,
@@ -163,6 +163,78 @@ impl PBOHeader {
         output.write_u32::<LittleEndian>(self.data_size)?;
         Ok(())
     }
+}
+
+/// The parsed header block of a PBO: the header extensions and the entry headers.
+struct HeaderBlock {
+    extensions: HashMap<String, String>,
+    raw_extensions: HashMap<String, Vec<u8>>,
+    headers: Vec<PBOHeader>,
+}
+
+/// Parses the header block of a PBO, up to and including the empty terminating header. The data of the
+/// first entry starts right after it.
+///
+/// The input is untrusted: every string is limited to `MAX_HEADER_STRING` bytes, the number of entries
+/// to `MAX_HEADER_ENTRIES` and of header extensions to `MAX_HEADER_EXTENSIONS`, and nothing is allocated
+/// from a size in the file.
+fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
+    let mut block = HeaderBlock {
+        extensions: HashMap::new(),
+        raw_extensions: HashMap::new(),
+        headers: Vec::new(),
+    };
+    let mut first = true;
+    loop {
+        let header = PBOHeader::read(input)?;
+        // todo: garbage filter
+
+        if header.packing_method == 0x5665_7273 {
+            if !first {
+                return Err(error!("Duplicate version header in PBO."));
+            }
+            loop {
+                let (key, raw_key) = decode_name(read_bounded_cstring(input)?);
+                if key.is_empty() {
+                    break;
+                }
+                if block.extensions.len() >= MAX_HEADER_EXTENSIONS {
+                    return Err(error!("PBO has too many header extensions."));
+                }
+                let (value, raw_value) = decode_name(read_bounded_cstring(input)?);
+                if let Some(raw) = raw_key {
+                    block.raw_extensions.insert(key.clone(), raw);
+                }
+                if let Some(raw) = raw_value {
+                    block.raw_extensions.insert(value.clone(), raw);
+                }
+                block.extensions.insert(key, value);
+            }
+        } else if header.filename.is_empty() {
+            break;
+        } else {
+            if block.headers.len() >= MAX_HEADER_ENTRIES {
+                return Err(error!("PBO has too many entries."));
+            }
+            block.headers.push(header);
+        }
+        first = false;
+    }
+    Ok(block)
+}
+
+/// An entry name with its decompressed data, or the reason it cannot be read.
+pub type SelectedEntry = (String, Result<Vec<u8>, Error>);
+
+/// The entries of a PBO that [`PBO::read_entries`] selected.
+pub struct PboSelection {
+    /// Header extensions (`key=value`), including the prefix under the key `prefix`.
+    pub header_extensions: HashMap<String, String>,
+    /// All entry names in file order.
+    pub names: Vec<String>,
+    /// The selected entries in file order with their decompressed data; an entry that cannot be
+    /// decompressed is an error of its own.
+    pub entries: Vec<SelectedEntry>,
 }
 
 /// Packing method of entries compressed with Bohemia's LZSS variant ("Cprs").
@@ -292,44 +364,11 @@ impl PBO {
     ///
     /// Returns an error if the input is not a valid PBO.
     pub fn read<I: Read>(input: &mut I) -> Result<PBO, Error> {
-        let mut headers: Vec<PBOHeader> = Vec::new();
-        let mut first = true;
-        let mut header_extensions: HashMap<String, String> = HashMap::new();
-        let mut raw_extensions: HashMap<String, Vec<u8>> = HashMap::new();
-        let mut decode_ext = |bytes: Vec<u8>| {
-            let (s, raw) = decode_name(bytes);
-            if let Some(raw) = raw {
-                raw_extensions.insert(s.clone(), raw);
-            }
-            s
-        };
-
-        loop {
-            let header = PBOHeader::read(input)?;
-            // todo: garbage filter
-
-            if header.packing_method == 0x5665_7273 {
-                if !first {
-                    return Err(error!("Duplicate version header in PBO."));
-                }
-
-                loop {
-                    let s = decode_ext(input.read_cstring_bytes()?);
-                    if s.is_empty() {
-                        break;
-                    }
-
-                    let value = decode_ext(input.read_cstring_bytes()?);
-                    header_extensions.insert(s, value);
-                }
-            } else if header.filename.is_empty() {
-                break;
-            } else {
-                headers.push(header);
-            }
-
-            first = false;
-        }
+        let HeaderBlock {
+            extensions: header_extensions,
+            raw_extensions,
+            headers,
+        } = read_header_block(input)?;
 
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut raw_names: HashMap<String, Vec<u8>> = HashMap::new();
@@ -383,42 +422,65 @@ impl PBO {
     pub fn read_headers<I: Read>(
         input: &mut I,
     ) -> Result<(HashMap<String, String>, Vec<String>), Error> {
-        let mut extensions: HashMap<String, String> = HashMap::new();
-        let mut names: Vec<String> = Vec::new();
-        let mut first = true;
-        loop {
-            let name = read_bounded_cstring(input)?;
-            let mut fields = [0u8; 20];
-            input.read_exact(&mut fields)?;
-            let packing_method = fields
-                .first_chunk::<4>()
-                .map_or(0, |b| u32::from_le_bytes(*b));
-            if packing_method == 0x5665_7273 {
-                if !first {
-                    return Err(error!("Duplicate version header in PBO."));
+        let block = read_header_block(input)?;
+        let names = block.headers.into_iter().map(|h| h.filename).collect();
+        Ok((block.extensions, names))
+    }
+
+    /// Reads the header block of a seekable PBO and only the entries `wanted` accepts, by seeking to their
+    /// data. Memory use is bounded by the selected entries, not by the size of the PBO, which can be many
+    /// hundred MB.
+    ///
+    /// The input is untrusted: the header block is bounded like `read_headers`, and an entry whose data
+    /// selected for reading does not lie inside the file is an error (nothing is allocated from a size before it is checked
+    /// against the file length).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header block is malformed or exceeds the limits, or the data of a selected
+    /// entry is truncated.
+    pub fn read_entries<I: Read + Seek>(
+        input: &mut I,
+        wanted: impl Fn(&str) -> bool,
+    ) -> Result<PboSelection, Error> {
+        let len = input.seek(SeekFrom::End(0))?;
+        input.seek(SeekFrom::Start(0))?;
+        let mut reader = BufReader::new(&mut *input);
+        let block = read_header_block(&mut reader)?;
+        let mut offset = reader.stream_position()?;
+        let mut entries = Vec::new();
+        for h in &block.headers {
+            let size = u64::from(h.data_size);
+            let end = offset
+                .checked_add(size)
+                .ok_or_else(|| error!("PBO entry sizes overflow."))?;
+            if wanted(&h.filename) {
+                if end > len {
+                    return Err(error!(
+                        "PBO entry \"{}\" is truncated (its data ends past the end of the file).",
+                        printable(&h.filename)
+                    ));
                 }
-                loop {
-                    let key = decode_name(read_bounded_cstring(input)?).0;
-                    if key.is_empty() {
-                        break;
-                    }
-                    if extensions.len() >= MAX_HEADER_EXTENSIONS {
-                        return Err(error!("PBO has too many header extensions."));
-                    }
-                    let value = decode_name(read_bounded_cstring(input)?).0;
-                    extensions.insert(key, value);
-                }
-            } else if name.is_empty() {
-                break;
-            } else {
-                if names.len() >= MAX_HEADER_ENTRIES {
-                    return Err(error!("PBO has too many entries."));
-                }
-                names.push(decode_name(name).0);
+                reader.seek(SeekFrom::Start(offset))?;
+                let mut data: Vec<u8> = Vec::new();
+                (&mut reader).take(size).read_to_end(&mut data)?;
+                let data = if h.packing_method == PACKING_COMPRESSED {
+                    lzss_decompress(&data, h.original_size as usize).prepend_error(format!(
+                        "Failed to decompress \"{}\":",
+                        printable(&h.filename)
+                    ))
+                } else {
+                    Ok(data)
+                };
+                entries.push((h.filename.clone(), data));
             }
-            first = false;
+            offset = end;
         }
-        Ok((extensions, names))
+        Ok(PboSelection {
+            header_extensions: block.extensions,
+            names: block.headers.into_iter().map(|h| h.filename).collect(),
+            entries,
+        })
     }
 
     /// Constructs a PBO from a directory with optional binarization.

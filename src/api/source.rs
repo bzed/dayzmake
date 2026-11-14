@@ -203,49 +203,62 @@ fn workshop_mod_dir(
     })
 }
 
-/// Entry names of the `.c` scripts of a PBO, safe ones only.
-fn script_entries(pbo: &PBO, origin: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for name in pbo.files.keys() {
-        if !Path::new(&name.replace('\\', "/"))
-            .extension()
-            .is_some_and(|x| x.eq_ignore_ascii_case("c"))
-        {
-            continue;
-        }
-        if safe_relative_path(name).is_none() {
+/// Whether `name` is a `.c` script entry.
+fn is_script(name: &str) -> bool {
+    Path::new(&name.replace('\\', "/"))
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("c"))
+}
+
+/// Whether `name` is the config of a PBO (`config.bin` or `config.cpp` at the top level).
+fn is_config(name: &str) -> bool {
+    name.eq_ignore_ascii_case("config.bin") || name.eq_ignore_ascii_case("config.cpp")
+}
+
+/// The decoded text of the selected entries of a PBO; `.c` entries with an unsafe name and entries that
+/// cannot be read are skipped with a warning. Config entries come back as (name, bytes) in `config`.
+struct Selected {
+    prefix_ext: Option<String>,
+    config: Vec<(String, Vec<u8>)>,
+    texts: Vec<(String, String)>,
+}
+
+/// Read the `.c` entries and the config of a PBO by seeking to them; the rest of the PBO is never read.
+fn read_selected(path: &Path, origin: &str, with_config: bool) -> Result<Selected, Error> {
+    let mut file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+    let sel = PBO::read_entries(&mut file, |n| is_script(n) || (with_config && is_config(n)))
+        .map_err(|e| error!("{}: {e}", path.display()))?;
+    let mut out = Selected {
+        prefix_ext: sel.header_extensions.get("prefix").cloned(),
+        config: Vec::new(),
+        texts: Vec::new(),
+    };
+    for (name, data) in sel.entries {
+        let bytes = match data {
+            Ok(b) => b,
+            Err(e) => {
+                warning(
+                    format!("cannot read {:?}: {e}", printable(&name)),
+                    Some("api-bad-entry"),
+                    (Some(origin.to_string()), None),
+                );
+                continue;
+            }
+        };
+        if is_config(&name) {
+            out.config.push((name, bytes));
+        } else if safe_relative_path(&name).is_none() {
             warning(
-                format!("skipping unsafe entry name {:?}", printable(name)),
+                format!("skipping unsafe entry name {:?}", printable(&name)),
                 Some("api-unsafe-entry"),
                 (Some(origin.to_string()), None),
             );
-            continue;
-        }
-        out.push(name.clone());
-    }
-    out
-}
-
-/// The text of every named entry, lossily decoded; entries that cannot be read are skipped with a warning.
-fn entry_texts(pbo: &PBO, names: Vec<String>, origin: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for name in names {
-        match pbo.file_data(&name) {
-            Ok(Some(bytes)) => out.push((name, String::from_utf8_lossy(&bytes).into_owned())),
-            Ok(None) => {}
-            Err(e) => warning(
-                format!("cannot read {:?}: {e}", printable(&name)),
-                Some("api-bad-entry"),
-                (Some(origin.to_string()), None),
-            ),
+        } else {
+            out.texts
+                .push((name, String::from_utf8_lossy(&bytes).into_owned()));
         }
     }
-    out
-}
-
-fn read_pbo(path: &Path) -> Result<PBO, Error> {
-    let mut file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
-    PBO::read(&mut file).map_err(|e| error!("{}: {e}", path.display()))
+    Ok(out)
 }
 
 /// Index `dta/scripts.pbo`: one module, prefix `scripts`.
@@ -255,8 +268,7 @@ fn read_pbo(path: &Path) -> Result<PBO, Error> {
 /// Returns an error when the PBO cannot be read.
 pub fn build_vanilla(scripts_pbo: &Path, branch: Branch, build: &str) -> Result<ApiIndex, Error> {
     let origin = scripts_pbo.display().to_string();
-    let pbo = read_pbo(scripts_pbo)?;
-    let texts = entry_texts(&pbo, script_entries(&pbo, &origin), &origin);
+    let texts = read_selected(scripts_pbo, &origin, false)?.texts;
     let files: Vec<ScriptFile<'_>> = texts
         .iter()
         .map(|(path, text)| ScriptFile {
@@ -291,11 +303,9 @@ fn meta_name(dir: &Path) -> Option<String> {
 }
 
 /// The `config.bin` (derapified) or `config.cpp` text of a PBO, empty when there is none.
-fn config_text(pbo: &PBO, origin: &str) -> String {
-    let find = |wanted: &str| pbo.files.keys().find(|n| n.eq_ignore_ascii_case(wanted));
-    if let Some(name) = find("config.bin")
-        && let Ok(Some(bytes)) = pbo.file_data(name)
-    {
+fn config_text(config: &[(String, Vec<u8>)], origin: &str) -> String {
+    let find = |wanted: &str| config.iter().find(|(n, _)| n.eq_ignore_ascii_case(wanted));
+    if let Some((_, bytes)) = find("config.bin") {
         return match Config::read_rapified(&mut Cursor::new(bytes)).and_then(|c| c.to_string()) {
             Ok(text) => text,
             Err(e) => {
@@ -308,10 +318,8 @@ fn config_text(pbo: &PBO, origin: &str) -> String {
             }
         };
     }
-    if let Some(name) = find("config.cpp")
-        && let Ok(Some(bytes)) = pbo.file_data(name)
-    {
-        return String::from_utf8_lossy(&bytes).into_owned();
+    if let Some((_, bytes)) = find("config.cpp") {
+        return String::from_utf8_lossy(bytes).into_owned();
     }
     String::new()
 }
@@ -332,17 +340,6 @@ fn entry_extension(name: &str) -> Option<&str> {
         .map(|(_, e)| e)
 }
 
-/// Whether the PBO has a `.c` script or a `config.*` entry (header block only; nothing else is read).
-fn has_sources(path: &Path) -> Result<bool, Error> {
-    Ok(pbo_entry_names(path)?.iter().any(|n| {
-        entry_extension(n).is_some_and(|e| e.eq_ignore_ascii_case("c"))
-            || n.rsplit(['/', '\\'])
-                .next()
-                .and_then(|f| f.split_once('.'))
-                .is_some_and(|(stem, _)| stem.eq_ignore_ascii_case("config"))
-    }))
-}
-
 /// One readable PBO of a mod.
 struct ModPbo {
     prefix: String,
@@ -352,8 +349,8 @@ struct ModPbo {
 }
 
 /// The PBO prefix in `\` form; the file stem when there is none. `None` when it is unsafe.
-fn pbo_prefix(pbo: &PBO, path: &Path, origin: &str) -> Option<String> {
-    let prefix = match pbo.header_extensions.get("prefix") {
+fn pbo_prefix(prefix_ext: Option<&String>, path: &Path, origin: &str) -> Option<String> {
+    let prefix = match prefix_ext {
         Some(p) if !p.trim().is_empty() => {
             p.trim().replace('/', "\\").trim_matches('\\').to_string()
         }
@@ -382,20 +379,8 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
     let mut pbos: Vec<ModPbo> = Vec::new();
     for path in &m.pbos {
         let origin = path.display().to_string();
-        match has_sources(path) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(e) => {
-                warning(
-                    format!("skipping unreadable PBO: {e}"),
-                    Some("api-bad-pbo"),
-                    (Some(origin), None),
-                );
-                continue;
-            }
-        }
-        let pbo = match read_pbo(path) {
-            Ok(p) => p,
+        let sel = match read_selected(path, &origin, true) {
+            Ok(sel) => sel,
             Err(e) => {
                 warning(
                     format!("skipping unreadable PBO: {e}"),
@@ -405,7 +390,10 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
                 continue;
             }
         };
-        let Some(prefix) = pbo_prefix(&pbo, path, &origin) else {
+        if sel.texts.is_empty() && sel.config.is_empty() {
+            continue;
+        }
+        let Some(prefix) = pbo_prefix(sel.prefix_ext.as_ref(), path, &origin) else {
             continue;
         };
         let rel = path
@@ -415,13 +403,11 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join("/");
-        let config = config_text(&pbo, &origin);
-        let texts = entry_texts(&pbo, script_entries(&pbo, &origin), &origin);
         pbos.push(ModPbo {
             prefix,
             rel,
-            config,
-            texts,
+            config: config_text(&sel.config, &origin),
+            texts: sel.texts,
         });
     }
 

@@ -402,3 +402,94 @@ fn read_headers_rejects_hostile_input() {
     }
     assert!(PBO::read_headers(&mut &many[..]).is_err());
 }
+
+/// A PBO with a "Cprs" entry (literal-only LZSS) next to a stored one, built by hand.
+#[expect(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    reason = "test helper"
+)]
+fn pbo_with_compressed_entry(plain: &[u8]) -> Vec<u8> {
+    let mut packed = Vec::new();
+    for chunk in plain.chunks(8) {
+        packed.push(((1u16 << chunk.len()) - 1) as u8);
+        packed.extend_from_slice(chunk);
+    }
+    packed.extend_from_slice(&[0; 4]);
+    let header = |out: &mut Vec<u8>, name: &[u8], method: u32, orig: u32, size: u32| {
+        out.extend_from_slice(name);
+        out.push(0);
+        for v in [method, orig, 0, 0, size] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    };
+    let mut out = Vec::new();
+    header(&mut out, b"", 0x5665_7273, 0, 0);
+    out.extend_from_slice(b"prefix\0pre\0\0");
+    header(&mut out, b"a.txt", 0, 5, 5);
+    let (orig, size) = (
+        u32::try_from(plain.len()).unwrap(),
+        u32::try_from(packed.len()).unwrap(),
+    );
+    header(&mut out, b"b.c", 0x4370_7273, orig, size);
+    header(&mut out, b"", 0, 0, 0);
+    out.extend_from_slice(b"hello");
+    out.extend_from_slice(&packed);
+    out.push(0);
+    out.extend_from_slice(&[7; 20]);
+    out
+}
+
+#[test]
+fn read_entries_equals_read_for_stored_and_compressed() {
+    let plain = b"class A {};\nclass B : A {};\n";
+    let bytes = pbo_with_compressed_entry(plain);
+    let full = PBO::read(&mut &bytes[..]).unwrap();
+    assert_eq!(full.file_data("b.c").unwrap().unwrap(), plain);
+    let sel = PBO::read_entries(&mut std::io::Cursor::new(&bytes), |n| {
+        std::path::Path::new(n)
+            .extension()
+            .is_some_and(|e| e == "c")
+            || n == "a.txt"
+    })
+    .unwrap();
+    assert_eq!(sel.names, ["a.txt", "b.c"]);
+    assert_eq!(
+        sel.header_extensions.get("prefix").map(String::as_str),
+        Some("pre")
+    );
+    assert_eq!(sel.entries.len(), 2);
+    for (name, data) in sel.entries {
+        assert_eq!(
+            data.unwrap(),
+            full.file_data(&name).unwrap().unwrap(),
+            "{name}"
+        );
+    }
+    // entries that are not wanted are not returned
+    let sel = PBO::read_entries(&mut std::io::Cursor::new(&bytes), |n| n == "b.c").unwrap();
+    assert_eq!(sel.entries.len(), 1);
+}
+
+#[test]
+fn read_entries_rejects_truncated_and_lying_headers() {
+    let bytes = pbo_with_compressed_entry(b"0123456789");
+    for len in 0..bytes.len() - 21 {
+        // never a panic; the data of a cut-off entry is an error
+        let _ = PBO::read_entries(&mut std::io::Cursor::new(&bytes[..len]), |_| true);
+    }
+    // an entry whose data lies past the end of the file
+    let cut = bytes.len() - 21 - 3;
+    assert!(PBO::read_entries(&mut std::io::Cursor::new(&bytes[..cut]), |_| true).is_err());
+    // a size field that claims 4 GB
+    let mut lying = bytes.clone();
+    let pos = lying.windows(6).position(|w| w == b"a.txt\0").unwrap() + 6 + 16;
+    lying[pos..pos + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(PBO::read_entries(&mut std::io::Cursor::new(&lying), |_| true).is_err());
+}
+
+#[test]
+fn read_still_bounds_header_strings() {
+    let long = vec![b'a'; 100_000];
+    assert!(PBO::read(&mut &long[..]).is_err());
+}
