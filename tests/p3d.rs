@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use dayzmake::p3d::P3D;
+use dayzmake_core::p3d::P3D;
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mlod/small.p3d")

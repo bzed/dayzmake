@@ -11,6 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 dayzmake = { path = ".." }
+dayzmake-core = { path = "../crates/dayzmake-core" }
 
 [workspace]
 

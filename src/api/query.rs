@@ -16,8 +16,8 @@ use regex::{Regex, RegexBuilder};
 use serde::Serialize;
 
 use super::model::{ApiIndex, Class, Enum, EnumItem, FileRef, Member, MemberKind};
-use crate::error;
-use crate::error::printable;
+use dayzmake_core::error;
+use dayzmake_core::error::printable;
 
 /// Size limit of a compiled user regex, in bytes. The regex comes from an untrusted caller (MCP).
 const REGEX_SIZE_LIMIT: usize = 1 << 20;

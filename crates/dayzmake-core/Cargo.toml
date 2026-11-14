@@ -1,0 +1,40 @@
+[package]
+name = "dayzmake-core"
+version = "0.1.0"
+description = "Readers and writers for DayZ file formats: PBO, rapified config, P3D, PAA, BI keys and signatures"
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+colored = "2.1"
+byteorder = "1.5"
+openssl = "0.10"
+linked-hash-map = "0.5.6"
+regex = "1.10"
+peg = "0.8"
+image = "0.24"
+texpresso = "2.0"
+lzo1x = "0.2.2"
+encoding_rs = "0.8"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[dev-dependencies]
+tempfile = "3.10"
+criterion = "0.5.1"
+
+[[bench]]
+name = "preprocess"
+harness = false
+
+[[bench]]
+name = "config"
+harness = false
+
+[lints]
+workspace = true

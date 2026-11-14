@@ -3,11 +3,11 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use dayzmake::config::Config;
+use dayzmake_core::config::Config;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn golden(name: &str) {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/cfgconvert");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/cfgconvert");
     let src = dir.join(format!("{name}.cpp"));
     let expected = std::fs::read_to_string(dir.join(format!("{name}.expected.cpp"))).unwrap();
 

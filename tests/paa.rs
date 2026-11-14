@@ -150,7 +150,7 @@ fn paa_huge_tagg_is_an_error() {
     tagg.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     tagg.extend_from_slice(&[1, 2, 3, 4]);
     let bytes = paa_bytes(&tagg, &[]);
-    let err = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(bytes))
+    let err = dayzmake_core::paa::Paa::read(&mut std::io::Cursor::new(bytes))
         .unwrap_err()
         .to_string();
     assert!(err.contains("too large"), "{err}");
@@ -163,7 +163,7 @@ fn paa_huge_dimensions_is_an_error() {
     mip.extend_from_slice(&[4, 0, 0]);
     mip.extend_from_slice(&[0x11, 0, 0, 0]);
     let bytes = paa_bytes(&[], &mip);
-    let err = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(bytes))
+    let err = dayzmake_core::paa::Paa::read(&mut std::io::Cursor::new(bytes))
         .unwrap_err()
         .to_string();
     assert!(err.contains("dimensions"), "{err}");
@@ -174,14 +174,14 @@ fn paa_huge_dimensions_is_an_error() {
 #[test]
 fn read_rejects_a_tag_size_larger_than_the_input() {
     let data = include_bytes!("fixtures/fuzz/paa_huge_tagg.paa");
-    assert!(dayzmake::paa::Paa::read(&mut std::io::Cursor::new(&data[..])).is_err());
+    assert!(dayzmake_core::paa::Paa::read(&mut std::io::Cursor::new(&data[..])).is_err());
 }
 
 /// Found by fuzzing: a DXT mipmap shorter than its dimensions need made the decoder panic.
 #[test]
 fn to_dynamic_image_rejects_a_short_mipmap() {
     let data = include_bytes!("fixtures/fuzz/paa_short_mipmap.paa");
-    if let Ok(paa) = dayzmake::paa::Paa::read(&mut std::io::Cursor::new(&data[..])) {
+    if let Ok(paa) = dayzmake_core::paa::Paa::read(&mut std::io::Cursor::new(&data[..])) {
         assert!(paa.to_dynamic_image().is_err());
     }
 }

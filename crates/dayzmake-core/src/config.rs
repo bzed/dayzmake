@@ -257,7 +257,7 @@ fn compressed_int_len_of(len: usize) -> usize {
 /// # Examples
 ///
 /// ```
-/// # use dayzmake::config::Config;
+/// # use dayzmake_core::config::Config;
 /// let input = String::from("
 /// #define bar 42
 ///

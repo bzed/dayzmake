@@ -19,17 +19,17 @@ fmt-check:
 	$(CARGO) fmt --all --check
 
 lint:
-	$(CARGO) clippy --all-targets $(LOCKED) -- -D warnings
+	$(CARGO) clippy --workspace --all-targets $(LOCKED) -- -D warnings
 
 doc:
-	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --no-deps $(LOCKED)
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps $(LOCKED)
 
 deny:
 	$(CARGO) deny check
 
 test:
-	$(CARGO) test --all-targets $(LOCKED)
-	$(CARGO) test --doc $(LOCKED)
+	$(CARGO) test --workspace --all-targets $(LOCKED)
+	$(CARGO) test --workspace --doc $(LOCKED)
 
 # Each target runs FUZZ_TIME seconds (10 by default; `make fuzz FUZZ_TIME=60` for longer).
 fuzz:
@@ -43,12 +43,12 @@ fuzz:
 	fi
 
 cover:
-	$(CARGO) llvm-cov --all-features --lcov --output-path lcov.info
+	$(CARGO) llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
 coverage-check:
-	$(CARGO) llvm-cov --all-features --fail-under-lines $(COVERAGE_MIN)
+	$(CARGO) llvm-cov --workspace --all-features --fail-under-lines $(COVERAGE_MIN)
 
 miri:
-	$(CARGO) +nightly miri test $(LOCKED)
+	$(CARGO) +nightly miri test --workspace $(LOCKED)
 
 check: fmt-check lint doc deny test fuzz coverage-check

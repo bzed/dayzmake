@@ -1,6 +1,6 @@
 #![no_main]
 
-use dayzmake::pbo::PBO;
+use dayzmake_core::pbo::PBO;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

@@ -125,10 +125,10 @@ fn parse_prefix_file(
 ///
 /// ```
 /// # use std::path::PathBuf;
-/// # use dayzmake::pbo::PBO;
+/// # use dayzmake_core::pbo::PBO;
 /// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new()).expect("Failed to create PBO");
 ///
-/// assert!(pbo.files.iter().any(|(name, _data)| name == "main.rs"));
+/// assert!(pbo.files.iter().any(|(name, _data)| name == "lib.rs"));
 ///
 /// let mut cursor = pbo.to_cursor().unwrap();
 /// let reread = PBO::read(&mut cursor).unwrap();

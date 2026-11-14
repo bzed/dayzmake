@@ -895,7 +895,7 @@ fn preprocess_rec(
 /// # Examples
 ///
 /// ```
-/// # use dayzmake::preprocess::preprocess;
+/// # use dayzmake_core::preprocess::preprocess;
 /// let input = String::from("
 /// #define QUOTE(x) #x
 /// #define DOUBLES(x,y) x##_##y

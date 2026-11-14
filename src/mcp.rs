@@ -17,15 +17,16 @@ use serde_json::{Map, Value, json};
 use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
-use crate::binarize;
-use crate::config;
-use crate::error::{ErrorExt, capture_warnings};
-use crate::io::create_target;
-use crate::p3d;
-use crate::paa;
-use crate::pbo;
-use crate::preprocess;
-use crate::sign;
+use dayzmake_core::binarize;
+use dayzmake_core::config;
+use dayzmake_core::error;
+use dayzmake_core::error::{ErrorExt, capture_warnings};
+use dayzmake_core::io::create_target;
+use dayzmake_core::p3d;
+use dayzmake_core::paa;
+use dayzmake_core::pbo;
+use dayzmake_core::preprocess;
+use dayzmake_core::sign;
 
 /// Longest request line accepted; a longer one is answered with an error and skipped.
 const MAX_LINE: usize = 16 * 1024 * 1024;

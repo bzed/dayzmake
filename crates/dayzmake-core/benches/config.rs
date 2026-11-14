@@ -4,7 +4,7 @@ use std::io::Cursor;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
-use dayzmake::config::Config;
+use dayzmake_core::config::Config;
 
 /// Benchmark: parsing and rapifying a mid-sized config.
 fn bench_config(c: &mut Criterion) {

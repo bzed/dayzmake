@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use dayzmake::pbo::PBO;
+use dayzmake_core::pbo::PBO;
 use serde_json::{Value, json};
 
 struct Run {

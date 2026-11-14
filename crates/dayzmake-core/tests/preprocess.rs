@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use tempfile::tempdir;
 
-use dayzmake::preprocess::*;
+use dayzmake_core::preprocess::*;
 
 #[test]
 fn test_preprocess_macros() {

@@ -10,15 +10,19 @@ input as hostile.
 
 | Path | Content |
 |---|---|
-| `src/*.rs` | the library (`lib.rs`) and the binary entry point (`main.rs`) |
-| `src/pbo.rs`, `config.rs`, `p3d.rs`, `paa.rs`, `sign.rs`, `io.rs` | the file-format readers and writers |
-| `src/preprocess.rs`, `eval.rs`, `binarize.rs`, `run.rs`, `error.rs` | preprocessor, `__EVAL`, binarize bridge, CLI, errors |
-| `tests/` | integration tests (public API and the CLI) |
+| `crates/dayzmake-core/` | library crate `dayzmake-core`: the file formats and their plumbing |
+| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `paa`, `sign`, `io` (readers and writers), `preprocess`, `eval`, `binarize`, `error` |
+| `crates/dayzmake-core/tests/` | library tests (config, preprocessor, BI golden files, fuzz seeds of the format readers) |
+| `crates/dayzmake-core/benches/` | `criterion` benchmarks (`preprocess`, `config`) |
+| `src/*.rs` | root crate `dayzmake`: the CLI (`run.rs`, `main.rs`), the MCP server and the script API index (`api/`) |
+| `tests/` | binary-driven tests (CLI, MCP, snapshots) and tests of the root crate; `tests/fixtures/` is shared with core |
 | `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
 | `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
-| `benches/` | `criterion` benchmarks (`preprocess`, `config`) |
 | `fuzz/` | `cargo-fuzz` crate: targets for the untrusted-input readers, with seed corpora |
 | `docs/superpowers/` | design notes and plans |
+
+The repository is a Cargo workspace (root crate `dayzmake` plus `crates/dayzmake-core`); lints are set once in
+`[workspace.lints]`.
 
 Toolchain: Rust **1.99**, edition 2024, pinned in `rust-toolchain.toml`. `Cargo.lock` is committed and CI builds
 with `--locked`. Fuzzing and Miri need `nightly` (see below).
@@ -52,7 +56,7 @@ with `--locked`. Fuzzing and Miri need `nightly` (see below).
   real tools are `#[ignore = "needs <tool>"]` and run explicitly; they do not replace the faked tests.
 - Parsers for untrusted input (PBO, config, P3D, PAA, keys, signatures) have a fuzz target (`make fuzz`).
   A crash found by fuzzing gets a regression test in `tests/` with the minimised input, in the same commit as
-  the fix. The fuzz corpus seeds also run as ordinary tests in `make test` (`tests/fuzz_seeds.rs`).
+  the fix. The fuzz corpus seeds also run as ordinary tests in `make test` (`tests/fuzz_seeds.rs` and `crates/dayzmake-core/tests/fuzz_seeds.rs`).
 
 ## Coverage
 
@@ -126,7 +130,7 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
   - *our standards*: tests, errors instead of panics, builds on Linux and Windows with Rust 1.99, deterministic
     output, a licence on the `deny.toml` allow-list (GPL-2.0-or-later compatible).
   A crate that fails the review is not used. The review result goes into the commit message that adds it.
-- Add dependencies with `cargo add` (latest stable), only the features needed. No git or path dependencies.
+- Add dependencies with `cargo add` (latest stable), only the features needed. No git or path dependencies, except workspace-internal crates (with a `version`).
 - `cargo deny` checks licences, RustSec advisories, duplicates and sources; run `make deny` after any
   `Cargo.toml` change.
 

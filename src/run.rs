@@ -5,16 +5,16 @@ use std::path::{Path, PathBuf};
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
-use crate::binarize;
-use crate::config;
-use crate::error;
-use crate::error::{ErrorExt, print_warning_summary};
-use crate::io::{Input, Output};
-use crate::p3d;
-use crate::paa;
-use crate::pbo;
-use crate::preprocess;
-use crate::sign;
+use dayzmake_core::binarize;
+use dayzmake_core::config;
+use dayzmake_core::error;
+use dayzmake_core::error::{ErrorExt, print_warning_summary};
+use dayzmake_core::io::{Input, Output};
+use dayzmake_core::p3d;
+use dayzmake_core::paa;
+use dayzmake_core::pbo;
+use dayzmake_core::preprocess;
+use dayzmake_core::sign;
 
 use serde::Deserialize;
 
@@ -198,7 +198,7 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        Ok(Output::File(crate::io::create_target(
+        Ok(Output::File(dayzmake_core::io::create_target(
             Path::new(target),
             args.flag_force,
         )?))

@@ -31,13 +31,13 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: cargo deny
         run: cargo deny check
       - name: Coverage floor
-        run: cargo llvm-cov --all-features --fail-under-lines 70
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 70
 
   coverage:
     name: Coverage (Codecov)
@@ -84,7 +84,7 @@ jobs:
       - name: Install build dependencies
         run: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Test
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Build
         run: cargo build --release --locked
       - name: Package
@@ -112,7 +112,7 @@ jobs:
           vcpkg install openssl:x64-windows-static-md
           "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md" >> $env:GITHUB_ENV
       - name: Test
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Build
         run: cargo build --release --locked
       - name: Package

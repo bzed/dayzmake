@@ -2,8 +2,8 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use dayzmake::pbo::PBO;
-use dayzmake::sign::{BISignVersion, cmd_sign, cmd_verify};
+use dayzmake_core::pbo::PBO;
+use dayzmake_core::sign::{BISignVersion, cmd_sign, cmd_verify};
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
@@ -364,14 +364,14 @@ fn cat_missing_entry_fails() {
 fn inspect_and_cat_write_to_the_given_writer() {
     let pbo = crafted_pbo(&[("a.txt", b"hello")], Some("pre"));
     let mut out = Vec::new();
-    dayzmake::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
+    dayzmake_core::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(
         text.contains("- prefix=pre") && text.contains("a.txt"),
         "{text}"
     );
     let mut out = Vec::new();
-    dayzmake::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
+    dayzmake_core::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
     assert_eq!(out, b"hello");
 }
 

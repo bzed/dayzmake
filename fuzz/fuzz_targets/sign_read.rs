@@ -1,6 +1,6 @@
 #![no_main]
 
-use dayzmake::sign::{BIPrivateKey, BIPublicKey, BISign};
+use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

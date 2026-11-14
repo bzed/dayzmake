@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::model::{ApiIndex, INDEX_FORMAT, InputStamp};
-use crate::error;
-use crate::error::warning;
+use dayzmake_core::error;
+use dayzmake_core::error::warning;
 
 /// The cache directory, created (mode 0700 on unix) when missing: `$DAYZMAKE_CACHE`, else
 /// `$XDG_CACHE_HOME/dayzmake/api`, else `$HOME/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`).

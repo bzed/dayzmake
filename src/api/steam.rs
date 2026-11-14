@@ -185,7 +185,7 @@ pub fn find_app(libraries: &[PathBuf], appid: u32) -> Option<AppInstall> {
         let installdir = vdf_values_unescaped(&text, "installdir")
             .into_iter()
             .next()?;
-        let rel = crate::pbo::safe_relative_path(&installdir)?;
+        let rel = dayzmake_core::pbo::safe_relative_path(&installdir)?;
         let dir = steamapps.join("common").join(rel);
         if !dir.is_dir() {
             return None;

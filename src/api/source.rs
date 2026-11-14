@@ -13,10 +13,10 @@ use regex::Regex;
 use super::model::{ApiIndex, Module};
 use super::parse::{ScriptFile, active_defines, collect_defines, index_scripts};
 use super::steam::{Branch, workshop_dir};
-use crate::config::Config;
-use crate::error;
-use crate::error::{printable, warning};
-use crate::pbo::{PBO, safe_relative_path};
+use dayzmake_core::config::Config;
+use dayzmake_core::error;
+use dayzmake_core::error::{printable, warning};
+use dayzmake_core::pbo::{PBO, safe_relative_path};
 
 /// Mod aliases: name and Steam workshop id.
 const ALIASES: [(&str, u64); 4] = [

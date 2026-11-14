@@ -1723,7 +1723,7 @@ mod from_pbo {
     use dayzmake::api::model::{ApiIndex, INDEX_FORMAT};
     use dayzmake::api::source::{ModSpec, parse_mods, resolve_mod};
     use dayzmake::api::steam::Branch;
-    use dayzmake::pbo::PBO;
+    use dayzmake_core::pbo::PBO;
 
     use super::fixture;
 

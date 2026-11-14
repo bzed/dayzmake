@@ -1,7 +1,7 @@
 //! Config parsing, rapification and derapification tests.
 use std::io::{Cursor, Seek, SeekFrom};
 
-use dayzmake::config::*;
+use dayzmake_core::config::*;
 
 #[test]
 fn config_read() {
@@ -153,7 +153,7 @@ fn rapified_exponential_fanout_is_an_error() {
 /// stack overflowed. Reading must fail with an error instead.
 #[test]
 fn read_rapified_rejects_cyclic_class_bodies() {
-    let data = include_bytes!("fixtures/fuzz/config_class_cycle.bin");
+    let data = include_bytes!("../../../tests/fixtures/fuzz/config_class_cycle.bin");
     assert!(Config::read_rapified(&mut Cursor::new(&data[..])).is_err());
 }
 

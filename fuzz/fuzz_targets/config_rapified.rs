@@ -1,6 +1,6 @@
 #![no_main]
 
-use dayzmake::config::Config;
+use dayzmake_core::config::Config;
 use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 

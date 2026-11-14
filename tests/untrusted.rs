@@ -7,11 +7,11 @@ use std::io::Cursor;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use dayzmake::config::Config;
-use dayzmake::p3d::{self, P3D};
-use dayzmake::paa::Paa;
-use dayzmake::pbo::PBO;
-use dayzmake::sign::{BIPrivateKey, BIPublicKey, BISign};
+use dayzmake_core::config::Config;
+use dayzmake_core::p3d::{self, P3D};
+use dayzmake_core::paa::Paa;
+use dayzmake_core::pbo::PBO;
+use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const MUTANTS_PER_FILE: usize = 300;
@@ -276,7 +276,7 @@ fn paa_lzo_expansion_is_bounded_in_total() {
 /// separator in it the signature used to be written below a directory the key file picked.
 #[test]
 fn sign_rejects_a_key_name_with_a_path_separator() {
-    use dayzmake::sign::{BISignVersion, cmd_sign};
+    use dayzmake_core::sign::{BISignVersion, cmd_sign};
 
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
     let key = fs::read(fixtures.join("armk.biprivatekey")).expect("fixture");
