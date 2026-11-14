@@ -187,6 +187,8 @@ Reference implementation for task 2 (read it, do not modify it):
 
 ## Task 2: Script API index (`dayzmake api`)
 
+Mod selection (user ruling 2026-11-14): without `-m`/`mods` only vanilla is queried, in the CLI and in every MCP tool; mods are queried only when explicitly selected; `-m all` is never a default.
+
 Index format: dayzmake's own (Task 2.2 model, cached as JSON). No compatibility with the dayz-dev plugin's `.txt.xz` indexes or their text format (user ruling 2026-11-14).
 
 ### Task 2.1: Steam/DayZ install discovery
@@ -460,7 +462,7 @@ how it is stored or printed.
   - `api_enum` — *name, mods, experimental
   - `api_chain` — *name, mods, experimental
   - `api_source` — *name, cat (bool: return the full files), mods, experimental
-  - `api_defines` — regex, mods (default `all`), experimental
+  - `api_defines` — regex, mods, experimental
   - `api_update` — mods, experimental
   - `pbo_inspect` — *path (PBO or P3D; same detection as the CLI `inspect`)
   - `pbo_cat` — *pbo, *file, target (write there instead of returning; required if the data is not UTF-8), force
