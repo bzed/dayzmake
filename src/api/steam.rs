@@ -184,9 +184,12 @@ pub fn find_game(branch: Branch, libraries: &[PathBuf]) -> Option<AppInstall> {
 #[must_use]
 pub fn workshop_dir(branch: Branch, libraries: &[PathBuf]) -> Option<PathBuf> {
     libraries.iter().find_map(|lib| {
-        let dir = lib
-            .join("steamapps/workshop/content")
-            .join(branch.client_app().to_string());
+        let app = branch.client_app();
+        let steamapps = lib.join("steamapps");
+        if !steamapps.join(format!("appmanifest_{app}.acf")).is_file() {
+            return None;
+        }
+        let dir = steamapps.join("workshop/content").join(app.to_string());
         dir.is_dir().then_some(dir)
     })
 }
@@ -297,9 +300,17 @@ mod tests {
     fn workshop_dir_per_branch() {
         let t = tempfile::tempdir().unwrap();
         fs::create_dir_all(t.path().join("steamapps/workshop/content/1024020")).unwrap();
+        manifest(t.path(), 1_024_020, "DayZ Exp", "2");
         let libs = [t.path().to_path_buf()];
         assert!(workshop_dir(Branch::Stable, &libs).is_none());
         assert!(workshop_dir(Branch::Experimental, &libs).is_some());
+    }
+
+    #[test]
+    fn workshop_dir_needs_client_manifest() {
+        let t = tempfile::tempdir().unwrap();
+        fs::create_dir_all(t.path().join("steamapps/workshop/content/221100")).unwrap();
+        assert!(workshop_dir(Branch::Stable, &[t.path().to_path_buf()]).is_none());
     }
 
     #[test]
