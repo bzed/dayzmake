@@ -307,3 +307,19 @@ fn unpack_use_prefix_does_not_follow_symlinked_prefix() {
     assert!(!tmp.path().join("outside/mod").exists());
     assert!(!tmp.path().join("outside/$PBOPREFIX$").exists());
 }
+
+#[test]
+fn compressed_entry_size_bomb_is_an_error() {
+    let mut pbo = crafted_pbo(&[("bomb.txt", &[0u8; 16])], None);
+    let needle = b"bomb.txt\0";
+    let at = pbo.windows(needle.len()).position(|w| w == needle).unwrap() + needle.len();
+    pbo[at..at + 4].copy_from_slice(&0x4370_7273u32.to_le_bytes()); // packing: Cprs
+    pbo[at + 4..at + 8].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes()); // original size
+    pbo[at + 16..at + 20].copy_from_slice(&16u32.to_le_bytes()); // data size
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("in.pbo"), &pbo).unwrap();
+    let (code, err) = run_dayzmake(&["cat", "in.pbo", "bomb.txt"], tmp.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(code > 0, "the process must not be killed: {code}");
+    assert!(err.contains("implausible"), "{err}");
+}

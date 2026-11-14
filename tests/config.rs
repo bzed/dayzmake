@@ -88,3 +88,63 @@ fn integer_overflow_is_an_error() {
     let result = Config::from_string(String::from("x = 0x1FFFFFFFF;\n"), None, &Vec::new());
     assert!(result.is_err());
 }
+
+/// The 16 byte header of a rapified config; the root body follows.
+fn rapified_header() -> Vec<u8> {
+    let mut bytes = b"\0raP".to_vec();
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // enum offset, unused by the reader
+    bytes
+}
+
+fn read_bytes(bytes: Vec<u8>) -> Result<Config, std::io::Error> {
+    Config::read_rapified(&mut Cursor::new(bytes))
+}
+
+#[test]
+fn rapified_self_reference_is_an_error() {
+    let mut bytes = rapified_header();
+    bytes.push(0); // parent ""
+    bytes.push(1); // one entry
+    bytes.push(0); // class entry
+    bytes.extend_from_slice(b"a\0");
+    bytes.extend_from_slice(&16u32.to_le_bytes()); // the root body itself
+    let err = read_bytes(bytes).unwrap_err().to_string();
+    assert!(err.contains("cycle") || err.contains("nesting"), "{err}");
+}
+
+#[test]
+fn rapified_deep_array_nesting_is_an_error() {
+    let mut bytes = rapified_header();
+    bytes.push(0); // parent ""
+    bytes.push(1); // one entry
+    bytes.push(2); // array entry
+    bytes.extend_from_slice(b"a\0");
+    for _ in 0..10_000 {
+        bytes.push(1); // one element
+        bytes.push(3); // an array
+    }
+    bytes.push(0); // innermost array is empty
+    let err = read_bytes(bytes).unwrap_err().to_string();
+    assert!(err.contains("nesting"), "{err}");
+}
+
+#[test]
+fn rapified_exponential_fanout_is_an_error() {
+    let mut bytes = rapified_header();
+    // every body has two class entries that both point at the next body
+    for level in 0u32..30 {
+        let next = 16 + (level + 1) * 16;
+        bytes.push(0);
+        bytes.push(2);
+        for name in [b"a\0", b"b\0"] {
+            bytes.push(0);
+            bytes.extend_from_slice(name);
+            bytes.extend_from_slice(&next.to_le_bytes());
+        }
+    }
+    bytes.extend_from_slice(&[0, 0]); // last body: no entries
+    let err = read_bytes(bytes).unwrap_err().to_string();
+    assert!(err.contains("too many entries"), "{err}");
+}

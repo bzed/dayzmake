@@ -28,6 +28,54 @@ use texpresso::{Algorithm, Format, Params};
 
 const OFFS_TAGG: &str = "GGATSFFO"; // mipmap offsets (16 u32, zero padded)
 
+/// Largest mipmap width or height accepted when reading.
+const MAX_PAA_DIMENSION: usize = 16384;
+
+/// Largest tagg accepted when reading.
+const MAX_TAGG_SIZE: usize = 1 << 20;
+
+/// Reads the data of a tagg without trusting its size.
+fn read_tagg_data<I: Read>(input: &mut I, name: &str) -> Result<Vec<u8>, Error> {
+    let tagg_size = input.read_u32::<LittleEndian>()? as usize;
+    if tagg_size > MAX_TAGG_SIZE {
+        return Err(error!("PAA tagg '{name}' is too large: {tagg_size} bytes."));
+    }
+    let mut data = Vec::new();
+    input.take(tagg_size as u64).read_to_end(&mut data)?;
+    if data.len() != tagg_size {
+        return Err(error!("Truncated PAA tagg '{name}'."));
+    }
+    Ok(data)
+}
+
+/// Decompresses an LZO mipmap. The decompressed size is the format's usual compressed (block)
+/// size for the mipmap dimensions.
+fn decompress_mipmap(compression: &str, mip_data: &[u8], w: u16, h: u16) -> Result<Vec<u8>, Error> {
+    let real_w = (w & 0x7FFF) as usize;
+    let real_h = h as usize;
+    let decompressed_size = match compression {
+        "DXT1" => Format::Bc1.compressed_size(real_w, real_h),
+        "DXT2" | "DXT3" => Format::Bc2.compressed_size(real_w, real_h),
+        "DXT4" | "DXT5" => Format::Bc3.compressed_size(real_w, real_h),
+        _ => {
+            return Err(error!(
+                "LZO compression is only supported for DXT formats, not '{}'",
+                compression
+            ));
+        }
+    };
+    if decompressed_size > mip_data.len().saturating_mul(256) {
+        return Err(error!(
+            "PAA mipmap claims an implausible size: {decompressed_size} bytes from {} bytes.",
+            mip_data.len()
+        ));
+    }
+    let mut decompressed_data = vec![0; decompressed_size];
+    lzo1x::decompress(mip_data, &mut decompressed_data)
+        .map_err(|e| error!("Failed to decompress LZO-compressed mipmap: {:?}", e))?;
+    Ok(decompressed_data)
+}
+
 /// A PAA texture.
 #[derive(Debug)]
 pub struct Paa {
@@ -96,9 +144,7 @@ impl Paa {
                 .trim_end_matches('\0')
                 .to_string();
 
-            let tagg_size = input.read_u32::<LittleEndian>()? as usize;
-            let mut data = vec![0; tagg_size];
-            input.read_exact(&mut data)?;
+            let data = read_tagg_data(input, &tagg_name)?;
 
             taggs.insert(tagg_name, data);
         }
@@ -126,6 +172,14 @@ impl Paa {
                 | ((size_bytes[1] as usize) << 8)
                 | ((size_bytes[2] as usize) << 16);
 
+            if usize::from(w & 0x7FFF) > MAX_PAA_DIMENSION || usize::from(h) > MAX_PAA_DIMENSION {
+                return Err(error!(
+                    "PAA mipmap dimensions are too large: {} x {}.",
+                    w & 0x7FFF,
+                    h
+                ));
+            }
+
             if width == 0 {
                 width = w & 0x7FFF;
             }
@@ -137,24 +191,8 @@ impl Paa {
             input.read_exact(&mut mip_data)?;
 
             if (w & 0x8000) != 0 {
-                // LZO compressed. The decompressed size is the format's
-                // usual compressed (block) size for the mipmap dimensions.
-                let real_w = (w & 0x7FFF) as usize;
-                let real_h = h as usize;
-                let decompressed_size = match compression.as_str() {
-                    "DXT1" => Format::Bc1.compressed_size(real_w, real_h),
-                    "DXT2" | "DXT3" => Format::Bc2.compressed_size(real_w, real_h),
-                    "DXT4" | "DXT5" => Format::Bc3.compressed_size(real_w, real_h),
-                    _ => {
-                        return Err(error!(
-                            "LZO compression is only supported for DXT formats, not '{}'",
-                            compression
-                        ));
-                    }
-                };
-                let mut decompressed_data = vec![0; decompressed_size];
-                lzo1x::decompress(&mip_data, &mut decompressed_data)
-                    .map_err(|e| error!("Failed to decompress LZO-compressed mipmap: {:?}", e))?;
+                // LZO compressed
+                let decompressed_data = decompress_mipmap(&compression, &mip_data, w, h)?;
                 mipmaps.push(decompressed_data);
             } else {
                 mipmaps.push(mip_data);

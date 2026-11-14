@@ -150,7 +150,15 @@ const PACKING_COMPRESSED: u32 = 0x4370_7273;
 /// The window starts out filled with spaces; the 4 byte checksum after the data is ignored.
 fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> {
     let truncated = || error!("Truncated compressed PBO entry.");
-    let mut out: Vec<u8> = Vec::with_capacity(original_size);
+    // a flag byte and 8 two byte references expand to at most 8 * 18 bytes out of 17 in
+    let max_size = data.len().saturating_mul(9);
+    if original_size > max_size {
+        return Err(error!(
+            "Compressed PBO entry claims an implausible size: {original_size} bytes from {} bytes.",
+            data.len()
+        ));
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(original_size.min(max_size));
     let mut pos = 0;
 
     while out.len() < original_size {
@@ -193,22 +201,38 @@ fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> 
     Ok(out)
 }
 
+/// Matches `s` against `pattern`, where `*` stands for any run of characters, including none.
 fn matches_glob(s: &str, pattern: &str) -> bool {
-    if let Some(index) = pattern.find('*') {
-        if s[..index] != pattern[..index] {
-            return false;
-        }
+    let s: Vec<char> = s.chars().collect();
+    let pattern: Vec<char> = pattern.chars().collect();
+    let (mut si, mut pi) = (0, 0);
+    // pattern position after the last `*` and the string position it currently covers up to
+    let mut backtrack: Option<(usize, usize)> = None;
 
-        for i in (index + 1)..(s.len() - 1) {
-            if matches_glob(&s[i..], &pattern[(index + 1)..]) {
-                return true;
+    while si < s.len() {
+        match pattern.get(pi) {
+            Some('*') => {
+                pi += 1;
+                backtrack = Some((pi, si));
             }
+            Some(c) if Some(c) == s.get(si) => {
+                pi += 1;
+                si += 1;
+            }
+            _ => match backtrack {
+                Some((after_star, covered)) => {
+                    pi = after_star;
+                    si = covered + 1;
+                    backtrack = Some((after_star, si));
+                }
+                None => return false,
+            },
         }
-
-        false
-    } else {
-        s == pattern
     }
+
+    pattern
+        .get(pi..)
+        .is_some_and(|rest| rest.iter().all(|&c| c == '*'))
 }
 
 fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
@@ -940,6 +964,26 @@ mod tests {
 
     fn p(s: &str) -> Option<PathBuf> {
         safe_relative_path(s)
+    }
+
+    #[test]
+    fn glob_matches_without_panicking() {
+        assert!(matches_glob("", "*"));
+        assert!(!matches_glob("ab", "abc*"));
+        assert!(!matches_glob("é", "*x"));
+        assert!(matches_glob("abc", "a*c"));
+        assert!(matches_glob("abc", "*"));
+        assert!(matches_glob("abc", "abc"));
+        assert!(!matches_glob("abd", "abc"));
+        assert!(matches_glob("a.bin", "*.bin"));
+        assert!(matches_glob("aXbYc", "a*b*c"));
+    }
+
+    #[test]
+    fn lzss_size_bomb_is_an_error() {
+        let err = lzss_decompress(&[0xFF; 16], 0xFFFF_FFF0).unwrap_err();
+        assert!(err.to_string().contains("implausible"), "{err}");
+        assert!(lzss_decompress(&[0xFF, b'a'], 9).is_err());
     }
 
     #[test]
