@@ -2079,6 +2079,11 @@ mod from_pbo {
         let w = World::new();
         fs::create_dir_all(&w.cache).expect("cache");
         fs::set_permissions(&w.cache, fs::Permissions::from_mode(0o500)).expect("chmod");
+        // root (e.g. in a CI container) ignores the mode; the test needs a cache it cannot write.
+        if fs::write(w.cache.join("probe"), "").is_ok() {
+            fs::set_permissions(&w.cache, fs::Permissions::from_mode(0o700)).expect("chmod");
+            return;
+        }
         let (code, out, err) = w.run(&["api", "class", "Base"]);
         fs::set_permissions(&w.cache, fs::Permissions::from_mode(0o700)).expect("chmod");
         assert_eq!(code, 0, "{err}");
@@ -2385,9 +2390,12 @@ mod from_pbo {
         let (code, out, err) = w.run(&["api", "class", "ClassOne", "-m", "ALPHA mod"]);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains("class ClassOne"), "{out}");
-        let (code, out, err) = w.run(&["api", "class", "ClassTwo", "-m", "@link"]);
-        assert_eq!(code, 0, "{err}");
-        assert!(out.contains("class ClassTwo"), "{out}");
+        // three_mods creates the @Link symlink on Unix only.
+        if cfg!(unix) {
+            let (code, out, err) = w.run(&["api", "class", "ClassTwo", "-m", "@link"]);
+            assert_eq!(code, 0, "{err}");
+            assert!(out.contains("class ClassTwo"), "{out}");
+        }
     }
 
     #[test]
