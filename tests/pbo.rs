@@ -346,3 +346,31 @@ fn file_data_does_not_trust_the_original_size() {
         }
     }
 }
+
+#[test]
+fn cat_missing_entry_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(
+        tmp.path().join("in.pbo"),
+        crafted_pbo(&[("a.txt", b"x")], None),
+    )
+    .unwrap();
+    let (code, err) = run_dayzmake(&["cat", "in.pbo", "nope.txt"], tmp.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("File \"nope.txt\" not found in PBO."), "{err}");
+}
+
+#[test]
+fn inspect_and_cat_write_to_the_given_writer() {
+    let pbo = crafted_pbo(&[("a.txt", b"hello")], Some("pre"));
+    let mut out = Vec::new();
+    dayzmake::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        text.contains("- prefix=pre") && text.contains("a.txt"),
+        "{text}"
+    );
+    let mut out = Vec::new();
+    dayzmake::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
+    assert_eq!(out, b"hello");
+}

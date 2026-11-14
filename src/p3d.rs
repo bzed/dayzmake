@@ -623,13 +623,12 @@ pub fn model_magic<I: Read + Seek>(input: &mut I) -> Result<Option<[u8; 4]>, Err
     )
 }
 
-/// Prints what is in a model. For ODOL (and BMTR) only the format and version are known.
+/// Writes what is in a model to the output. For ODOL (and BMTR) only the format and version are known.
 ///
 /// # Errors
 ///
-/// Returns an error if the input is not a model or cannot be read.
-#[expect(clippy::print_stdout, reason = "CLI command output")]
-pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
+/// Returns an error if the input is not a model or cannot be read, or the output cannot be written.
+pub fn cmd_inspect<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
     match model_magic(input)? {
         Some(ref m) if m == b"MLOD" => {}
         Some(m) => {
@@ -642,8 +641,8 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
             } else {
                 ("BMTR", "binarized animation")
             };
-            println!("Format:  {name} ({what})");
-            println!("Version: {version}");
+            writeln!(output, "Format:  {name} ({what})")?;
+            writeln!(output, "Version: {version}")?;
             return Ok(());
         }
         None => return Err(error!("Not a P3D model (no MLOD, ODOL or BMTR header).")),
@@ -651,17 +650,19 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
 
     let p3d = P3D::read(input).prepend_error("Failed to read model:")?;
 
-    println!("Format:  MLOD (editable model)");
-    println!("Version: {}", p3d.version);
-    println!("LODs:    {}", p3d.lods.len());
-    println!();
+    writeln!(output, "Format:  MLOD (editable model)")?;
+    writeln!(output, "Version: {}", p3d.version)?;
+    writeln!(output, "LODs:    {}", p3d.lods.len())?;
+    writeln!(output)?;
 
-    println!(
+    writeln!(
+        output,
         "  #  {:24} {:>8} {:>8} {:>8} {:>8}",
         "LOD", "Points", "Faces", "Normals", "UV sets"
-    );
+    )?;
     for (i, lod) in p3d.lods.iter().enumerate() {
-        println!(
+        writeln!(
+            output,
             "{:3}  {:24} {:8} {:8} {:8} {:8}",
             i,
             lod.name(),
@@ -669,38 +670,44 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
             lod.faces.len(),
             lod.face_normals.len(),
             lod.uv_set_count()
-        );
+        )?;
     }
 
-    println!();
-    println!("Textures:");
+    writeln!(output)?;
+    writeln!(output, "Textures:")?;
     for (name, count) in p3d.textures() {
-        println!("- {} ({count} faces)", printable(name));
+        writeln!(output, "- {} ({count} faces)", printable(name))?;
     }
-    println!("Materials:");
+    writeln!(output, "Materials:")?;
     for (name, count) in p3d.materials() {
-        println!("- {} ({count} faces)", printable(name));
+        writeln!(output, "- {} ({count} faces)", printable(name))?;
     }
 
-    println!();
-    println!("Properties:");
+    writeln!(output)?;
+    writeln!(output, "Properties:")?;
     for (i, lod) in p3d.lods.iter().enumerate() {
         for (name, value) in lod.properties() {
-            println!("- LOD {i}: {} = {}", printable(&name), printable(&value));
+            writeln!(
+                output,
+                "- LOD {i}: {} = {}",
+                printable(&name),
+                printable(&value)
+            )?;
         }
     }
 
-    println!();
-    println!("Selections:");
+    writeln!(output)?;
+    writeln!(output, "Selections:")?;
     for (i, lod) in p3d.lods.iter().enumerate() {
         let selections = lod.selections();
         if !selections.is_empty() {
-            println!(
+            writeln!(
+                output,
                 "- LOD {} ({}): {}",
                 i,
                 printable(&lod.name()),
                 printable(&selections.join(", "))
-            );
+            )?;
         }
     }
 

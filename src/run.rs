@@ -274,9 +274,9 @@ fn run_command(args: &Args) -> Result<(), Error> {
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
         if p3d::model_magic(&mut input)?.is_some() {
-            p3d::cmd_inspect(&mut input)
+            p3d::cmd_inspect(&mut input, &mut stdout())
         } else {
-            pbo::cmd_inspect(&mut input)
+            pbo::cmd_inspect(&mut input, &mut stdout())
         }
     } else if args.cmd_cat {
         pbo::cmd_cat(

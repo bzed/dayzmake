@@ -642,36 +642,45 @@ fn list_files(directory: &PathBuf) -> Result<Vec<PathBuf>, Error> {
     Ok(files)
 }
 
-/// Prints what is in a PBO: header extensions and the entry list.
+/// Writes what is in a PBO to the output: header extensions and the entry list.
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read.
-#[expect(clippy::print_stdout, reason = "CLI command output")]
-pub fn cmd_inspect<I: Read>(input: &mut I) -> Result<(), Error> {
+/// Returns an error if the PBO cannot be read or the output cannot be written.
+pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     if !pbo.header_extensions.is_empty() {
-        println!("Header extensions:");
+        writeln!(output, "Header extensions:")?;
         for (key, value) in &pbo.header_extensions {
-            println!("- {}={}", printable(key), printable(value));
+            writeln!(output, "- {}={}", printable(key), printable(value))?;
         }
-        println!();
+        writeln!(output)?;
     }
 
-    println!("# Files: {}\n", pbo.files.len());
+    writeln!(output, "# Files: {}\n", pbo.files.len())?;
 
-    println!("Path                                                  Method  Original    Packed");
-    println!("                                                                  Size      Size");
-    println!("================================================================================");
+    writeln!(
+        output,
+        "Path                                                  Method  Original    Packed"
+    )?;
+    writeln!(
+        output,
+        "                                                                  Size      Size"
+    )?;
+    writeln!(
+        output,
+        "================================================================================"
+    )?;
     for header in pbo.headers {
-        println!(
+        writeln!(
+            output,
             "{:50} {:9} {:9} {:9}",
             printable(&header.filename),
             header.packing_method,
             header.original_size,
             header.data_size
-        );
+        )?;
     }
 
     Ok(())
@@ -681,25 +690,17 @@ pub fn cmd_inspect<I: Read>(input: &mut I) -> Result<(), Error> {
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read or the output cannot be written.
+/// Returns an error if the PBO cannot be read, the entry does not exist, or the output cannot be
+/// written.
 pub fn cmd_cat<I: Read, O: Write>(input: &mut I, output: &mut O, name: &str) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     match pbo.file_data(name)? {
-        Some(data) => {
-            output
-                .write_all(&data)
-                .prepend_error("Failed to write output:")?;
-        }
-        None => {
-            #[expect(clippy::print_stderr, reason = "CLI diagnostics")]
-            {
-                eprintln!("not found"); // @todo
-            }
-        }
+        Some(data) => output
+            .write_all(&data)
+            .prepend_error("Failed to write output:"),
+        None => Err(error!("File \"{}\" not found in PBO.", printable(name))),
     }
-
-    Ok(())
 }
 
 /// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
