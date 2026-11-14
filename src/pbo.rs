@@ -20,7 +20,6 @@ use crate::config::{Config, is_rapified};
 use crate::error::{ErrorExt, warning};
 use crate::io::{ReadExt, WriteExt};
 use crate::p3d;
-use crate::preprocess::pathsep;
 
 struct PBOHeader {
     filename: String,
@@ -674,34 +673,137 @@ pub fn cmd_cat<I: Read, O: Write>(input: &mut I, output: &mut O, name: &str) -> 
     Ok(())
 }
 
+/// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
+/// is joined to.
+///
+/// The name is split on `\` and `/` and empty components are dropped, so a leading separator does
+/// not make the path absolute. Returns `None` if any component is `.` or `..`, consists only of
+/// dots and spaces, or contains `:` (drive letters), a NUL or an ASCII control character, or if no
+/// component remains.
+#[must_use]
+pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
+    let mut path = PathBuf::new();
+    for component in name.split(['\\', '/']).filter(|c| !c.is_empty()) {
+        if component.chars().all(|c| c == '.' || c == ' ')
+            || component.chars().any(|c| c == ':' || c.is_ascii_control())
+        {
+            return None;
+        }
+        path.push(component);
+    }
+    if path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
+/// Returns true if `base` joined with `relative` would pass through an existing symlink
+/// (checking every component below `base`, including the final one).
+fn crosses_symlink(base: &Path, relative: &Path) -> bool {
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        match current.symlink_metadata() {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            // nothing exists from here on, so nothing below can be a symlink
+            Err(_) => return false,
+        }
+    }
+    false
+}
+
+/// Replaces control characters (line breaks included) with a space.
+fn sanitize_header(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+/// Writes `$PBOPREFIX$` into `base` with control characters removed from keys and values, unless
+/// it is a symlink.
+fn write_prefix_file(
+    extensions: &HashMap<String, String>,
+    base: &Path,
+    force: bool,
+) -> Result<(), Error> {
+    let prefix_path = base.join("$PBOPREFIX$");
+    if crosses_symlink(base, Path::new("$PBOPREFIX$")) {
+        warning(
+            "Not writing $PBOPREFIX$: it is a symlink.",
+            Some("unsafe-path"),
+            (None, None),
+        );
+        return Ok(());
+    }
+    if !force && prefix_path.exists() {
+        return Err(error!(
+            "Target file \"{}\" already exists. Use --force to overwrite.",
+            prefix_path.display()
+        ));
+    }
+    let mut prefix_file =
+        File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
+
+    for (key, value) in extensions {
+        let clean_key = sanitize_header(key);
+        let clean_value = sanitize_header(value);
+        if clean_key != *key || clean_value != *value {
+            warning(
+                format!(
+                    "Header extension {key:?} contains control characters; replaced them with spaces."
+                ),
+                Some("unsafe-header"),
+                (None, None),
+            );
+        }
+        prefix_file
+            .write_all(format!("{clean_key}={clean_value}\n").as_bytes())
+            .prepend_error("Failed to write prefix file:")?;
+    }
+    Ok(())
+}
+
 /// Unpacks a PBO into the output folder.
+///
+/// Entry names and the prefix come from the (untrusted) PBO: entries whose name does not map to a
+/// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
+/// with an entry already written in this run are skipped with a warning. With `use_prefix` the
+/// files are extracted into `<output>/<prefix>/`.
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read or a target file exists without `force`.
-pub fn cmd_unpack<I: Read>(input: &mut I, output: &Path, force: bool) -> Result<(), Error> {
+/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
+/// file exists without `force`.
+pub fn cmd_unpack<I: Read>(
+    input: &mut I,
+    output: &Path,
+    force: bool,
+    use_prefix: bool,
+) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
-    create_dir_all(output).prepend_error("Failed to create output folder:")?;
+    let base = if use_prefix {
+        match pbo.header_extensions.get("prefix") {
+            Some(prefix) => {
+                let relative = safe_relative_path(prefix)
+                    .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
+                output.join(relative)
+            }
+            None => output.to_path_buf(),
+        }
+    } else {
+        output.to_path_buf()
+    };
+
+    create_dir_all(&base).prepend_error("Failed to create output folder:")?;
 
     if !pbo.header_extensions.is_empty() {
-        let prefix_path = output.join(PathBuf::from("$PBOPREFIX$"));
-        if !force && prefix_path.exists() {
-            return Err(error!(
-                "Target file \"{}\" already exists. Use --force to overwrite.",
-                prefix_path.display()
-            ));
-        }
-        let mut prefix_file =
-            File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
-
-        for (key, value) in &pbo.header_extensions {
-            prefix_file
-                .write_all(format!("{key}={value}\n").as_bytes())
-                .prepend_error("Failed to write prefix file:")?;
-        }
+        write_prefix_file(&pbo.header_extensions, &base, force)?;
     }
 
+    let mut written: HashSet<String> = HashSet::new();
     for file_name in pbo.files.keys() {
         if pbo.raw_names.contains_key(file_name) {
             warning(
@@ -712,6 +814,33 @@ pub fn cmd_unpack<I: Read>(input: &mut I, output: &Path, force: bool) -> Result<
                 (None, None),
             );
         }
+        let Some(relative) = safe_relative_path(file_name) else {
+            warning(
+                format!("Skipping \"{file_name}\": unsafe path."),
+                Some("unsafe-path"),
+                (None, None),
+            );
+            continue;
+        };
+        let key = relative.to_string_lossy().to_lowercase();
+        if written.contains(&key) {
+            warning(
+                format!(
+                    "Skipping \"{file_name}\": an entry with the same path was already extracted."
+                ),
+                Some("duplicate-entry"),
+                (None, None),
+            );
+            continue;
+        }
+        if crosses_symlink(&base, &relative) {
+            warning(
+                format!("Skipping \"{file_name}\": the target path goes through a symlink."),
+                Some("unsafe-path"),
+                (None, None),
+            );
+            continue;
+        }
         let data = match pbo.file_data(file_name) {
             Ok(Some(data)) => data,
             Ok(None) => continue,
@@ -720,22 +849,22 @@ pub fn cmd_unpack<I: Read>(input: &mut I, output: &Path, force: bool) -> Result<
                 continue;
             }
         };
-        // @todo: windows
-        let path = output.join(PathBuf::from(file_name.replace('\\', pathsep())));
+        let path = base.join(&relative);
         if !force && path.exists() {
             return Err(error!(
                 "Target file \"{}\" already exists. Use --force to overwrite.",
                 path.display()
             ));
         }
-        let written = create_dir_all(path.parent().unwrap_or(output))
+        written.insert(key);
+        let written_ok = create_dir_all(path.parent().unwrap_or(&base))
             .prepend_error("Failed to create output folder:")
             .and_then(|()| File::create(&path).prepend_error("Failed to open output file:"))
             .and_then(|mut file| {
                 file.write_all(&data)
                     .prepend_error("Failed to write output file:")
             });
-        if let Err(e) = written {
+        if let Err(e) = written_ok {
             warning(format!("Skipping \"{file_name}\": {e}"), None, (None, None));
         }
     }
@@ -798,4 +927,61 @@ pub fn cmd_build<O: Write>(
     pbo.write(output).prepend_error("Failed to write PBO:")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(s: &str) -> Option<PathBuf> {
+        safe_relative_path(s)
+    }
+
+    #[test]
+    fn safe_path_accepts_normal_names() {
+        assert_eq!(
+            p("a\\b/c.txt"),
+            Some(PathBuf::from("a").join("b").join("c.txt"))
+        );
+        assert_eq!(
+            p("a.b\\.hidden"),
+            Some(PathBuf::from("a.b").join(".hidden"))
+        );
+    }
+
+    #[test]
+    fn safe_path_drops_empty_components() {
+        assert_eq!(p("\\abs.txt"), Some(PathBuf::from("abs.txt")));
+        assert_eq!(p("/tmp//x"), Some(PathBuf::from("tmp").join("x")));
+        assert_eq!(p("a\\\\b\\"), Some(PathBuf::from("a").join("b")));
+    }
+
+    #[test]
+    fn safe_path_rejects_dots_and_spaces() {
+        for bad in [
+            "..",
+            "a\\..\\b",
+            "a\\.\\b",
+            "a\\...\\b",
+            "a\\. \\b",
+            "a\\ \\b",
+            "a\\.. ",
+        ] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn safe_path_rejects_colon_nul_and_control() {
+        for bad in ["C:\\x.txt", "a:b", "a\0b", "a\nb", "a\tb", "a\x7fb"] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn safe_path_rejects_empty() {
+        for bad in ["", "\\", "/\\/"] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
+    }
 }

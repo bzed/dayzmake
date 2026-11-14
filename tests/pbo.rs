@@ -161,3 +161,131 @@ fn garbage_is_an_error_not_a_panic() {
     let result = PBO::read(&mut &garbage[..]);
     assert!(result.is_err(), "huge entry sizes must be rejected");
 }
+
+/// Builds a PBO holding exactly `entries`, with an optional prefix header extension.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).unwrap();
+    pbo.files.clear();
+    for (name, data) in entries {
+        pbo.files.insert(
+            (*name).to_string(),
+            std::io::Cursor::new(data.to_vec().into_boxed_slice()),
+        );
+    }
+    if let Some(prefix) = prefix {
+        pbo.header_extensions
+            .insert("prefix".to_string(), prefix.to_string());
+    }
+    pbo.to_cursor().unwrap().into_inner()
+}
+
+/// Unpacks `pbo` into `<tmp>/target`; returns (tmp, exit code, stderr).
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn unpack_crafted(pbo: &[u8], extra: &[&str]) -> (tempfile::TempDir, i32, String) {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("outside")).unwrap();
+    fs::write(tmp.path().join("in.pbo"), pbo).unwrap();
+    let mut args = vec!["unpack"];
+    args.extend_from_slice(extra);
+    args.extend_from_slice(&["in.pbo", "target"]);
+    let (code, err) = run_dayzmake(&args, tmp.path());
+    (tmp, code, err)
+}
+
+#[test]
+fn unpack_rejects_parent_dir_entry() {
+    let pbo = crafted_pbo(&[("..\\outside\\evil.txt", b"x"), ("ok.txt", b"y")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(!tmp.path().join("outside/evil.txt").exists());
+    assert!(tmp.path().join("target/ok.txt").exists());
+}
+
+#[test]
+fn unpack_rejects_absolute_entry() {
+    let pbo = crafted_pbo(
+        &[("\\abs.txt", b"a"), ("/tmp/x", b"b"), ("C:\\x.txt", b"c")],
+        None,
+    );
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(tmp.path().join("target/abs.txt").exists());
+    assert!(tmp.path().join("target/tmp/x").exists());
+    assert!(!tmp.path().join("target/C:").exists());
+    assert!(!tmp.path().join("target/x.txt").exists());
+    assert!(err.contains("unsafe-path"), "{err}");
+}
+
+#[test]
+fn unpack_rejects_dot_space_components() {
+    let pbo = crafted_pbo(
+        &[
+            ("a\\...\\b", b"1"),
+            ("a\\. \\b", b"2"),
+            ("a\\.\\b", b"3"),
+            ("ok.txt", b"4"),
+        ],
+        None,
+    );
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!tmp.path().join("target/a").exists());
+    assert!(tmp.path().join("target/ok.txt").exists());
+}
+
+#[test]
+fn unpack_use_prefix_rejects_dotdot_prefix() {
+    let pbo = crafted_pbo(&[("a.txt", b"x")], Some("..\\..\\outside"));
+    let (tmp, code, err) = unpack_crafted(&pbo, &["--use-prefix"]);
+    assert_ne!(code, 0, "{err}");
+    assert!(err.to_lowercase().contains("prefix"), "{err}");
+    assert!(!tmp.path().join("outside/a.txt").exists());
+    assert!(!tmp.path().join("target/a.txt").exists());
+    assert!(!tmp.path().join("target").exists());
+}
+
+#[test]
+fn unpack_use_prefix_extracts_below_prefix() {
+    let pbo = crafted_pbo(&[("a\\b.c", b"x")], Some("my\\mod"));
+    let (tmp, code, err) = unpack_crafted(&pbo, &["--use-prefix"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(tmp.path().join("target/my/mod/a/b.c").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn unpack_does_not_follow_symlinks() {
+    let pbo = crafted_pbo(&[("link\\evil.txt", b"x")], None);
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("outside")).unwrap();
+    fs::create_dir_all(tmp.path().join("target")).unwrap();
+    std::os::unix::fs::symlink("../outside", tmp.path().join("target/link")).unwrap();
+    fs::write(tmp.path().join("in.pbo"), &pbo).unwrap();
+    let (code, err) = run_dayzmake(&["unpack", "-f", "in.pbo", "target"], tmp.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(!tmp.path().join("outside/evil.txt").exists());
+    assert!(err.contains("unsafe-path"), "{err}");
+}
+
+#[test]
+fn unpack_prefix_file_strips_control_chars() {
+    let pbo = crafted_pbo(&[("a.txt", b"x")], Some("x\nprefix=..\\evil"));
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-header"), "{err}");
+    let text = fs::read_to_string(tmp.path().join("target/$PBOPREFIX$")).unwrap();
+    assert_eq!(text.lines().count(), 1, "{text:?}");
+    assert!(!text.lines().any(|l| l == "prefix=..\\evil"), "{text:?}");
+}
+
+#[test]
+fn unpack_duplicate_target_warns() {
+    let pbo = crafted_pbo(&[("A.txt", b"1"), ("a.txt", b"2")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert_eq!(fs::read(tmp.path().join("target/A.txt")).unwrap(), b"1");
+}

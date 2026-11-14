@@ -27,7 +27,7 @@ Usage:
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] <source> <targetfolder>
+    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
     dayzmake cat [-v] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -70,6 +70,7 @@ Options:
     -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
+    --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
@@ -100,6 +101,7 @@ pub struct Args {
     cmd_verify: bool,
     flag_verbose: bool,
     flag_force: bool,
+    flag_use_prefix: bool,
     flag_warning: Vec<String>,
     flag_include: Vec<String>,
     flag_exclude: Vec<String>,
@@ -238,6 +240,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
             &mut get_input(args)?,
             &PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
+            args.flag_use_prefix,
         )
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
