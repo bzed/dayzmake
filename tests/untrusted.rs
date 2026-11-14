@@ -73,9 +73,7 @@ fn feed(ext: &str, data: &[u8]) {
             let _ = Config::read_rapified(&mut Cursor::new(data));
         }
         "paa" => {
-            if let Ok(paa) = Paa::read(&mut Cursor::new(data))
-                && usize::from(paa.width) * usize::from(paa.height) <= 1 << 22
-            {
+            if let Ok(paa) = Paa::read(&mut Cursor::new(data)) {
                 let _ = paa.to_dynamic_image();
             }
         }
@@ -110,14 +108,40 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every fixture with a reader, in a stable order.
-fn seeds() -> Vec<(PathBuf, String)> {
+/// A PBO with one `Cprs` (LZSS) entry `c.txt`, and the bytes it unpacks to. The data is three
+/// literals, a back reference (offset 3, length 9) and three more literals.
+fn lzss_pbo() -> (Vec<u8>, Vec<u8>) {
+    let expected = b"abcabcabcabcXYZ".to_vec();
+    let packed = [
+        0x77, b'a', b'b', b'c', 0x03, 0x06, b'X', b'Y', b'Z', 0, 0, 0, 0,
+    ];
+    let mut pbo = b"c.txt\0".to_vec();
+    for field in [0x4370_7273_u32, 15, 0, 0, 13] {
+        pbo.extend_from_slice(&field.to_le_bytes());
+    }
+    pbo.extend_from_slice(&[0; 21]); // the empty header that ends the list
+    pbo.extend_from_slice(&packed);
+    pbo.extend_from_slice(&[0; 21]); // separator and checksum
+    (pbo, expected)
+}
+
+/// The compressed entry of the synthetic seed unpacks to the expected bytes.
+#[test]
+fn lzss_seed_decompresses() {
+    let (bytes, expected) = lzss_pbo();
+    let pbo = PBO::read(&mut Cursor::new(bytes)).expect("read");
+    assert_eq!(pbo.file_data("c.txt").expect("data"), Some(expected));
+}
+
+/// Every seed with a reader as (name, extension, bytes), in a stable order: the fixtures, plus a
+/// synthetic PBO with a compressed entry (no fixture has one).
+fn seeds() -> Vec<(String, String, Vec<u8>)> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let mut files = Vec::new();
     collect(&root.join("bi"), &mut files);
     files.push(root.join("mlod/small.p3d"));
     files.sort();
-    files
+    let mut seeds: Vec<(String, String, Vec<u8>)> = files
         .into_iter()
         .filter_map(|p| {
             let ext = p.extension()?.to_str()?.to_lowercase();
@@ -131,20 +155,31 @@ fn seeds() -> Vec<(PathBuf, String)> {
                 "biprivatekey",
             ]
             .contains(&ext.as_str())
-            .then_some((p, ext))
+            .then(|| {
+                (
+                    p.display().to_string(),
+                    ext,
+                    fs::read(&p).unwrap_or_default(),
+                )
+            })
         })
-        .collect()
+        .collect();
+    seeds.push((
+        "synthetic lzss.pbo".to_string(),
+        "pbo".to_string(),
+        lzss_pbo().0,
+    ));
+    seeds
 }
 
 fn run_mutants(count: usize) {
     let seeds = seeds();
     assert!(!seeds.is_empty(), "no seed files found");
     let mut failures: Vec<String> = Vec::new();
-    for (path, ext) in &seeds {
-        let seed = fs::read(path).unwrap_or_default();
+    for (path, ext, seed) in &seeds {
         let mut rng = Rng(SEED);
         for i in 0..count {
-            let mutant = mutate(&seed, &mut rng);
+            let mutant = mutate(seed, &mut rng);
             if catch_unwind(AssertUnwindSafe(|| feed(ext, &mutant))).is_err() {
                 let hex = mutant.iter().take(64).fold(String::new(), |mut acc, b| {
                     let _ = write!(acc, "{b:02x}");
@@ -152,7 +187,7 @@ fn run_mutants(count: usize) {
                 });
                 failures.push(format!(
                     "{} mutant {i} ({} bytes) panicked: {hex}",
-                    path.display(),
+                    path,
                     mutant.len()
                 ));
             }
@@ -197,10 +232,11 @@ fn paa_short_dxt_mipmap_is_an_error_not_a_panic() {
 /// A zero width made `chunks_mut(0)` panic.
 #[test]
 fn paa_zero_width_decode_is_an_error_not_a_panic() {
-    let bytes = paa_with_mip(0xff01, 0x8000, 8, &[]);
-    if let Ok(paa) = Paa::read(&mut Cursor::new(bytes)) {
-        assert!(paa.to_dynamic_image().is_err());
-    }
+    // [0x11, 0, 0] is the LZO end-of-stream marker: it decompresses to 0 bytes
+    let bytes = paa_with_mip(0xff01, 0x8000, 8, &[0x11, 0, 0]);
+    let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
+    assert_eq!(paa.width, 0);
+    assert!(paa.to_dynamic_image().is_err());
 }
 
 /// Appends a mipmap record to a PAA that ends with a 6 byte terminator.
@@ -322,4 +358,16 @@ fn inspect_and_unpack_do_not_print_terminal_escapes() {
         "{stderr:?}"
     );
     assert!(stderr.contains("unsafe-path"), "{stderr:?}");
+}
+
+/// One 16384 x 16384 DXT1 LZO mipmap (128 MiB, from about 600 KB) passes `read`, but decoding it
+/// would allocate 1 GiB of RGBA.
+#[test]
+fn paa_decoded_size_is_bounded() {
+    let zeros = vec![0u8; 128 << 20];
+    let packed = lzo1x::compress(&zeros, lzo1x::CompressLevel::default());
+    drop(zeros);
+    let bytes = paa_with_mip(0xff01, 0x8000 | 16384, 16384, &packed);
+    let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
+    assert!(paa.to_dynamic_image().is_err());
 }

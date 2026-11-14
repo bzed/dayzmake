@@ -267,6 +267,13 @@ impl Paa {
         };
         let width = usize::from(self.width);
         let height = usize::from(self.height);
+        // the decoded RGBA image is 4 bytes per pixel; hold it to the same bound as the mipmaps
+        // (at most 8192 x 8192 pixels)
+        if width.saturating_mul(height).saturating_mul(4) > MAX_PAA_TOTAL {
+            return Err(error!(
+                "PAA is too large to decode: {width} x {height} pixels."
+            ));
+        }
 
         let format = match self.compression.as_str() {
             "DXT1" => Format::Bc1,
