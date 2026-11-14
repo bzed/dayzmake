@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::error::{ErrorExt, warning};
+use crate::error::{ErrorExt, printable, warning};
 use crate::io::{ReadExt, WriteExt};
 
 fn invalid<S: Into<String>>(msg: S) -> Error {
@@ -557,7 +557,7 @@ pub fn check_dependencies<S: std::hash::BuildHasher>(
             warning(
                 format!(
                     "Cannot check textures and materials: {}",
-                    e.to_string().replace('\n', " ")
+                    printable(&e.to_string().replace('\n', " "))
                 ),
                 Some("model-unreadable"),
                 (Some(display.to_string()), None),
@@ -591,7 +591,10 @@ pub fn check_dependencies<S: std::hash::BuildHasher>(
             };
             if exists == Some(false) {
                 warning(
-                    format!("Model references {kind} \"{name}\", which is not in the addon."),
+                    format!(
+                        "Model references {kind} \"{}\", which is not in the addon.",
+                        printable(name)
+                    ),
                     Some(*warning_name),
                     (Some(display.to_string()), None),
                 );
@@ -672,18 +675,18 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
     println!();
     println!("Textures:");
     for (name, count) in p3d.textures() {
-        println!("- {name} ({count} faces)");
+        println!("- {} ({count} faces)", printable(name));
     }
     println!("Materials:");
     for (name, count) in p3d.materials() {
-        println!("- {name} ({count} faces)");
+        println!("- {} ({count} faces)", printable(name));
     }
 
     println!();
     println!("Properties:");
     for (i, lod) in p3d.lods.iter().enumerate() {
         for (name, value) in lod.properties() {
-            println!("- LOD {i}: {name} = {value}");
+            println!("- LOD {i}: {} = {}", printable(&name), printable(&value));
         }
     }
 
@@ -692,7 +695,12 @@ pub fn cmd_inspect<I: Read + Seek>(input: &mut I) -> Result<(), Error> {
     for (i, lod) in p3d.lods.iter().enumerate() {
         let selections = lod.selections();
         if !selections.is_empty() {
-            println!("- LOD {} ({}): {}", i, lod.name(), selections.join(", "));
+            println!(
+                "- LOD {} ({}): {}",
+                i,
+                printable(&lod.name()),
+                printable(&selections.join(", "))
+            );
         }
     }
 

@@ -264,7 +264,7 @@ mod proton {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use crate::error;
-    use crate::error::{ErrorExt, warning};
+    use crate::error::{ErrorExt, printable, warning};
 
     const APP_ID: &str = "830640";
     const PREFIX_TIMEOUT: Duration = Duration::from_secs(300);
@@ -411,7 +411,7 @@ mod proton {
                     || lower.contains("failed"))
             {
                 warning(
-                    format!("{}: {}", model, line.trim()),
+                    format!("{}: {}", printable(model), printable(line.trim())),
                     Some("binarize-missing-texture"),
                     (None, None),
                 );
@@ -419,11 +419,21 @@ mod proton {
         }
     }
 
+    /// Joins log lines for display; binarize.exe echoes names from the model, so control
+    /// characters are escaped.
+    fn printable_lines(lines: &[&str]) -> String {
+        lines
+            .iter()
+            .map(|l| printable(l))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn tail(path: &Path, lines: usize) -> String {
         let text = read_to_string(path).unwrap_or_default();
         let all: Vec<&str> = text.lines().collect();
         let start = all.len().saturating_sub(lines);
-        all.get(start..).unwrap_or(&[]).join("\n")
+        printable_lines(all.get(start..).unwrap_or(&[]))
     }
 
     /// Runs a proton command with output captured in `log`; kills it after `timeout`.

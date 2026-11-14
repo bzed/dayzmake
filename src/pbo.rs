@@ -17,7 +17,7 @@ static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap()
 
 use crate::binarize;
 use crate::config::{Config, is_rapified};
-use crate::error::{ErrorExt, warning};
+use crate::error::{ErrorExt, printable, warning};
 use crate::io::{ReadExt, WriteExt};
 use crate::p3d;
 
@@ -322,7 +322,9 @@ impl PBO {
             if got != header.data_size as usize {
                 return Err(error!(
                     "PBO entry \"{}\" is truncated ({} of {} bytes).",
-                    header.filename, got, header.data_size
+                    printable(&header.filename),
+                    got,
+                    header.data_size
                 ));
             }
             files.insert(
@@ -601,7 +603,7 @@ impl PBO {
         match self.headers.iter().find(|h| h.filename == name) {
             Some(h) if h.packing_method == PACKING_COMPRESSED => {
                 lzss_decompress(cursor.get_ref(), h.original_size as usize)
-                    .prepend_error(format!("Failed to decompress \"{name}\":"))
+                    .prepend_error(format!("Failed to decompress \"{}\":", printable(name)))
                     .map(Some)
             }
             _ => Ok(Some(cursor.get_ref().to_vec())),
@@ -652,7 +654,7 @@ pub fn cmd_inspect<I: Read>(input: &mut I) -> Result<(), Error> {
     if !pbo.header_extensions.is_empty() {
         println!("Header extensions:");
         for (key, value) in &pbo.header_extensions {
-            println!("- {key}={value}");
+            println!("- {}={}", printable(key), printable(value));
         }
         println!();
     }
@@ -665,7 +667,10 @@ pub fn cmd_inspect<I: Read>(input: &mut I) -> Result<(), Error> {
     for header in pbo.headers {
         println!(
             "{:50} {:9} {:9} {:9}",
-            header.filename, header.packing_method, header.original_size, header.data_size
+            printable(&header.filename),
+            header.packing_method,
+            header.original_size,
+            header.data_size
         );
     }
 
@@ -697,18 +702,35 @@ pub fn cmd_cat<I: Read, O: Write>(input: &mut I, output: &mut O, name: &str) -> 
     Ok(())
 }
 
+/// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
+/// Windows opens instead of a file whatever the extension.
+fn is_device_name(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|p| {
+            stem.strip_prefix(p)
+                .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+        })
+}
+
 /// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
 /// is joined to.
 ///
 /// The name is split on `\` and `/` and empty components are dropped, so a leading separator does
 /// not make the path absolute. Returns `None` if any component is `.` or `..`, consists only of
-/// dots and spaces, or contains `:` (drive letters), a NUL or an ASCII control character, or if no
+/// dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or an ASCII control character, or if no
 /// component remains.
 #[must_use]
 pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
     let mut path = PathBuf::new();
     for component in name.split(['\\', '/']).filter(|c| !c.is_empty()) {
-        if component.chars().all(|c| c == '.' || c == ' ')
+        if is_device_name(component)
+            || component.chars().all(|c| c == '.' || c == ' ')
             || component.chars().any(|c| c == ':' || c.is_ascii_control())
         {
             return None;
@@ -723,7 +745,8 @@ pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
 }
 
 /// Returns true if `base` joined with `relative` would pass through an existing symlink
-/// (checking every component below `base`, including the final one).
+/// (checking every component below `base`, including the final one), or if that cannot be
+/// determined.
 fn crosses_symlink(base: &Path, relative: &Path) -> bool {
     let mut current = base.to_path_buf();
     for component in relative.components() {
@@ -732,7 +755,9 @@ fn crosses_symlink(base: &Path, relative: &Path) -> bool {
             Ok(meta) if meta.file_type().is_symlink() => return true,
             Ok(_) => {}
             // nothing exists from here on, so nothing below can be a symlink
-            Err(_) => return false,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return false,
+            // the path cannot be inspected (permissions, I/O error): do not assume it is safe
+            Err(_) => return true,
         }
     }
     false
@@ -789,12 +814,34 @@ fn write_prefix_file(
     Ok(())
 }
 
+/// The folder a PBO is unpacked into: `output`, or with `use_prefix` `<output>/<prefix>`. An empty
+/// prefix (or one of only separators) means no prefix.
+fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Error> {
+    if !use_prefix {
+        return Ok(output.to_path_buf());
+    }
+    match pbo.header_extensions.get("prefix") {
+        Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(output.to_path_buf()),
+        Some(prefix) => {
+            let relative = safe_relative_path(prefix)
+                .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
+            if crosses_symlink(output, &relative) {
+                return Err(error!(
+                    "PBO prefix {prefix:?} goes through a symlink; refusing to unpack."
+                ));
+            }
+            Ok(output.join(relative))
+        }
+        None => Ok(output.to_path_buf()),
+    }
+}
+
 /// Unpacks a PBO into the output folder.
 ///
 /// Entry names and the prefix come from the (untrusted) PBO: entries whose name does not map to a
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
 /// with an entry already written in this run are skipped with a warning. With `use_prefix` the
-/// files are extracted into `<output>/<prefix>/`.
+/// files are extracted into `<output>/<prefix>/`; an empty prefix means no prefix.
 ///
 /// # Errors
 ///
@@ -808,23 +855,7 @@ pub fn cmd_unpack<I: Read>(
 ) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
-    let base = if use_prefix {
-        match pbo.header_extensions.get("prefix") {
-            Some(prefix) => {
-                let relative = safe_relative_path(prefix)
-                    .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
-                if crosses_symlink(output, &relative) {
-                    return Err(error!(
-                        "PBO prefix {prefix:?} goes through a symlink; refusing to unpack."
-                    ));
-                }
-                output.join(relative)
-            }
-            None => output.to_path_buf(),
-        }
-    } else {
-        output.to_path_buf()
-    };
+    let base = unpack_base(&pbo, output, use_prefix)?;
 
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
 
@@ -845,7 +876,7 @@ pub fn cmd_unpack<I: Read>(
         }
         let Some(relative) = safe_relative_path(file_name) else {
             warning(
-                format!("Skipping \"{file_name}\": unsafe path."),
+                format!("Skipping \"{}\": unsafe path.", printable(file_name)),
                 Some("unsafe-path"),
                 (None, None),
             );
@@ -855,7 +886,8 @@ pub fn cmd_unpack<I: Read>(
         if written.contains(&key) {
             warning(
                 format!(
-                    "Skipping \"{file_name}\": an entry with the same path was already extracted."
+                    "Skipping \"{}\": an entry with the same path was already extracted.",
+                    printable(file_name)
                 ),
                 Some("duplicate-entry"),
                 (None, None),
@@ -864,7 +896,10 @@ pub fn cmd_unpack<I: Read>(
         }
         if crosses_symlink(&base, &relative) {
             warning(
-                format!("Skipping \"{file_name}\": the target path goes through a symlink."),
+                format!(
+                    "Skipping \"{}\": the target path goes through a symlink.",
+                    printable(file_name)
+                ),
                 Some("unsafe-path"),
                 (None, None),
             );
@@ -874,7 +909,11 @@ pub fn cmd_unpack<I: Read>(
             Ok(Some(data)) => data,
             Ok(None) => continue,
             Err(e) => {
-                warning(format!("Skipping \"{file_name}\": {e}"), None, (None, None));
+                warning(
+                    format!("Skipping \"{}\": {e}", printable(file_name)),
+                    None,
+                    (None, None),
+                );
                 continue;
             }
         };
@@ -894,7 +933,11 @@ pub fn cmd_unpack<I: Read>(
                     .prepend_error("Failed to write output file:")
             });
         if let Err(e) = written_ok {
-            warning(format!("Skipping \"{file_name}\": {e}"), None, (None, None));
+            warning(
+                format!("Skipping \"{}\": {e}", printable(file_name)),
+                None,
+                (None, None),
+            );
         }
     }
 
@@ -1024,6 +1067,37 @@ mod tests {
     fn safe_path_rejects_colon_nul_and_control() {
         for bad in ["C:\\x.txt", "a:b", "a\0b", "a\nb", "a\tb", "a\x7fb"] {
             assert_eq!(p(bad), None, "{bad:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn crosses_symlink_fails_closed_when_the_path_cannot_be_inspected() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // root ignores permissions, so there is nothing to test
+        let permissions_ignored = locked
+            .join("x")
+            .symlink_metadata()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+        let crosses = crosses_symlink(dir.path(), Path::new("locked/x"));
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !permissions_ignored {
+            assert!(crosses, "an unreadable path must count as unsafe");
+        }
+    }
+
+    #[test]
+    fn safe_path_rejects_windows_device_names() {
+        for bad in ["con", "a\\NUL.txt", "Aux.tar.gz", "com1", "LPT9.x", "prn."] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
+        for fine in ["console", "com10", "nulls.txt", "a.con"] {
+            assert!(p(fine).is_some(), "{fine:?}");
         }
     }
 

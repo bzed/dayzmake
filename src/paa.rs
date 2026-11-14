@@ -31,6 +31,13 @@ const OFFS_TAGG: &str = "GGATSFFO"; // mipmap offsets (16 u32, zero padded)
 /// Largest mipmap width or height accepted when reading.
 const MAX_PAA_DIMENSION: usize = 16384;
 
+/// Most mipmaps accepted when reading (real PAAs have at most 16: 16384 down to 1 pixel is 15).
+const MAX_MIPMAPS: usize = 16;
+
+/// Most mipmap bytes accepted in total when reading, after LZO decompression. A tiny file can
+/// otherwise expand to 256 times its size.
+const MAX_PAA_TOTAL: usize = 256 << 20;
+
 /// Largest tagg accepted when reading.
 const MAX_TAGG_SIZE: usize = 1 << 20;
 
@@ -50,7 +57,13 @@ fn read_tagg_data<I: Read>(input: &mut I, name: &str) -> Result<Vec<u8>, Error> 
 
 /// Decompresses an LZO mipmap. The decompressed size is the format's usual compressed (block)
 /// size for the mipmap dimensions.
-fn decompress_mipmap(compression: &str, mip_data: &[u8], w: u16, h: u16) -> Result<Vec<u8>, Error> {
+fn decompress_mipmap(
+    compression: &str,
+    mip_data: &[u8],
+    w: u16,
+    h: u16,
+    budget: usize,
+) -> Result<Vec<u8>, Error> {
     let real_w = (w & 0x7FFF) as usize;
     let real_h = h as usize;
     let decompressed_size = match compression {
@@ -70,10 +83,41 @@ fn decompress_mipmap(compression: &str, mip_data: &[u8], w: u16, h: u16) -> Resu
             mip_data.len()
         ));
     }
+    if decompressed_size > budget {
+        return Err(error!(
+            "PAA mipmaps are too large: more than {MAX_PAA_TOTAL} bytes in total."
+        ));
+    }
     let mut decompressed_data = vec![0; decompressed_size];
     lzo1x::decompress(mip_data, &mut decompressed_data)
         .map_err(|e| error!("Failed to decompress LZO-compressed mipmap: {:?}", e))?;
     Ok(decompressed_data)
+}
+
+/// Reads one mipmap of `size` stored bytes (LZO compressed if bit 15 of the width is set).
+/// `budget` is what is left of the total mipmap size allowed for the file.
+fn read_mipmap<I: Read>(
+    input: &mut I,
+    compression: &str,
+    (w, h): (u16, u16),
+    size: usize,
+    budget: usize,
+) -> Result<Vec<u8>, Error> {
+    // the size field is not trusted for preallocation
+    let mut mip_data = Vec::new();
+    input.take(size as u64).read_to_end(&mut mip_data)?;
+    if mip_data.len() != size {
+        return Err(error!("Truncated PAA mipmap."));
+    }
+    if (w & 0x8000) != 0 {
+        decompress_mipmap(compression, &mip_data, w, h, budget)
+    } else if size > budget {
+        Err(error!(
+            "PAA mipmaps are too large: more than {MAX_PAA_TOTAL} bytes in total."
+        ))
+    } else {
+        Ok(mip_data)
+    }
 }
 
 /// A PAA texture.
@@ -124,6 +168,7 @@ impl Paa {
         let mut mipmaps = Vec::new();
         let mut width = 0;
         let mut height = 0;
+        let mut total = 0usize;
 
         // Taggs. The section is terminated by a zero byte, which is not
         // consumed: it is the low byte of the palette size that follows.
@@ -187,16 +232,13 @@ impl Paa {
                 height = h;
             }
 
-            let mut mip_data = vec![0; size];
-            input.read_exact(&mut mip_data)?;
-
-            if (w & 0x8000) != 0 {
-                // LZO compressed
-                let decompressed_data = decompress_mipmap(&compression, &mip_data, w, h)?;
-                mipmaps.push(decompressed_data);
-            } else {
-                mipmaps.push(mip_data);
+            if mipmaps.len() >= MAX_MIPMAPS {
+                return Err(error!("PAA has more than {MAX_MIPMAPS} mipmaps."));
             }
+            let budget = MAX_PAA_TOTAL.saturating_sub(total);
+            let mip = read_mipmap(input, &compression, (w, h), size, budget)?;
+            total += mip.len();
+            mipmaps.push(mip);
         }
 
         if mipmaps.is_empty() {
@@ -265,6 +307,18 @@ impl Paa {
             }
         };
 
+        if width == 0 || height == 0 {
+            return Err(error!("PAA has no image data"));
+        }
+        // the block decoder indexes the data by the dimensions, so it must hold every block
+        if main_mipmap.len() < format.compressed_size(width, height) {
+            return Err(error!(
+                "PAA mipmap holds {} bytes, but {width} x {height} {} needs {}.",
+                main_mipmap.len(),
+                self.compression,
+                format.compressed_size(width, height)
+            ));
+        }
         let mut decompressed = vec![0u8; width * height * 4];
         format.decompress(main_mipmap, width, height, &mut decompressed);
 

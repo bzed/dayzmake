@@ -255,6 +255,17 @@ fn unpack_use_prefix_extracts_below_prefix() {
     assert!(tmp.path().join("target/my/mod/a/b.c").exists());
 }
 
+/// An empty prefix means "no prefix": the files go straight into the target folder.
+#[test]
+fn unpack_use_prefix_with_empty_prefix_extracts_into_target() {
+    for prefix in ["", "\\", "/"] {
+        let pbo = crafted_pbo(&[("a\\b.c", b"x")], Some(prefix));
+        let (tmp, code, err) = unpack_crafted(&pbo, &["--use-prefix"]);
+        assert_eq!(code, 0, "{prefix:?}: {err}");
+        assert!(tmp.path().join("target/a/b.c").exists(), "{prefix:?}");
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn unpack_does_not_follow_symlinks() {

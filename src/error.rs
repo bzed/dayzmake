@@ -173,6 +173,21 @@ fn format_parse_error(
     )
 }
 
+/// Makes text from an untrusted file safe to print: control characters (escape sequences, line
+/// breaks, bell) are written as `\n`, `\u{1b}` and so on, so they cannot drive the terminal.
+#[must_use]
+pub fn printable(text: &str) -> String {
+    text.chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<char>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+
 fn print_warning_message<M: AsRef<[u8]> + Display>(
     msg: M,
     name: Option<&'static str>,
