@@ -2001,6 +2001,42 @@ mod from_pbo {
         assert!(!w.home.join(".cache").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn query_works_when_the_cache_is_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let w = World::new();
+        fs::create_dir_all(&w.cache).expect("cache");
+        fs::set_permissions(&w.cache, fs::Permissions::from_mode(0o500)).expect("chmod");
+        let (code, out, err) = w.run(&["api", "class", "Base"]);
+        fs::set_permissions(&w.cache, fs::Permissions::from_mode(0o700)).expect("chmod");
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"), "{out}");
+        assert!(err.contains("api-cache"), "{err}");
+    }
+
+    #[test]
+    fn query_works_without_a_cache_location() {
+        let w = World::new();
+        let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+            .args(["api", "class", "Base"])
+            .env("STEAM_ROOT", &w.root)
+            .env_remove("DAYZMAKE_CACHE")
+            .env_remove("XDG_CACHE_HOME")
+            .env_remove("HOME")
+            .env_remove("LOCALAPPDATA")
+            .current_dir(&w.home)
+            .output()
+            .expect("run");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{err}");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("class Base"),
+            "{err}"
+        );
+        assert!(err.contains("api-cache"), "{err}");
+    }
+
     #[test]
     fn api_missing_install_message() {
         let w = World::new();

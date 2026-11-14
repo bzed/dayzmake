@@ -4,11 +4,11 @@ use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{Error, ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::model::{ApiIndex, INDEX_FORMAT, InputStamp};
 use crate::error;
+use crate::error::warning;
 
 /// The cache directory, created (mode 0700 on unix) when missing: `$DAYZMAKE_CACHE`, else
 /// `$XDG_CACHE_HOME/dayzmake/api`, else `$HOME/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`).
@@ -77,16 +77,15 @@ fn load(file: &Path, want: &[InputStamp]) -> Option<ApiIndex> {
         .then_some(index)
 }
 
-/// Counter that makes temp file names unique within the process.
-static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// Write `index` through an exclusively created temp file in the same directory and a rename.
 fn store(dir: &Path, key: &str, index: &ApiIndex) -> Result<(), Error> {
     let json = serde_json::to_vec(index).map_err(|e| error!("cannot serialize the index: {e}"))?;
     let mut attempts = 0;
     let (tmp, mut file) = loop {
-        let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp = dir.join(format!(".{key}.{}.{n}.tmp", std::process::id()));
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let tmp = dir.join(format!(".{key}.{}.{nanos}.tmp", std::process::id()));
         match OpenOptions::new().write(true).create_new(true).open(&tmp) {
             Ok(f) => break (tmp, f),
             Err(e) if e.kind() == ErrorKind::AlreadyExists && attempts < 5 => attempts += 1,
@@ -108,14 +107,19 @@ fn store(dir: &Path, key: &str, index: &ApiIndex) -> Result<(), Error> {
     result
 }
 
+fn cache_warning(msg: &str) {
+    warning(msg, Some("api-cache"), (None, None));
+}
+
 /// The cached index `key`, or the result of `build` when there is none, it does not parse, has another
 /// format, or was made from other inputs (size or mtime). `refresh` always builds. A corrupt cache file is
 /// replaced, never an error.
 ///
 /// # Errors
 ///
-/// Returns an error when `key` has characters outside `[A-Za-z0-9_.-]`, an input cannot be read, `build`
-/// fails or the cache cannot be written.
+/// Returns an error when `key` has characters outside `[A-Za-z0-9_.-]`, an input cannot be read or `build`
+/// fails. A cache that cannot be found, created or written is a warning (`api-cache`): the freshly built index
+/// is returned.
 pub fn cached(
     key: &str,
     inputs: &[PathBuf],
@@ -129,14 +133,23 @@ pub fn cached(
     {
         return Err(error!("invalid cache key \"{key}\""));
     }
-    let dir = cache_dir()?;
+    let dir = cache_dir()
+        .inspect_err(|e| cache_warning(&format!("{e}; the index is built without a cache")))
+        .ok();
     let want = stamps(inputs)?;
-    if !refresh && let Some(index) = load(&dir.join(format!("{key}.json")), &want) {
+    if !refresh
+        && let Some(dir) = &dir
+        && let Some(index) = load(&dir.join(format!("{key}.json")), &want)
+    {
         return Ok(index);
     }
     let mut index = build()?;
     index.inputs = want;
-    store(&dir, key, &index)?;
+    if let Some(dir) = &dir {
+        // The index is right either way; a cache that cannot be written only costs time.
+        let _ = store(dir, key, &index)
+            .inspect_err(|e| cache_warning(&format!("cannot write the cache: {e}")));
+    }
     Ok(index)
 }
 

@@ -158,7 +158,8 @@ dayzmake api update                           # rebuild the cache now
   text); `-v` first prints one `# <index>: <build>` line per index.
 - **Cache:** one JSON file per index in `$DAYZMAKE_CACHE`, else `$XDG_CACHE_HOME/dayzmake/api`, else
   `~/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`). It is rebuilt automatically when the size or
-  modification time of a PBO changes or the index format changes; `--refresh` forces it. A corrupt file is replaced.
+  modification time of a PBO changes or the index format changes; `--refresh` forces it. A corrupt file is replaced. A cache that cannot be found or written (read-only directory, no `HOME`) is a warning
+  (`api-cache`); the query still runs on the freshly built index.
 - PBO contents are untrusted: entries and prefixes with unsafe paths are skipped with a warning and nothing is
   extracted to disk.
 
