@@ -7,10 +7,24 @@ use std::fmt;
 /// Per-name quota of kept warnings in [`Warnings::new`].
 const DEFAULT_QUOTA: u32 = 10;
 
+/// What a [`Warning`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum WarningKind {
+    /// A real warning: it has a name, can be muted and is subject to the per-name quota.
+    #[default]
+    Warning,
+    /// A plain message for the user (progress, tool output): never muted, never counted against
+    /// a quota, shown as the bare message.
+    Note,
+}
+
 /// One warning: a message with an optional name (for muting), file and line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Warning {
+    /// Warning or note.
+    pub kind: WarningKind,
     /// The warning type, used for muting and the per-name quota.
     pub name: Option<&'static str>,
     /// What went wrong.
@@ -26,7 +40,20 @@ impl Warning {
     #[must_use]
     pub fn new(name: Option<&'static str>, message: impl Into<String>) -> Warning {
         Warning {
+            kind: WarningKind::Warning,
             name,
+            message: message.into(),
+            file: None,
+            line: None,
+        }
+    }
+
+    /// A note: a plain message that is not a warning (see [`WarningKind::Note`]).
+    #[must_use]
+    pub fn note(message: impl Into<String>) -> Warning {
+        Warning {
+            kind: WarningKind::Note,
+            name: None,
             message: message.into(),
             file: None,
             line: None,
@@ -61,6 +88,9 @@ impl Warning {
 
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.kind == WarningKind::Note {
+            return f.write_str(&self.message);
+        }
         write!(f, "{}warning: {}", self.location(), self.message)?;
         if let Some(name) = self.name {
             write!(f, " [{name}]")?;
@@ -118,8 +148,12 @@ impl Warnings {
         self.quota = u32::MAX;
     }
 
-    /// Counts the warning and keeps it unless muted or over quota; returns the kept warning.
+    /// Counts the warning and keeps it unless muted or over quota (notes are always kept); returns the kept warning.
     pub fn record(&mut self, warning: Warning) -> Option<&Warning> {
+        if warning.kind == WarningKind::Note {
+            self.kept.push(warning);
+            return self.kept.last();
+        }
         if let Some(name) = warning.name {
             if self.muted.contains(name) {
                 return None;

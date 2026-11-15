@@ -23,7 +23,7 @@ use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
 use dayzmake_core::sign::BISignVersion;
-use dayzmake_core::warning::{WarningSink, Warnings};
+use dayzmake_core::warning::{WarningKind, WarningSink, Warnings};
 
 /// Longest request line accepted; a longer one is answered with an error and skipped.
 const MAX_LINE: usize = 16 * 1024 * 1024;
@@ -226,7 +226,19 @@ fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
         sink.unlimited();
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| call_tool(name, args, &mut sink)));
-    let warnings: Vec<String> = sink.warnings().iter().map(ToString::to_string).collect();
+    // notes (Proton progress, binarize.exe output) go to the server's stderr as they always did;
+    // stdout carries only JSON-RPC frames
+    let mut warnings: Vec<String> = Vec::new();
+    for w in sink.warnings() {
+        if w.kind == WarningKind::Note {
+            #[expect(clippy::print_stderr, reason = "notes go to the server's stderr")]
+            {
+                eprintln!("{w}");
+            }
+        } else {
+            warnings.push(w.to_string());
+        }
+    }
     let (text, is_error) = match outcome {
         Ok(Ok(out)) => (
             with_warnings(&window(&out, offset, length), &warnings),
@@ -986,7 +998,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
         let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
         let mut file = create_target(&target, force)?;
-        pbo::cmd_build(
+        let result = pbo::cmd_build(
             &source,
             &mut file,
             &headerext,
@@ -994,7 +1006,11 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
             &include_folders(args)?,
             binarizer.as_mut(),
             warnings,
-        )?;
+        );
+        if let Some(b) = binarizer {
+            b.close(warnings)?;
+        }
+        result?;
     } else {
         let mut file = create_target(&target, force)?;
         pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;

@@ -104,6 +104,31 @@ impl Binarizer {
     }
 }
 
+impl Binarizer {
+    /// Removes the Proton sandbox now. A sandbox that cannot be removed is reported as a note in
+    /// `warnings` (the build is not failed for it). Call this on every exit path: `Drop` is only
+    /// the silent fallback.
+    ///
+    /// # Errors
+    ///
+    /// Never fails today; the result leaves room for backends whose cleanup can fail.
+    pub fn close(self, warnings: &mut dyn WarningSink) -> Result<(), Error> {
+        #[cfg(unix)]
+        {
+            use crate::warning::Warning;
+            let mut this = self;
+            if let Some(message) = this.sandbox.take().and_then(|sb| proton::destroy(&sb)) {
+                warnings.warn(Warning::note(message));
+            }
+        }
+        #[cfg(windows)]
+        {
+            let _ = (self, warnings);
+        }
+        Ok(())
+    }
+}
+
 impl Drop for Binarizer {
     fn drop(&mut self) {
         #[cfg(unix)]
@@ -522,13 +547,10 @@ mod proton {
         };
 
         if super::var("BIOUTPUT").unwrap_or_else(|_| "0".to_string()) == "1" {
-            warnings.warn(Warning::new(
-                Some("binarize-output"),
-                format!(
-                    "binarize.exe output:\n{}",
-                    printable(&read_to_string(log).unwrap_or_default())
-                ),
-            ));
+            // the log line by line, with control characters escaped
+            let text = read_to_string(log).unwrap_or_default();
+            let lines: Vec<&str> = text.lines().collect();
+            warnings.warn(Warning::note(printable_lines(&lines)));
         }
 
         if !status.success() {
@@ -589,8 +611,7 @@ mod proton {
             copy_dir(&tools.join("Bin/Binarize"), &sb.root.join("Binarize"))
                 .prepend_error("Failed to copy Binarize:")?;
 
-            warnings.warn(Warning::new(
-                Some("proton-prefix"),
+            warnings.warn(Warning::note(
                 "Creating a Wine prefix for binarize.exe (the first run takes a while)...",
             ));
             let log = sb.root.join("prefix-init.log");
@@ -626,15 +647,16 @@ mod proton {
             Ok(()) => Ok(sb),
             Err(e) => {
                 sb.counter = 0;
-                if let Err(cleanup) = destroy(&sb) {
-                    warnings.warn(Warning::new(Some("proton-cleanup"), cleanup.to_string()));
+                if let Some(message) = destroy(&sb) {
+                    warnings.warn(Warning::note(message));
                 }
                 Err(e)
             }
         }
     }
 
-    pub fn destroy(sb: &Sandbox) -> Result<(), Error> {
+    /// Removes the sandbox; returns the message to show if that failed.
+    pub fn destroy(sb: &Sandbox) -> Option<String> {
         // wineserver keeps the prefix busy after the last run; stop it before deleting
         let _ = Command::new(sb.proton_dir.join("files/bin/wineserver"))
             .arg("-k")
@@ -645,7 +667,8 @@ mod proton {
             .status();
         sleep(Duration::from_secs(1));
         remove_dir_all(&sb.root)
-            .prepend_error(format!("Failed to remove \"{}\":", sb.root.display()))
+            .err()
+            .map(|e| format!("Warning: failed to remove \"{}\": {}", sb.root.display(), e))
     }
 
     /// Makes the addon visible at `<sandbox>/P/<prefix>` (once per addon).

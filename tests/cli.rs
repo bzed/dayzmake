@@ -8,7 +8,11 @@ fn isolate(cmd: &mut Command, home: &Path) {
     cmd.env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join("config"))
         .env("XDG_CACHE_HOME", home.join("cache"))
-        .env("XDG_DATA_HOME", home.join("data"));
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env_remove("STEAM_ROOT")
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env_remove("BIOUTPUT");
 }
 
 /// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
@@ -231,10 +235,10 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
     let home = tempfile::tempdir().expect("failed to create a temp HOME");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    isolate(&mut cmd, home.path());
     cmd.args(args)
         .current_dir(cwd)
         .env("DAYZ_TOOLS", "/nonexistent/dayz-tools");
-    isolate(&mut cmd, home.path());
     let out = cmd.output().expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
@@ -451,4 +455,74 @@ fn build_failure_with_proton_removes_the_sandbox() {
         .map(|e| e.unwrap().file_name())
         .collect();
     assert!(left.is_empty(), "sandbox left behind: {left:?}");
+}
+
+/// A fake Steam tree whose `proton` prints two lines, creates the prefix, and "binarizes" by
+/// writing a file into the output folder it is given.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn chatty_steam(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let tools = root.join("steamapps/common/DayZ Tools/Bin/Binarize");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::write(tools.join("binarize.exe"), b"").unwrap();
+    let proton_dir = root.join("steamapps/common/Proton Hotfix");
+    std::fs::create_dir_all(&proton_dir).unwrap();
+    let script = proton_dir.join("proton");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho first line\necho second line\ncase \"$*\" in\n*cmd.exe*) mkdir -p \"$STEAM_COMPAT_DATA_PATH/pfx/dosdevices\"; exit 0;;\nesac\nroot=$(dirname \"$STEAM_COMPAT_DATA_PATH\")\nout=$(printf '%s' \"$8\" | sed 's/^Z://; s#\\\\#/#g')\necho ODOL > \"$root$out/$9\"\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Proton's progress message and `BIOUTPUT=1` output are plain stderr lines: no `warning:`
+/// label, no `[name]`, one line per output line, and no per-name quota.
+#[cfg(unix)]
+#[test]
+fn proton_messages_stay_plain_stderr_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let steam = dir.path().join("steam");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    chatty_steam(&steam);
+    for i in 0..12 {
+        std::fs::write(src.join(format!("m{i:02}.p3d")), b"MLOD\x01\x01\0\0").unwrap();
+    }
+    let home = dir.path().join("home");
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(["build", "--proton-binarize", "src", "out.pbo"])
+        .current_dir(dir.path())
+        .env("STEAM_ROOT", &steam)
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env("BIOUTPUT", "1")
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let lines: Vec<&str> = err.lines().collect();
+    // one prefix run plus twelve models, two lines each
+    assert_eq!(
+        lines.iter().filter(|l| **l == "first line").count(),
+        13,
+        "{err}"
+    );
+    assert_eq!(
+        lines.iter().filter(|l| **l == "second line").count(),
+        13,
+        "{err}"
+    );
+    assert!(
+        lines.contains(&"Creating a Wine prefix for binarize.exe (the first run takes a while)..."),
+        "{err}"
+    );
+    assert!(!err.contains("warning: Creating"), "{err}");
+    assert!(!err.contains("[proton"), "{err}");
+    assert!(!err.contains("[binarize-output]"), "{err}");
 }

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use dayzmake_core::preprocess::preprocess;
-use dayzmake_core::warning::{Warning, WarningSink, Warnings};
+use dayzmake_core::warning::{Warning, WarningKind, WarningSink, Warnings};
 
 fn raise(w: &mut Warnings, count: u32, name: Option<&'static str>) {
     for _ in 0..count {
@@ -108,4 +108,47 @@ fn warnings_stay_with_their_own_sink_across_threads() {
             "{kept:?}"
         );
     }
+}
+
+#[test]
+fn notes_are_kept_past_the_quota_and_despite_mutes() {
+    let mut w = Warnings::new();
+    w.mute("x");
+    for i in 0..25 {
+        w.record(Warning::note(format!("n{i}")));
+    }
+    raise(&mut w, 12, Some("y"));
+    let notes = w
+        .warnings()
+        .iter()
+        .filter(|w| w.kind == WarningKind::Note)
+        .count();
+    assert_eq!(notes, 25);
+    // notes are not counted: only the 2 excess "y" warnings are suppressed
+    assert_eq!(w.suppressed(), [("y".to_string(), 2)]);
+    assert_eq!(Warning::note("plain").to_string(), "plain");
+    assert!(!w.is_suppressed(None));
+}
+
+#[test]
+fn macro_arity_warnings_do_not_leak_into_the_next_call() {
+    let mut first = Warnings::new();
+    preprocess(
+        "#define F(a) a\nx = F(1,2);\n".to_string(),
+        None,
+        &[],
+        &mut first,
+    )
+    .unwrap();
+    assert!(
+        first
+            .warnings()
+            .iter()
+            .any(|w| w.name == Some("macro-arg-count")),
+        "{:?}",
+        first.warnings()
+    );
+    let mut second = Warnings::new();
+    preprocess("y = 1;\n".to_string(), None, &[], &mut second).unwrap();
+    assert!(second.warnings().is_empty(), "{:?}", second.warnings());
 }

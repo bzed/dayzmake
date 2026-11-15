@@ -250,7 +250,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         if args.cmd_build {
             // dropped at the end of this block, removing the Proton sandbox before any exit
             let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
-            pbo::cmd_build(
+            let built = pbo::cmd_build(
                 Path::new(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
@@ -258,7 +258,12 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
                 &includefolders,
                 binarizer.as_mut(),
                 warnings,
-            )?;
+            );
+            // remove the sandbox on success and failure alike, before any exit
+            if let Some(b) = binarizer {
+                b.close(warnings)?;
+            }
+            built?;
         } else {
             pbo::cmd_pack(
                 Path::new(&args.arg_sourcefolder),

@@ -3,7 +3,7 @@
 use std::io::Error;
 
 use colored::Colorize;
-use dayzmake_core::warning::{Warning, WarningSink, Warnings};
+use dayzmake_core::warning::{Warning, WarningKind, WarningSink, Warnings};
 
 /// Prints each kept warning to stderr immediately; remembers the quotas for [`print_summary`].
 ///
@@ -16,6 +16,11 @@ pub struct PrintWarnings {
 fn print_line(location: &str, message: &str, name: Option<&str>) {
     let name = name.map_or_else(String::new, |n| format!(" [{n}]"));
     eprintln!("{location}{}: {message}{name}", "warning".yellow().bold());
+}
+
+#[expect(clippy::print_stderr, reason = "CLI diagnostics")]
+fn print_note(message: &str) {
+    eprintln!("{message}");
 }
 
 impl PrintWarnings {
@@ -52,6 +57,10 @@ impl PrintWarnings {
 impl WarningSink for PrintWarnings {
     fn warn(&mut self, warning: Warning) {
         if let Some(kept) = self.inner.record(warning) {
+            if kept.kind == WarningKind::Note {
+                print_note(&kept.message);
+                return;
+            }
             print_line(&kept.location(), &kept.message, kept.name);
         }
     }

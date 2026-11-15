@@ -51,7 +51,10 @@ pub fn cmd_binarize(
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let data = binarizer.binarize(&input, &addon_root, &prefix, warnings)?;
+    let result = binarizer.binarize(&input, &addon_root, &prefix, warnings);
+    // remove the sandbox on success and failure alike, before any exit
+    binarizer.close(warnings)?;
+    let data = result?;
     let mut file = File::create(output).prepend_error("Failed to open output:")?;
     file.write_all(&data)
         .prepend_error("Failed to write result to file:")?;
