@@ -731,9 +731,7 @@ impl BISign {
     pub fn read<I: Read>(input: &mut I) -> Result<BISign, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -746,6 +744,11 @@ impl BISign {
         input.read_exact(&mut buffer)?;
         buffer = buffer.iter().rev().copied().collect();
         let n = bignum(&buffer)?;
+        if u32::try_from(n.num_bits()).ok() != Some(length) {
+            return Err(error!(
+                "Invalid signature file (the modulus is not {length} bits wide)."
+            ));
+        }
 
         input.read_u32::<LittleEndian>()?;
 

@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- A `.bisign` file is read with the same checks as a public key: its embedded key must carry the `RSA1` blob header and a
+  modulus exactly as wide as the header length says; anything else is a read error (#52).
 - Macro expansion has a depth limit on every path (64 levels); a config that nests deeper, or expands a macro into
   itself through its arguments, is an error naming the macro instead of a stack overflow (#51).
 - Key files must carry the CryptoAPI blob header (type, key algorithm, `RSA1`/`RSA2` magic) that `dayzmake` and BI's

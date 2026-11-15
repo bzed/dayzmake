@@ -513,3 +513,47 @@ fn key_files_with_a_wrong_header_type_or_magic_are_rejected() {
     assert!(read(&public).is_err());
     assert!(BIPublicKey::read(&mut Cursor::new(&private)).is_err());
 }
+
+fn read_bisign(bytes: &[u8]) -> Result<BISign, std::io::Error> {
+    BISign::read(&mut Cursor::new(bytes))
+}
+
+#[test]
+fn bisign_with_a_wrong_header_type_or_magic_is_rejected() {
+    let sig = fs::read(sign_dir().join("testsig.pbo.armk.bisign")).unwrap();
+    let name_len = sig.iter().position(|&b| b == 0).unwrap() + 1;
+    read_bisign(&sig).unwrap();
+    for (what, offset, value) in [
+        ("magic", 12, b'X'),
+        ("magic last byte", 15, b'9'),
+        ("bType", 4, 0x07),
+        ("bVersion", 5, 3),
+        ("reserved", 6, 1),
+        ("aiKeyAlg", 9, 0x25),
+        ("aiKeyAlg low", 8, 1),
+    ] {
+        let mut bad = sig.clone();
+        bad[name_len + offset] = value;
+        let err = read_bisign(&bad).err().unwrap_or_else(|| panic!("{what}"));
+        assert!(err.to_string().contains("header"), "{what}: {err}");
+    }
+}
+
+#[test]
+fn bisign_with_a_narrow_modulus_is_rejected() {
+    let sig = fs::read(sign_dir().join("testsig.pbo.armk.bisign")).unwrap();
+    let name_len = sig.iter().position(|&b| b == 0).unwrap() + 1;
+    let n = name_len + HEADER;
+    // the top byte of n cleared: narrower than the header length
+    let mut narrow = sig.clone();
+    narrow[n + 127] = 0;
+    let err = read_bisign(&narrow).err().unwrap();
+    assert!(err.to_string().contains("1024 bits"), "{err}");
+    // n all zero or one
+    for value in [0u8, 1] {
+        let mut bad = sig.clone();
+        bad[n..n + 128].fill(0);
+        bad[n] = value;
+        assert!(read_bisign(&bad).is_err(), "n = {value}");
+    }
+}
