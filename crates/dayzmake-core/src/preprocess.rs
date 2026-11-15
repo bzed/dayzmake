@@ -214,11 +214,6 @@ impl PreprocessInfo {
     }
 }
 
-thread_local! {
-    /// Argument-count mismatches found while resolving the current line, reported with its location.
-    static ARG_COUNT_MISMATCHES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 fn parse_macro(input: &str) -> Result<Macro, Error> {
     let without_original = preprocess_grammar::macro_proper(input)
         .map_err(|e| error!("Failed to parse macro invocation \"{input}\": {e}"))?;
@@ -258,6 +253,7 @@ impl Definition {
         arguments: Option<&[String]>,
         def_map: &HashMap<String, Definition>,
         stack: &[Definition],
+        mismatches: &mut Vec<String>,
     ) -> Result<Option<Vec<Token>>, Error> {
         let params = self.parameters.clone().unwrap_or_default();
         let args = arguments.unwrap_or(&[]);
@@ -279,7 +275,7 @@ impl Definition {
         stack_new.push(self.clone());
 
         if params.is_empty() {
-            tokens = Macro::resolve_all(&tokens, def_map, &stack_new)?;
+            tokens = Macro::resolve_all(&tokens, def_map, &stack_new, mismatches)?;
         } else {
             let mut local_map: HashMap<String, Definition> = HashMap::new();
 
@@ -292,7 +288,7 @@ impl Definition {
                 let mut tokens = preprocess_grammar::tokens(arg)
                     .map_err(|e| error!("Failed to parse macro argument: {e}"))?;
                 let stack: Vec<Definition> = Vec::new();
-                tokens = Macro::resolve_all(&tokens, def_map, &stack)?;
+                tokens = Macro::resolve_all(&tokens, def_map, &stack, mismatches)?;
 
                 local_map.insert(
                     param.clone(),
@@ -305,7 +301,7 @@ impl Definition {
                 );
             }
 
-            tokens = Macro::resolve_all(&tokens, &local_map, &stack_new)?;
+            tokens = Macro::resolve_all(&tokens, &local_map, &stack_new, mismatches)?;
         }
 
         Ok(Some(tokens))
@@ -317,6 +313,7 @@ impl Macro {
         &self,
         def_map: &HashMap<String, Definition>,
         stack: &[Definition],
+        mismatches: &mut Vec<String>,
     ) -> Result<Vec<Token>, Error> {
         let mut tokens: Vec<Token> = Vec::new();
         tokens.push(Token::RegularToken(self.name.clone()));
@@ -329,7 +326,7 @@ impl Macro {
         let mut arg_tokens = preprocess_grammar::tokens(without_name)
             .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
 
-        arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack)?;
+        arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack, mismatches)?;
         for t in arg_tokens {
             tokens.push(t);
         }
@@ -341,17 +338,20 @@ impl Macro {
         &self,
         def_map: &HashMap<String, Definition>,
         stack: &[Definition],
+        mismatches: &mut Vec<String>,
     ) -> Result<Vec<Token>, Error> {
         match def_map.get(&self.name) {
             Some(def) => {
                 if let Some(args) = &self.arguments {
                     if def.parameters.is_none() {
                         // Object-like macro followed by parentheses: expand it, keep the parentheses.
-                        let mut tokens = def.value(None, def_map, stack)?.unwrap_or_default();
+                        let mut tokens = def
+                            .value(None, def_map, stack, mismatches)?
+                            .unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
                         let mut rest_tokens = preprocess_grammar::tokens(rest)
                             .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
-                        rest_tokens = Macro::resolve_all(&rest_tokens, def_map, stack)?;
+                        rest_tokens = Macro::resolve_all(&rest_tokens, def_map, stack, mismatches)?;
                         tokens.extend(rest_tokens);
                         return Ok(tokens);
                     }
@@ -370,7 +370,7 @@ impl Macro {
                             "Macro \"{}\" expects {} argument(s), got {}",
                             self.name, expected, got
                         );
-                        ARG_COUNT_MISMATCHES.with(|m| m.borrow_mut().push(msg));
+                        mismatches.push(msg);
                         return Ok(if self.quoted {
                             vec![Token::NewlineToken("\"\"".to_string(), 0)]
                         } else {
@@ -379,7 +379,7 @@ impl Macro {
                     }
                 }
 
-                let value = def.value(self.arguments.as_deref(), def_map, stack)?;
+                let value = def.value(self.arguments.as_deref(), def_map, stack, mismatches)?;
 
                 if !def.local && self.quoted {
                     // @todo: complain
@@ -398,10 +398,10 @@ impl Macro {
                         Ok(tokens)
                     }
                 } else {
-                    self.resolve_pseudoargs(def_map, stack)
+                    self.resolve_pseudoargs(def_map, stack, mismatches)
                 }
             }
-            None => self.resolve_pseudoargs(def_map, stack),
+            None => self.resolve_pseudoargs(def_map, stack, mismatches),
         }
     }
 
@@ -409,13 +409,14 @@ impl Macro {
         tokens: &[Token],
         def_map: &HashMap<String, Definition>,
         stack: &[Definition],
+        mismatches: &mut Vec<String>,
     ) -> Result<Vec<Token>, Error> {
         let mut result: Vec<Token> = Vec::new();
 
         for token in tokens {
             match token {
                 Token::MacroToken(m) => {
-                    let resolved = m.resolve(def_map, stack)?;
+                    let resolved = m.resolve(def_map, stack, mismatches)?;
                     for t in resolved {
                         result.push(t);
                     }
@@ -861,10 +862,9 @@ fn preprocess_rec(
             }
             Line::TokenLine(tokens) => {
                 let stack: Vec<Definition> = Vec::new();
-                let resolved = Macro::resolve_all(&tokens, definition_map, &stack)
+                let mut mismatches: Vec<String> = Vec::new();
+                let resolved = Macro::resolve_all(&tokens, definition_map, &stack, &mut mismatches)
                     .prepend_error("Failed to resolve macros:");
-                let mismatches =
-                    ARG_COUNT_MISMATCHES.with(|m| std::mem::take(&mut *m.borrow_mut()));
                 let resolved = resolved?;
 
                 let (mut result, newlines) = Token::concat(&resolved);
@@ -986,6 +986,30 @@ pub fn preprocess(
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    /// Argument-count mismatches go into the buffer of the call, not into state shared by the
+    /// thread: a second resolve with a fresh buffer sees nothing of the first.
+    #[test]
+    fn arg_count_mismatches_belong_to_their_call() {
+        let mut defs: HashMap<String, Definition> = HashMap::new();
+        let def = Definition {
+            name: "F".to_string(),
+            parameters: Some(vec!["a".to_string()]),
+            value: Vec::new(),
+            local: false,
+        };
+        defs.insert("F".to_string(), def);
+        let tokens = vec![Token::MacroToken(parse_macro("F(1,2)").unwrap())];
+
+        let mut first = Vec::new();
+        Macro::resolve_all(&tokens, &defs, &[], &mut first).unwrap();
+        assert_eq!(first.len(), 1);
+
+        let plain = vec![Token::RegularToken("x".to_string())];
+        let mut second = Vec::new();
+        Macro::resolve_all(&plain, &defs, &[], &mut second).unwrap();
+        assert_eq!(second.len(), 0);
+    }
 
     /// The resolver reports the name the file has on disk, never the requested
     /// one: on Windows an `exists()` probe succeeds for any casing, so only the
