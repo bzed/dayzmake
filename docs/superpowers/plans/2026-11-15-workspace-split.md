@@ -36,8 +36,8 @@ CLI-shaped arguments.
 - Every new dependency is reviewed per AGENTS.md *Dependencies*; the review goes into the commit message.
 - No game data in the repo. The differential run (Task 13) reads the user's DayZ install at run time and writes only
   under `/var/tmp`.
-- Every crate linked into `dayzmake-core` must be licensed compatibly with both GPL-2.0-or-later and AGPL-3.0
-  (no GPL-2.0-only code): consumers such as Náves are AGPL-3.0.
+- Every crate linked into `dayzmake-core` must be licensed compatibly with both GPL-2.0-or-later and AGPL-3.0:
+  consumers such as Náves are AGPL-3.0. (`lzo1x` is accepted by the maintainer as GPL-2.0-or-later, Task 9b.)
 - Commit prefixes: `test:`, `fix:`, `build:`, `refactor:`, `feat:`, `docs:`, `ci:`. Commits end with
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Work on a branch (`feature/workspace-split`), not `main`.
 
@@ -717,7 +717,11 @@ pub use image;                                // in lib.rs: consumers use the sa
 
 ---
 
-### Task 9b: Replace the GPL-2.0-only `lzo1x` crate
+### Task 9b: Replace the GPL-2.0-only `lzo1x` crate — DROPPED
+
+> **Dropped 2026-11-15 (maintainer decision):** `lzokay-native` is not byte-identical (15 of 17 corpus inputs differ).
+> The maintainer reads `lzo1x`'s licence as GPL-2.0-or-later (a reimplementation shipping the GPL text) and sees no
+> conflict with AGPL-3.0 consumers, so `lzo1x` stays. The steps below are kept for the record only.
 
 `lzo1x 0.2.2` is licensed `GPL-2.0` (only; its LICENSE is plain GPLv2, no "or later" anywhere). That is
 incompatible with AGPL-3.0 consumers such as Náves, and `Paa::from_dynamic_image` LZO-compresses every DXT mipmap
@@ -917,7 +921,7 @@ make -C . && cargo build --release --locked   # new binary in $CARGO_TARGET_DIR/
   - PBOs with more than one non-prefix header extension: order in `inspect` output and in unpacked `$PBOPREFIX$`
     (Task 3; check the new order is the file order)
   - suppression summary lines on stderr (Task 5)
-  - none for PAA: Task 9b keeps LZO output byte-identical. Include a 1024×1024 PNG in the img2paa comparison.
+  - none for PAA (`lzo1x` stays, Task 9b dropped). Include a 1024×1024 PNG in the img2paa comparison.
   Anything else is a regression: stop, write a failing test in the owning task's test file, fix, rerun.
 - [ ] **Step 3: Clean up:** `git worktree remove "$OLD/src"`, `rm -rf "$OLD"`.
 - [ ] **Step 4: `make check`, commit** — `test: differential comparison against a released dayzmake`
