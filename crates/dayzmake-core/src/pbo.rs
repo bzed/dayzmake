@@ -473,7 +473,8 @@ struct AddonRelative<'a> {
 
 /// The addon folder as given and canonicalised, computed once per pack.
 fn addon_roots(directory: &Path) -> [PathBuf; 2] {
-    // a folder that cannot be canonicalised is reported as given: paths then still match as given
+    // canonicalize fails only for an unreadable folder; matching against the path as given still
+    // works, so warnings are not lost
     let canonical = directory
         .canonicalize()
         .unwrap_or_else(|_| directory.to_path_buf());

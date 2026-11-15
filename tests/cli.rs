@@ -597,7 +597,8 @@ fn build_warning_in_an_include_outside_the_addon_keeps_its_path() {
 fn missing_input_errors_name_the_file() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "x.pbo", "");
-    let cases: [(&[&str], &str); 7] = [
+    let cases: [(&[&str], &str); 8] = [
+        (&["binarize", "nope.p3d", "o.p3d"], "nope.p3d"),
         (&["rapify", "nope.cpp", "x"], "nope.cpp"),
         (&["inspect", "nope.pbo"], "nope.pbo"),
         (&["unpack", "nope.pbo", "d"], "nope.pbo"),
@@ -623,4 +624,43 @@ fn control_characters_in_a_missing_path_are_escaped() {
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("a\\u{1b}[31mb.cpp"), "{err}");
     assert!(!err.contains('\u{1b}'), "{err}");
+}
+
+#[test]
+fn missing_source_folder_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    for cmd in ["build", "pack"] {
+        let (code, _, err) = dayzmake(&[cmd, "nodir", &format!("{cmd}.pbo")], dir.path());
+        assert_eq!(code, 1, "{cmd}: {err}");
+        assert!(
+            err.contains("Failed to read source folder \"nodir\":"),
+            "{cmd}: {err}"
+        );
+    }
+}
+
+#[test]
+fn missing_pbo_and_signature_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["keygen", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    for args in [
+        ["sign", "k.biprivatekey", "gone.pbo"],
+        ["verify", "k.bikey", "gone.pbo"],
+    ] {
+        let (code, _, err) = dayzmake(&args, dir.path());
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(
+            err.contains("Failed to open PBO \"gone.pbo\":"),
+            "{args:?}: {err}"
+        );
+    }
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    write(&src, "a.txt", "a");
+    let (code, _, err) = dayzmake(&["pack", "src", "x.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["verify", "k.bikey", "x.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("Failed to open signature \""), "{err}");
 }
