@@ -9,6 +9,11 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   decoded with the buggy reader, which turned deletions into empty classes). Re-verified 2026-11-15 with DayZ Tools'
   `CfgConvert.exe -bin` under Proton Hotfix: all 12 inputs decode (fixed reader) byte-identically to their
   `.expected.cpp`, and CfgConvert writes entry type 4 (delete) for `Bar`.
+- `cfgconvert/<name>.bin`: CfgConvert's own binary for each input, made 2026-11-15 with
+  `CfgConvert.exe -bin -dst <out> <in>` (DayZ Tools as installed 2026-11-15, Steam app 830640) under Proton
+  Hotfix. The tests decode them with `Config::read_rapified` and compare the text with `<name>.expected.cpp`.
+  The bytes themselves are not compared with dayzmake's output: CfgConvert writes an extra 4-byte offset after each
+  class body.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`

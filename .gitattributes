@@ -5,6 +5,7 @@
 tests/fixtures/** -text
 
 # DayZ/Arma file formats are binary, keep git from ever touching them.
+*.bin binary
 *.pbo binary
 *.paa binary
 *.p3d binary

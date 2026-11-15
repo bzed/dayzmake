@@ -24,6 +24,15 @@ fn golden(name: &str) {
     let mut cursor = Cursor::new(rapified.into_inner());
     let decoded = Config::read_rapified(&mut cursor).unwrap();
     assert_eq!(decoded.to_string().unwrap(), expected, "golden {name}");
+
+    // CfgConvert's own bytes, read by our reader.
+    let bi = std::fs::read(dir.join(format!("{name}.bin"))).unwrap();
+    let decoded = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+    assert_eq!(
+        decoded.to_string().unwrap(),
+        expected,
+        "golden {name} (CfgConvert .bin)"
+    );
 }
 
 #[test]
