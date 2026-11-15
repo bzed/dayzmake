@@ -171,6 +171,14 @@ length. `BIPublicKey` holds `rsa::RsaPublicKey` (or `n`/`e` as `BoxedUint` where
   source read, `unsafe` count, advisories, maintenance, licences, MSRV). Mention that `Cargo.lock` lists `rsa`'s optional
   `pkcs1`/`pkcs8`/`der`/`spki`/`pem-rfc7468`/`serdect`, which are not built (`cargo tree -i pkcs1` is empty).
 
+### Task 2b: Preprocessor stack overflow found by fuzzing (#51)
+
+Not RSA work, but `make fuzz` (part of `make check`) hits it on every branch. Find the recursive path of the #51 input
+(macro expansion with token pasting / stringising / argument pre-expansion in `crates/dayzmake-core/src/preprocess.rs`)
+and apply a depth limit there: a normal error naming the macro (through `printable`), never a stack overflow. Minimise
+the input; regression test in `crates/dayzmake-core/tests/` and a `config_parse` fuzz seed in the same commit. Commit
+`fix: macro expansion has a depth limit on every path (#51)`.
+
 ### Task 3: Signing and verification
 
 **Files:** `crates/dayzmake-core/src/sign.rs`.
@@ -179,6 +187,9 @@ length. `BIPublicKey` holds `rsa::RsaPublicKey` (or `n`/`e` as `BoxedUint` where
   (a 512-bit throwaway key fixture signed with today's code, Review Focus 2) or a documented error if `rsa` cannot
   represent it. In `verify_accepts_and_rejects`, the flipped-`n` case must treat a key that `BIPublicKey::read`
   rejects as a pass (an even `n` may be refused at read time by `rsa`), not `unwrap` the read.
+- Also (Task 2 review M3): every buffer holding secret key bytes (the `read_uint` buffer, the outputs of
+  `to_be_bytes_trimmed_vartime` in `write_uint`/`same_value`, the d copies) is `zeroize::Zeroizing`; the OpenSSL
+  copies of d disappear with this task.
 - [ ] **Step 2:** `sign`: `rsa::hazmat::rsa_decrypt(Some(&mut OsRng), &key, &padded_hash)` for each of the three
   hashes (blinding on). `verify`: `rsa::hazmat::rsa_encrypt(&public_key, &sig)` and constant-time comparison with the
   padded hash (`subtle::ConstantTimeEq` or `BoxedUint` equality — public values, plain `==` is acceptable; say which).
