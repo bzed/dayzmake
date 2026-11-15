@@ -2151,7 +2151,7 @@ mod from_pbo {
         let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", &m]);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains("CFBase"));
-        assert!(err.contains("unsafe prefix"), "{err}");
+        assert!(err.contains("unsafe prefix \"..\\evil\""), "{err}");
         let (code, _, _) = w.run(&["api", "class", "EvilClass", "-m", &m]);
         assert_eq!(code, 1);
         // Nothing was written outside the cache dir and the mod dir.

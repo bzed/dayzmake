@@ -409,7 +409,7 @@ fn pbo_prefix(
         warnings.warn(
             Warning::new(
                 Some("api-unsafe-prefix"),
-                format!("skipping PBO with unsafe prefix {:?}", printable(&prefix)),
+                format!("skipping PBO with unsafe prefix \"{}\"", printable(&prefix)),
             )
             .in_file(origin.to_string()),
         );
