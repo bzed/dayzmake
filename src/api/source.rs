@@ -151,11 +151,17 @@ pub fn resolve_mod(
             ));
         }
         ModSpec::Dir(path) => {
-            let dir = path
-                .canonicalize()
-                .map_err(|e| error!("mod directory \"{}\": {e}", path.display()))?;
+            let dir = path.canonicalize().map_err(|e| {
+                error!(
+                    "mod directory \"{}\": {e}",
+                    printable(&path.display().to_string())
+                )
+            })?;
             if !dir.is_dir() {
-                return Err(error!("\"{}\" is not a directory", path.display()));
+                return Err(error!(
+                    "\"{}\" is not a directory",
+                    printable(&path.display().to_string())
+                ));
             }
             let name = dir
                 .file_name()
@@ -231,9 +237,10 @@ fn read_selected(
     with_config: bool,
     warnings: &mut dyn WarningSink,
 ) -> Result<Selected, Error> {
-    let mut file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+    let mut file =
+        File::open(path).map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
     let sel = PBO::read_entries(&mut file, |n| is_script(n) || (with_config && is_config(n)))
-        .map_err(|e| error!("{}: {e}", path.display()))?;
+        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
     let mut out = Selected {
         prefix_ext: sel.header_extension("prefix").map(str::to_string),
         config: Vec::new(),
@@ -247,7 +254,7 @@ fn read_selected(
                 warnings.warn(
                     Warning::new(
                         Some("api-bad-entry"),
-                        format!("cannot read {:?}: {e}", printable(&name)),
+                        format!("cannot read \"{}\": {e}", printable(&name)),
                     )
                     .in_file(origin.to_string()),
                 );
@@ -260,7 +267,7 @@ fn read_selected(
             warnings.warn(
                 Warning::new(
                     Some("api-unsafe-entry"),
-                    format!("skipping unsafe entry name {:?}", printable(&name)),
+                    format!("skipping unsafe entry name \"{}\"", printable(&name)),
                 )
                 .in_file(origin.to_string()),
             );
@@ -348,10 +355,11 @@ fn config_text(
 
 /// The extension and entry names of a PBO, read from its header block only.
 fn pbo_entry_names(path: &Path) -> Result<Vec<String>, Error> {
-    let file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+    let file =
+        File::open(path).map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
     PBO::read_headers(&mut BufReader::new(file))
         .map(|(_, names)| names)
-        .map_err(|e| error!("{}: {e}", path.display()))
+        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))
 }
 
 /// The extension of an entry name (either path separator).

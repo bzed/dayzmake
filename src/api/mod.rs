@@ -92,7 +92,10 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
     let (scripts_pbo, build) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
         if !pbo.is_file() {
-            return Err(error!("{} not found (--dayz)", pbo.display()));
+            return Err(error!(
+                "{} not found (--dayz)",
+                printable(&pbo.display().to_string())
+            ));
         }
         (pbo, format!("{} build unknown", ctx.branch.name()))
     } else {
@@ -368,9 +371,9 @@ pub fn src_contents(
                 .mods
                 .iter()
                 .find(|m| m.name == f.index)
-                .ok_or_else(|| error!("mod {} is not selected", f.index))?;
+                .ok_or_else(|| error!("mod {} is not selected", printable(&f.index)))?;
             let rel = safe_relative_path(&f.pbo)
-                .ok_or_else(|| error!("unsafe PBO path \"{}\" in the index", f.pbo))?;
+                .ok_or_else(|| error!("unsafe PBO path \"{}\" in the index", printable(&f.pbo)))?;
             m.dir.join(rel)
         });
     }
@@ -385,9 +388,10 @@ pub fn src_contents(
             .filter(|(_, p)| *p == path)
             .map(|(f, _)| f.path.as_str())
             .collect();
-        let mut file = std::fs::File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
         let sel = PBO::read_entries(&mut file, |n| wanted.contains(n))
-            .map_err(|e| error!("{}: {e}", path.display()))?;
+            .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
         read.insert(path.clone(), sel);
     }
     let mut out = Vec::new();
@@ -398,9 +402,15 @@ pub fn src_contents(
         {
             Some(entry) => match entry.data() {
                 Ok(data) => data.to_vec(),
-                Err(e) => return Err(error!("{}: {e}", f.path)),
+                Err(e) => return Err(error!("{}: {e}", printable(&f.path))),
             },
-            None => return Err(error!("{} not found in {}", f.path, path.display())),
+            None => {
+                return Err(error!(
+                    "{} not found in {}",
+                    printable(&f.path),
+                    printable(&path.display().to_string())
+                ));
+            }
         };
         out.push(SrcContent {
             index: f.index,

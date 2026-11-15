@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error;
-use crate::error::{ConfigParseErrorExt, ErrorExt};
+use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::preprocess;
@@ -750,9 +750,10 @@ impl ConfigClass {
                                 let buffer: Box<[u8]> =
                                     vec![0; c.rapified_length()].into_boxed_slice();
                                 let mut cursor: Cursor<Box<[u8]>> = Cursor::new(buffer);
-                                class_offset += c
-                                    .write_rapified(&mut cursor, class_offset)
-                                    .prepend_error(format!("Failed to rapify {name}:"))?;
+                                class_offset +=
+                                    c.write_rapified(&mut cursor, class_offset).prepend_error(
+                                        format!("Failed to rapify {}:", printable(name)),
+                                    )?;
 
                                 class_bodies.push(cursor);
                             }
@@ -839,7 +840,10 @@ impl ConfigClass {
                 let name = input.read_cstring()?;
 
                 let class_entry = ConfigClass::read_rapified(input, level + 1, budget)
-                    .prepend_error(format!("Failed to read rapified class \"{name}\":"))?;
+                    .prepend_error(format!(
+                        "Failed to read rapified class \"{}\":",
+                        printable(&name)
+                    ))?;
                 entries.push((name, ConfigEntry::ClassEntry(class_entry)));
             } else if entry_type == 1 {
                 let mut buf = [0u8; 1];

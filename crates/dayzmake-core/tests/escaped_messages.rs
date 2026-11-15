@@ -1,10 +1,12 @@
 //! Text taken from untrusted files never reaches an error or warning as a raw control character
 //! (issues #15 and #22).
 
+use std::io::Cursor;
 #[cfg(unix)]
 use std::path::PathBuf;
 
 use dayzmake_core::config::Config;
+use dayzmake_core::paa::Paa;
 use dayzmake_core::warning::Warnings;
 
 #[cfg(unix)]
@@ -68,4 +70,55 @@ fn include_case_warning_is_escaped() {
         .find(|w| w.name == Some("include-case"))
         .expect("include-case warning");
     assert_escaped(&w.to_string(), "\\u{1b}Foo.hpp");
+}
+
+#[test]
+fn rapified_class_name_is_escaped_in_nested_errors() {
+    let config = Config::from_string(
+        String::from("class AAAA { class BBBB { x=1; }; };"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    config.write_rapified(&mut bytes).unwrap();
+    let pos = bytes.windows(4).position(|w| w == b"AAAA").unwrap();
+    bytes[pos] = 0x1b;
+    bytes.truncate(bytes.len() - 5);
+    let err = Config::read_rapified(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}AAA");
+}
+
+#[test]
+fn eval_body_is_escaped_in_errors() {
+    let err = Config::from_string(
+        String::from("x = __EVAL(\u{1b}[31m);\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31m");
+}
+
+#[test]
+fn exec_statement_is_escaped_in_errors() {
+    let err = Config::from_string(
+        String::from("__EXEC(\u{1b}[31m);\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31m");
+}
+
+#[test]
+fn paa_tagg_name_is_escaped_in_errors() {
+    let mut bytes = vec![0x01, 0xff];
+    bytes.extend_from_slice(b"\x1bGGATSFF");
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    let err = Paa::read(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}GGATSFF");
 }

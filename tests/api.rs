@@ -2055,6 +2055,47 @@ mod from_pbo {
         assert!(out.contains("CFBase"), "{out}");
     }
 
+    /// An entry name with a control character is reported once-escaped (`\u{1b}`, not `\\u{1b}`).
+    #[cfg(unix)]
+    #[test]
+    fn api_unsafe_entry_name_is_escaped_once() {
+        let w = World::new();
+        make_pbo(
+            &fixture("vanilla/scripts"),
+            &[("3_Game/a\u{1b}b.c", "class Evil {}\n")],
+            None,
+            &w.root.join("steamapps/common/DayZ/dta/scripts.pbo"),
+        );
+        let (code, _, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(err.contains("a\\u{1b}b.c"), "{err:?}");
+        assert!(!err.contains("a\\\\u{1b}"), "{err:?}");
+        assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    /// An index entry path with a control character (a poisoned cache) is escaped in the error.
+    #[cfg(unix)]
+    #[test]
+    fn api_src_error_escapes_index_paths() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let mut poisoned = 0;
+        for e in fs::read_dir(&w.cache).expect("cache") {
+            let path = e.expect("entry").path();
+            if path.extension().is_some_and(|x| x == "json") {
+                let text = fs::read_to_string(&path).expect("read");
+                let new = text.replace("Base.c", "Ba\\u001bse.c");
+                poisoned += usize::from(new != text);
+                fs::write(&path, new).expect("write");
+            }
+        }
+        assert!(poisoned > 0, "no cache file mentions Base.c");
+        let (code, _, err) = w.run(&["api", "src", "Base", "--cat"]);
+        assert_eq!(code, 1, "{err}");
+        assert!(err.contains("Ba\\u{1b}se.c"), "{err:?}");
+        assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
     #[test]
     fn api_mod_unsafe_prefix_skipped() {
         let w = World::new();
