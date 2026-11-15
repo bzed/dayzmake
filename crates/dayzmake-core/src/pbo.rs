@@ -11,9 +11,9 @@ use sha1::{Digest, Sha1};
 use std::sync::LazyLock;
 
 #[expect(clippy::unwrap_used, reason = "the static patterns are valid regexes")]
-static BINARIZABLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".(rtm|p3d)$").unwrap());
+static BINARIZABLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.(rtm|p3d)$").unwrap());
 #[expect(clippy::unwrap_used, reason = "the static pattern is a valid regex")]
-static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap());
+static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.p3do$").unwrap());
 
 use crate::binarize::{self, Binarizer};
 use crate::config::{Config, is_rapified};
@@ -926,6 +926,11 @@ impl PBO {
                 ));
                 continue;
             }
+            // a .p3do is packed as .p3d (it is not binarized itself, so decide that first)
+            let is_binarizable = BINARIZABLE_RE.is_match(&name);
+            if P3DO_RE.is_match(&name) {
+                name = P3DO_RE.replace(&name, ".p3d").into_owned();
+            }
             // entry names compare case-insensitively; the first file in walk order wins
             if let Some(first) = seen_names.get(&name.to_lowercase()) {
                 warnings.warn(Warning::new(
@@ -938,7 +943,6 @@ impl PBO {
                 continue;
             }
             seen_names.insert(name.to_lowercase(), name.clone());
-            let is_binarizable = BINARIZABLE_RE.is_match(&name);
 
             let mut file =
                 File::open(&path).prepend_error(format!("Failed to open \"{shown}\":"))?;
@@ -1035,8 +1039,6 @@ impl PBO {
                 let mut buffer: Vec<u8> = Vec::new();
                 file.read_to_end(&mut buffer)
                     .prepend_error(format!("Failed to read \"{shown}\":"))?;
-
-                name = P3DO_RE.replace_all(&name, ".p3d").to_string();
 
                 files.insert(name, Cursor::new(buffer.into_boxed_slice()));
             }

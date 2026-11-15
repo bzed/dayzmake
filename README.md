@@ -165,7 +165,7 @@ Options:
 
 See `dayzmake --help` for more.
 
-`build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both. A file that cannot be opened or read fails the build with an error naming it.
+`build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both. Model extensions (`.p3d`, `.rtm`) are matched case-insensitively, and `.p3do` files are packed as `.p3d` (a colliding `m.p3d` and `m.p3do` is reported like any other duplicate). A file that cannot be opened or read fails the build with an error naming it.
 
 ## Using dayzmake-core as a library
 

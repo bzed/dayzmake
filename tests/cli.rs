@@ -1359,3 +1359,31 @@ fn build_excluded_special_and_unsafe_files_are_silent() {
         "{err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn build_matches_model_extensions_case_insensitively() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/N.P3D"), b"MLOD\x01\x01\0\0").unwrap();
+    std::fs::write(dir.path().join("m/xp3d"), b"plain").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("non-windows-binarization"), "{err}");
+    assert!(err.contains("N.P3D"), "{err}");
+    assert_eq!(err.matches("non-windows-binarization").count(), 1, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_warns_when_p3d_and_p3do_collide_and_renames_p3do() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/a.p3d"), b"MLOD\x01\x01\0\0").unwrap();
+    std::fs::write(dir.path().join("m/a.p3do"), b"other").unwrap();
+    std::fs::write(dir.path().join("m/b.P3DO"), b"other").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert_eq!(out.matches("a.p3d").count(), 1, "{out}");
+    assert!(out.contains("b.p3d") && !out.contains("p3do"), "{out}");
+}
