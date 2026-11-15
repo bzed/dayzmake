@@ -967,7 +967,8 @@ impl PBO {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure or if an entry is too large.
+    /// Returns an error on I/O failure, if an entry is too large, or if a header extension key
+    /// or value contains a NUL byte.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         self.write_with_checksum(output).map(|_| ())
     }

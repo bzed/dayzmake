@@ -592,7 +592,8 @@ impl P3D {
     /// # Errors
     ///
     /// Returns an error on I/O failure, or if a LOD is inconsistent (a selection whose size is not
-    /// points + faces, a vertex index out of range).
+    /// points + faces, a vertex index out of range, a tagg name or face texture or material
+    /// containing a NUL byte).
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         for lod in &self.lods {
             lod.validate()?;

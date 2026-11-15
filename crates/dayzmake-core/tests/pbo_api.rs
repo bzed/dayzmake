@@ -712,5 +712,15 @@ fn a_header_extension_with_nul_is_rejected_and_nothing_written() {
     let mut out = Vec::new();
     let msg = pbo.write(&mut out).unwrap_err().to_string();
     assert!(out.is_empty(), "{msg}");
-    assert!(msg.contains("NUL") && msg.contains('k'), "{msg}");
+    assert!(msg.contains("NUL") && msg.contains("\"k\""), "{msg}");
+}
+
+#[test]
+fn a_prefix_with_nul_is_rejected_and_nothing_written() {
+    let mut pbo = PBO::new();
+    pbo.set_header_extension("prefix", "a\0b");
+    let mut out = Vec::new();
+    let msg = pbo.write(&mut out).unwrap_err().to_string();
+    assert!(out.is_empty(), "{msg}");
+    assert!(msg.contains("Header extension \"prefix\""), "{msg}");
 }

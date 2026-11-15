@@ -442,11 +442,13 @@ impl ConfigArray {
             .map_err(|_| error!("too many array elements: {}", self.elements.len()))?;
         let mut written = output.write_compressed_int(num_elements)?;
 
-        for element in &self.elements {
+        for (index, element) in self.elements.iter().enumerate() {
             match element {
                 ConfigArrayElement::StringElement(s) => {
                     output.write_all(&[0])?;
-                    output.write_cstring(s)?;
+                    output
+                        .write_cstring(s)
+                        .prepend_error(format!("Array element {index}:"))?;
                     written += s.len() + 2;
                 }
                 ConfigArrayElement::FloatElement(f) => {
@@ -712,8 +714,10 @@ impl ConfigClass {
                     match entry {
                         ConfigEntry::StringEntry(s) => {
                             output.write_all(&[1, 0])?;
-                            output.write_cstring(name)?;
-                            output.write_cstring(s)?;
+                            output
+                                .write_cstring(name)
+                                .and_then(|()| output.write_cstring(s))
+                                .prepend_error(format!("Entry \"{}\":", printable(name)))?;
                             written += name.len() + s.len() + 4;
                         }
                         ConfigEntry::FloatEntry(f) => {
@@ -735,7 +739,10 @@ impl ConfigClass {
                                 written += 4;
                             }
                             output.write_cstring(name)?;
-                            written += name.len() + 2 + a.write_rapified(output)?;
+                            written += name.len()
+                                + 2
+                                + a.write_rapified(output)
+                                    .prepend_error(format!("Entry \"{}\":", printable(name)))?;
                         }
                         ConfigEntry::ClassEntry(c) => {
                             if c.is_external || c.is_deletion {

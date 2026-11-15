@@ -965,3 +965,13 @@ fn empty_value_warns_and_can_be_muted() {
     assert_eq!(code, 0, "{err}");
     assert!(!err.contains("empty-value"), "{err}");
 }
+
+#[test]
+fn rapify_rejects_a_nul_in_a_string_and_names_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "config.cpp", "class A { a = \"x\0y\"; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("Entry \"a\""), "{err}");
+    assert!(!dir.path().join("c.bin").exists());
+}
