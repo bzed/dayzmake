@@ -1598,3 +1598,88 @@ fn pack_with_stdout_to_a_pipe_or_null_packs_every_file() {
     isolate(&mut cmd, home.path());
     assert_eq!(cmd.status().unwrap().code(), Some(0));
 }
+
+/// Packs a mod with one 1 MiB file (more than a pipe buffer holds) into `pbo`.
+#[cfg(unix)]
+fn big_pbo(dir: &Path) {
+    let big = "x".repeat(1 << 20);
+    write(dir, "mod/big.txt", &big);
+    write(dir, "mod/config.cpp", "class A{x=1;};");
+    let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir);
+    assert_eq!(code, 0, "{err}");
+}
+
+/// Runs `args` with stdout a pipe: reads one chunk, drops the read end while the child still has output to
+/// write, and returns (exit code, stderr). The child blocks on the full pipe until the read end goes away,
+/// so no timing is involved.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn run_with_closed_stdout(args: &[&str], cwd: &Path) -> (i32, String) {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let mut child = cmd.spawn().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 16];
+    stdout.read_exact(&mut first).unwrap();
+    drop(stdout);
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_ends_cat_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    big_pbo(dir.path());
+    let (code, err) = run_with_closed_stdout(&["cat", "out.pbo", "big.txt"], dir.path());
+    assert!(!err.contains("error"), "{err}");
+    assert_eq!(code, 0, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_ends_inspect_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    // a listing longer than a pipe buffer
+    for i in 0..600 {
+        write(dir.path(), &format!("mod/{}{i}.txt", "n".repeat(120)), "x");
+    }
+    let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, err) = run_with_closed_stdout(&["inspect", "out.pbo"], dir.path());
+    assert!(!err.contains("error"), "{err}");
+    assert_eq!(code, 0, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_still_fails() {
+    use std::process::Stdio;
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    // the read end is gone before the child starts: its error line hits a closed pipe
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(["inspect", "nope.pbo"])
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(writer);
+    isolate(&mut cmd, home.path());
+    let code = cmd.status().unwrap().code();
+    assert_ne!(code, Some(0));
+}

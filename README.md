@@ -24,6 +24,9 @@ is maintained here.
 
 ## Changes
 
+- A closed stdout pipe (`dayzmake inspect x.pbo | head -3`) ends the command quietly with exit status 0 and no
+  error line (it used to print `Broken pipe` and exit 1, or panic in `api`). A closed pipe on stderr, a target file
+  or an external tool is still an error (#39).
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
 - `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still

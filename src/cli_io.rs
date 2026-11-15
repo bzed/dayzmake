@@ -1,10 +1,12 @@
 //! stdin/stdout and file plumbing for the commands: an input that is a file or buffered stdin, an
 //! output that is a file or stdout, and the creation of target files.
 
+use std::cell::Cell;
 use std::fs::File;
 use std::io;
-use std::io::{Cursor, Read, Seek, Stdout, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -22,7 +24,59 @@ pub enum Output {
     /// A target file, written atomically (see [`AtomicTarget`]).
     File(AtomicTarget),
     /// Standard output.
-    Standard(Stdout),
+    Standard(StdoutWriter),
+}
+
+/// Whether a write to stdout failed because the reader closed the pipe (`dayzmake inspect x.pbo | head`).
+///
+/// The error text is rewritten on its way up (`prepend_error`), so the kind cannot tell stdout from any other
+/// `BrokenPipe` (stderr, a file target, a pipe to an external tool). The [`StdoutWriter`] therefore records it
+/// here, and `run` quits quietly only when this is set.
+#[derive(Clone, Debug, Default)]
+pub struct StdoutState(Rc<Cell<bool>>);
+
+impl StdoutState {
+    /// A writer to the process's stdout that reports a closed pipe to this state.
+    #[must_use]
+    pub fn writer(&self) -> StdoutWriter {
+        StdoutWriter {
+            inner: std::io::stdout(),
+            state: self.clone(),
+        }
+    }
+
+    /// Whether stdout was found closed by its reader.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// Standard output that notes a `BrokenPipe` in its [`StdoutState`].
+pub struct StdoutWriter {
+    inner: std::io::Stdout,
+    state: StdoutState,
+}
+
+impl StdoutWriter {
+    fn note<T>(&self, result: io::Result<T>) -> io::Result<T> {
+        if matches!(&result, Err(e) if e.kind() == io::ErrorKind::BrokenPipe) {
+            self.state.0.set(true);
+        }
+        result
+    }
+}
+
+impl Write for StdoutWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let result = self.inner.write(buf);
+        self.note(result)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let result = self.inner.flush();
+        self.note(result)
+    }
 }
 
 impl Read for Input {
