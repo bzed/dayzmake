@@ -943,10 +943,17 @@ impl PBO {
         }
 
         if !header_extensions.contains_key("prefix") {
+            // "." and ".." have no file name of their own, the real folder does
             let prefix: String = directory
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| error!("Invalid addon directory \"{}\".", directory.display()))?;
+                .canonicalize()
+                .ok()
+                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .ok_or_else(|| {
+                    error!(
+                        "Invalid addon directory \"{}\".",
+                        printable(&directory.display().to_string())
+                    )
+                })?;
             header_extensions.insert("prefix".to_string(), prefix);
         }
 

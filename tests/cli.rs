@@ -905,3 +905,23 @@ fn keygen_creates_the_private_key_owner_only() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(mode("k.biprivatekey"), 0o600);
 }
+
+#[test]
+fn build_dot_uses_the_folder_name_as_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mymod/config.cpp", "class A {};\n");
+    let inside = dir.path().join("mymod");
+    let (code, _, err) = dayzmake(&["build", ".", "../a.pbo"], &inside);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["build", "./", "../b.pbo"], &inside);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["build", "mymod", "c.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let a = std::fs::read(dir.path().join("a.pbo")).unwrap();
+    assert_eq!(a, std::fs::read(dir.path().join("b.pbo")).unwrap());
+    assert_eq!(a, std::fs::read(dir.path().join("c.pbo")).unwrap());
+    assert!(
+        a.windows(b"mymod".len()).any(|w| w == b"mymod"),
+        "prefix mymod missing"
+    );
+}
