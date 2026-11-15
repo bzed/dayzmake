@@ -6,7 +6,6 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.99"
 license = "GPL-2.0-or-later"
-homepage = "https://github.com/bzed/dayzmake"
 repository = "https://github.com/bzed/dayzmake"
 authors = ["KoffeinFlummi <koffeinflummi@protonmail.com>"]
 
@@ -38,7 +37,6 @@ keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
 categories = ["command-line-utilities", "game-development"]
 include = ["src/**/*", "/README.md", "/LICENSE", "/Cargo.toml"]
 authors.workspace = true
-homepage.workspace = true
 repository.workspace = true
 readme = "README.md"
 edition.workspace = true
