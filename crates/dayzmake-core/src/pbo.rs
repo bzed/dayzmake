@@ -47,6 +47,9 @@ pub struct EntryHeader {
     pub data_size: u32,
 }
 
+/// The header extensions as `(key, value)` pairs and the entry names, both in file order.
+pub type HeaderSummary = (Vec<(String, String)>, Vec<String>);
+
 /// Longest entry name or header extension string `PBO::read_headers` accepts.
 const MAX_HEADER_STRING: usize = 4096;
 /// Most entries `PBO::read_headers` accepts.
@@ -262,6 +265,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
 }
 
 /// An entry name with its decompressed data, or the reason it cannot be read.
+#[derive(Debug)]
 pub struct SelectedEntry {
     name: String,
     data: Result<Vec<u8>, Error>,
@@ -285,6 +289,7 @@ impl SelectedEntry {
 }
 
 /// The entries of a PBO that [`PBO::read_entries`] selected.
+#[derive(Debug)]
 pub struct PboSelection {
     header_extensions: LinkedHashMap<String, String>,
     names: Vec<String>,
@@ -473,8 +478,8 @@ impl PBO {
         }
     }
 
-    /// The entries in the order the PBO has them: header order for a PBO that was read, the
-    /// order [`PBO::write`] uses (sorted by name) for one that was not. Data is as stored, so
+    /// The entries in the order the PBO has them: header order for a PBO that was read and not
+    /// modified, the order [`PBO::write`] uses (sorted by name) for any other. Data is as stored, so
     /// compressed entries stay compressed; see [`PBO::file_data`].
     pub fn entries(&self) -> impl Iterator<Item = (&str, &[u8])> {
         self.ordered_files()
@@ -491,13 +496,16 @@ impl PBO {
     ///
     /// # Errors
     ///
-    /// Returns an error if the name starts with a separator or is one [`safe_relative_path`]
-    /// rejects (empty, drive letter, `..` component and so on).
+    /// `/` in the name is stored as `\`. Returns an error if the name has an empty component
+    /// (leading, trailing or doubled separator, or no name at all) or is one
+    /// [`safe_relative_path`] rejects (drive letter, `..` component and so on). Modifying a PBO
+    /// that was read drops its stored checksum: it is signed as the PBO that would be written.
     pub fn insert_entry(&mut self, name: impl Into<String>, data: Vec<u8>) -> Result<(), Error> {
-        let name = name.into();
-        if name.starts_with(['\\', '/']) || safe_relative_path(&name).is_none() {
+        let name = name.into().replace('/', "\\");
+        if name.split('\\').any(str::is_empty) || safe_relative_path(&name).is_none() {
             return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
         }
+        self.modified(&name);
         self.files
             .insert(name, Cursor::new(data.into_boxed_slice()));
         Ok(())
@@ -506,6 +514,7 @@ impl PBO {
     /// Removes an entry and returns its stored data.
     pub fn remove_entry(&mut self, name: &str) -> Option<Vec<u8>> {
         self.raw_names.remove(name);
+        self.modified(name);
         self.files.remove(name).map(|c| c.into_inner().into_vec())
     }
 
@@ -524,6 +533,7 @@ impl PBO {
 
     /// Sets a header extension; a repeated key keeps its position and takes the new value.
     pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.checksum = None;
         set_extension(&mut self.header_extensions, &key.into(), value.into());
     }
 
@@ -533,13 +543,20 @@ impl PBO {
         self.header_extension("prefix")
     }
 
-    /// The SHA-1 trailer of a PBO that was read; `None` for one that was not.
+    /// The SHA-1 trailer of a PBO that was read and not modified; `None` otherwise.
     #[must_use]
     pub fn checksum(&self) -> Option<&[u8]> {
         self.checksum.as_deref()
     }
 
-    /// The entries in header order (read PBO) or write order (unwritten PBO).
+    /// A stored entry changes: the stored trailer no longer describes the PBO, and the header of
+    /// the entry (packing method) no longer describes its data.
+    fn modified(&mut self, name: &str) {
+        self.checksum = None;
+        self.headers.retain(|h| h.filename != name);
+    }
+
+    /// The entries in header order (read, unmodified PBO) or write order (any other).
     fn ordered_files(&self) -> Vec<(&str, &Cursor<Box<[u8]>>)> {
         let mut files: Vec<(&str, &Cursor<Box<[u8]>>)> =
             self.files.iter().map(|(a, b)| (a.as_str(), b)).collect();
@@ -651,12 +668,11 @@ impl PBO {
     /// # Errors
     ///
     /// Returns an error if the header block is truncated, malformed or exceeds the limits.
-    pub fn read_headers<I: Read>(
-        input: &mut I,
-    ) -> Result<(LinkedHashMap<String, String>, Vec<String>), Error> {
+    /// The extensions are `(key, value)` pairs in file order.
+    pub fn read_headers<I: Read>(input: &mut I) -> Result<HeaderSummary, Error> {
         let block = read_header_block(input)?;
         let names = block.headers.into_iter().map(|h| h.filename).collect();
-        Ok((block.extensions, names))
+        Ok((block.extensions.into_iter().collect(), names))
     }
 
     /// Reads the header block of a seekable PBO and only the entries `wanted` accepts, by seeking to their

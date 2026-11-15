@@ -1,6 +1,7 @@
 //! The stdio MCP server: spawns `dayzmake mcp` and talks JSON-RPC over its pipes.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
 #![expect(clippy::indexing_slicing, reason = "a failing index is a failing test")]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
 mod support;
 
 use std::fs;

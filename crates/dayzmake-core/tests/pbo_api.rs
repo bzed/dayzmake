@@ -1,4 +1,6 @@
 //! The packing and unpacking options of the PBO API.
+mod support;
+
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
@@ -18,31 +20,6 @@ fn pack_to_bytes(dir: &Path, options: &PackOptions) -> Vec<u8> {
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn read(bytes: &[u8]) -> PBO {
     PBO::read(&mut Cursor::new(bytes)).unwrap()
-}
-
-/// PBO bytes built by hand (stored entries, zero trailer) for names `insert_entry` refuses.
-#[expect(clippy::unwrap_used, reason = "test helper")]
-fn raw_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    fn header(out: &mut Vec<u8>, name: &str, method: u32, size: u32) {
-        out.extend_from_slice(name.as_bytes());
-        out.push(0);
-        for value in [method, size, 0, 0, size] {
-            out.extend_from_slice(&value.to_le_bytes());
-        }
-    }
-    let mut out = Vec::new();
-    header(&mut out, "", 0x5665_7273, 0);
-    out.push(0);
-    for (name, data) in entries {
-        header(&mut out, name, 0, u32::try_from(data.len()).unwrap());
-    }
-    header(&mut out, "", 0, 0);
-    for (_, data) in entries {
-        out.extend_from_slice(data);
-    }
-    out.push(0);
-    out.extend_from_slice(&[0; 20]);
-    out
 }
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
@@ -133,7 +110,7 @@ fn unpack_refuses_existing_files_without_force() {
 #[test]
 fn unpack_rejects_unsafe_entry_names() {
     let tmp = addon();
-    let bytes = raw_pbo(&[("a.txt", b"a"), ("..\\evil.txt", b"evil")]);
+    let bytes = support::raw_pbo(&[("a.txt", b"a"), ("..\\evil.txt", b"evil")], &[]);
     // the hand-built PBO really holds the hostile entry
     assert!(read(&bytes).entry_names().any(|n| n == "..\\evil.txt"));
 
@@ -298,4 +275,37 @@ fn selection_gives_requested_entries() {
         sel.header_extensions().collect::<Vec<_>>(),
         [("prefix", "addon")]
     );
+}
+
+#[test]
+fn a_modified_read_pbo_signs_as_what_is_written() {
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
+    pbo.insert_entry("new.txt", b"new".to_vec()).unwrap();
+    assert!(pbo.checksum().is_none());
+    let key = armk();
+    let signature = key.sign(&pbo, BISignVersion::V3).unwrap();
+    let written = PBO::read(&mut pbo.to_cursor().unwrap()).unwrap();
+    key.to_public_key()
+        .unwrap()
+        .verify(&written, &signature)
+        .unwrap();
+
+    // the other mutators drop the stored checksum too
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
+    pbo.set_header_extension("version", "2");
+    assert!(pbo.checksum().is_none());
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
+    let first = pbo.entry_names().next().unwrap().to_string();
+    pbo.remove_entry(&first).unwrap();
+    assert!(pbo.checksum().is_none());
+}
+
+#[test]
+fn insert_entry_normalises_separators_and_rejects_empty_components() {
+    let mut pbo = PBO::new();
+    pbo.insert_entry("a/b.txt", b"x".to_vec()).unwrap();
+    assert_eq!(pbo.entry_names().collect::<Vec<_>>(), ["a\\b.txt"]);
+    for bad in ["a\\", "a\\\\b", "a//b", "a/"] {
+        assert!(PBO::new().insert_entry(bad, vec![]).is_err(), "{bad:?}");
+    }
 }

@@ -1,6 +1,7 @@
 //! Mutation test for the readers of untrusted files: byte-flipped and truncated copies of the
 //! fixtures must make the readers return an error or a value, never panic, hang or abort.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
 mod support;
 
 use std::fmt::Write as _;
@@ -365,22 +366,10 @@ fn paa_decoded_size_is_bounded() {
 
 #[test]
 fn duplicate_header_extension_keys_read_and_write_deterministically() {
-    let mut bytes = Vec::new();
-    let header = |out: &mut Vec<u8>, name: &[u8], method: u32, size: u32| {
-        out.extend_from_slice(name);
-        out.push(0);
-        for v in [method, size, 0, 0, size] {
-            out.extend_from_slice(&v.to_le_bytes());
-        }
-    };
-    header(&mut bytes, b"", 0x5665_7273, 0);
-    bytes.extend_from_slice(b"prefix\0p\0k\x001\0j\0x\0k\x002\0\0");
-    header(&mut bytes, b"a.txt", 0, 1);
-    header(&mut bytes, b"", 0, 0);
-    bytes.push(b'x');
-    bytes.push(0);
-    bytes.extend_from_slice(&[0; 20]);
-
+    let bytes = support::raw_pbo(
+        &[("a.txt", b"x")],
+        &[("prefix", "p"), ("k", "1"), ("j", "x"), ("k", "2")],
+    );
     let pbo = PBO::read(&mut &bytes[..]).expect("read");
     let pairs: Vec<(&str, &str)> = pbo.header_extensions().collect();
     assert_eq!(pairs, [("prefix", "p"), ("k", "2"), ("j", "x")]);

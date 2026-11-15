@@ -1,4 +1,5 @@
 //! PBO packing, unpacking, signing and verification tests.
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
 mod support;
 
 use std::fs::{self, File};
@@ -364,7 +365,7 @@ fn inspect_and_cat_write_to_the_given_writer() {
 fn read_headers_lists_names_without_the_data() {
     let pbo = crafted_pbo(&[("a.txt", b"hello"), ("sub\\b.c", b"x")], Some("pre"));
     let (ext, names) = PBO::read_headers(&mut &pbo[..]).unwrap();
-    assert_eq!(ext.get("prefix").map(String::as_str), Some("pre"));
+    assert_eq!(ext, [("prefix".to_string(), "pre".to_string())]);
     assert_eq!(names, ["a.txt", "sub\\b.c"]);
     // Only the header block is needed: cut off right after it.
     let end = pbo.len() - 6 - 21;
