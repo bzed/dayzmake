@@ -1,9 +1,14 @@
 //! The PAA conversion API: formats, accessors and the bytes the CLI writes.
+#[cfg(feature = "image")]
 use std::io::Cursor;
 
+#[cfg(feature = "image")]
 use dayzmake_core::image::{DynamicImage, Rgba, RgbaImage};
-use dayzmake_core::paa::{Paa, PaaFormat};
+#[cfg(feature = "image")]
+use dayzmake_core::paa::Paa;
+use dayzmake_core::paa::PaaFormat;
 
+#[cfg(feature = "image")]
 /// The gradient `golden_cli.rs` writes with alpha.
 fn gradient() -> DynamicImage {
     DynamicImage::ImageRgba8(RgbaImage::from_fn(64, 64, |x, y| {
@@ -16,6 +21,7 @@ fn gradient() -> DynamicImage {
     }))
 }
 
+#[cfg(feature = "image")]
 #[expect(clippy::expect_used, reason = "tests fail by panicking")]
 fn to_bytes(paa: &Paa) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -44,6 +50,7 @@ fn unknown_format_has_the_cli_error_text() {
     );
 }
 
+#[cfg(feature = "image")]
 #[test]
 fn dxt1_and_dxt5_roundtrip_dimensions() {
     for (format, name) in [(PaaFormat::Dxt1, "DXT1"), (PaaFormat::Dxt5, "DXT5")] {
@@ -58,6 +65,7 @@ fn dxt1_and_dxt5_roundtrip_dimensions() {
     }
 }
 
+#[cfg(feature = "image")]
 #[test]
 fn conversion_matches_the_cli_bytes() {
     let snapshot = std::fs::read(concat!(

@@ -22,6 +22,7 @@ fn fixture_pbos() -> Vec<std::path::PathBuf> {
     out
 }
 
+#[cfg(feature = "sign")]
 /// Deterministic noise (xorshift, fixed seed).
 fn noise(len: usize) -> Vec<u8> {
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;

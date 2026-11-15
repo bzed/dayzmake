@@ -10,7 +10,7 @@ FUZZ_TIME ?= 10
 # cargo-fuzz binaries from prebuilt releases default to a musl target, where sanitizers do not work.
 FUZZ_HOST = $(shell rustc +nightly -vV | sed -n "s/^host: //p")
 
-.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri features package-check check
+.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri features docsrs package-check check
 
 fmt:
 	$(CARGO) fmt --all
@@ -56,9 +56,18 @@ features:
 	$(CARGO) clippy -p dayzmake-core --no-default-features --lib $(LOCKED) -- -D warnings
 	$(CARGO) clippy -p dayzmake-core --no-default-features --features sign --lib $(LOCKED) -- -D warnings
 	$(CARGO) clippy -p dayzmake-core --no-default-features --features image --lib $(LOCKED) -- -D warnings
+	$(CARGO) test -p dayzmake-core --no-default-features $(LOCKED)
+
+# docs.rs builds with nightly, `--cfg docsrs` and all features.
+docsrs:
+	@if $(CARGO) +nightly --version >/dev/null 2>&1; then \
+	  RUSTDOCFLAGS="--cfg docsrs" $(CARGO) +nightly doc -p dayzmake-core --all-features --no-deps $(LOCKED); \
+	else \
+	  echo "skipping docsrs: nightly missing"; \
+	fi
 
 # Packages both crates (the CLI against the packaged core). CI runs it without --allow-dirty.
 package-check:
 	$(CARGO) package --workspace $(LOCKED) --allow-dirty
 
-check: fmt-check lint doc deny test features package-check fuzz coverage-check
+check: fmt-check lint doc deny test features docsrs package-check fuzz coverage-check

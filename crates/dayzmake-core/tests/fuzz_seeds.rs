@@ -9,6 +9,7 @@ use dayzmake_core::config::Config;
 use dayzmake_core::p3d::P3D;
 use dayzmake_core::paa::Paa;
 use dayzmake_core::pbo::PBO;
+#[cfg(feature = "sign")]
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 
 fn seeds(target: &str) -> io::Result<Vec<Vec<u8>>> {
@@ -51,7 +52,10 @@ fn config_rapified_seeds() -> io::Result<()> {
 fn paa_read_seeds() -> io::Result<()> {
     for data in seeds("paa_read")? {
         if let Ok(paa) = Paa::read(&mut Cursor::new(&data)) {
+            #[cfg(feature = "image")]
             let _ = paa.to_dynamic_image();
+            #[cfg(not(feature = "image"))]
+            let _ = paa;
         }
     }
     Ok(())
@@ -66,6 +70,7 @@ fn p3d_read_seeds() -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "sign")]
 #[test]
 fn sign_read_seeds() -> io::Result<()> {
     for data in seeds("sign_read")? {

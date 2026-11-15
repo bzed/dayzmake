@@ -1,6 +1,8 @@
 //! File format handling for DayZ: PBO archives, rapified configs, P3D models, PAA textures and BI
 //! keys and signatures, plus the preprocessor and `__EVAL` evaluator the config pipeline needs.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 /// The `image` crate the PAA conversion API uses, so consumers build against the same version.
 #[cfg(feature = "image")]
 #[cfg_attr(docsrs, doc(cfg(feature = "image")))]

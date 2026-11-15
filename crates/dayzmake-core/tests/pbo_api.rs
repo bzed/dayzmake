@@ -6,6 +6,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use dayzmake_core::pbo::{PBO, PackOptions, UnpackOptions, unpack};
+#[cfg(feature = "sign")]
 use dayzmake_core::sign::{BIPrivateKey, BISignVersion};
 use dayzmake_core::warning::Warnings;
 
@@ -158,11 +159,13 @@ fn sign_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/sign")
 }
 
+#[cfg(feature = "sign")]
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn armk() -> BIPrivateKey {
     BIPrivateKey::read(&mut fs::File::open(sign_dir().join("armk.biprivatekey")).unwrap()).unwrap()
 }
 
+#[cfg(feature = "sign")]
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn sign_bytes(key: &BIPrivateKey, pbo: &PBO) -> Vec<u8> {
     let mut out = Vec::new();
@@ -173,6 +176,7 @@ fn sign_bytes(key: &BIPrivateKey, pbo: &PBO) -> Vec<u8> {
     out
 }
 
+#[cfg(feature = "sign")]
 #[test]
 fn signing_a_fresh_pbo_matches_signing_it_after_a_roundtrip() {
     let tmp = addon();
@@ -194,6 +198,7 @@ fn signing_a_fresh_pbo_matches_signing_it_after_a_roundtrip() {
     public.verify(&pbo, &signature).unwrap();
 }
 
+#[cfg(feature = "sign")]
 #[test]
 fn signing_a_read_pbo_uses_its_stored_checksum() {
     let dir = sign_dir();
@@ -277,6 +282,7 @@ fn selection_gives_requested_entries() {
     );
 }
 
+#[cfg(feature = "sign")]
 #[test]
 fn a_modified_read_pbo_signs_as_what_is_written() {
     let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
@@ -289,8 +295,10 @@ fn a_modified_read_pbo_signs_as_what_is_written() {
         .unwrap()
         .verify(&written, &signature)
         .unwrap();
+}
 
-    // the other mutators drop the stored checksum too
+#[test]
+fn mutators_drop_the_stored_checksum() {
     let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
     pbo.set_header_extension("version", "2");
     assert!(pbo.checksum().is_none());

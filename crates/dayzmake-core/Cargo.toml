@@ -51,17 +51,5 @@ harness = false
 name = "config"
 harness = false
 
-[[test]]
-name = "pbo_api"
-required-features = ["sign"]
-
-[[test]]
-name = "paa_api"
-required-features = ["image"]
-
-[[test]]
-name = "fuzz_seeds"
-required-features = ["sign", "image"]
-
 [lints]
 workspace = true
