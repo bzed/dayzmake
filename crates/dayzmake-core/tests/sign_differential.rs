@@ -265,6 +265,10 @@ fn flip(bytes: &mut [u8], at: usize) {
     bytes[at] ^= 1;
 }
 
+fn key_verify(pbo: &PBO, sig: &[u8], key: &BIPublicKey) -> Result<(), std::io::Error> {
+    key.verify(pbo, &BISign::read(&mut Cursor::new(sig)).unwrap())
+}
+
 #[test]
 fn verify_accepts_and_rejects() {
     let public_bytes = fs::read(sign_dir().join("armk.bikey")).unwrap();
@@ -292,7 +296,7 @@ fn verify_accepts_and_rejects() {
             "{pbo_name} sig"
         );
 
-        // one flipped bit in the data of a hashed script entry (the stored PBO trailer is not recomputed on read)
+        // one flipped bit in the data of a hashed script entry
         let pbo = read_pbo(&pbo_bytes);
         let (_, data) = pbo
             .entries()
@@ -313,6 +317,28 @@ fn verify_accepts_and_rejects() {
             verify(&bad_pbo, &sig_bytes, &public).is_err(),
             "{pbo_name} data"
         );
+
+        // one flipped bit in config.bin or in the header: only hash 1 (the SHA-1 of the whole PBO)
+        // covers them, and the stored trailer is kept
+        let rejected = |bytes: &[u8]| match PBO::read(&mut Cursor::new(bytes)) {
+            Ok(pbo) => key_verify(&pbo, &sig_bytes, &public).is_err(),
+            Err(_) => true,
+        };
+        let config = pbo
+            .entries()
+            .find(|(n, d)| n.ends_with("config.bin") && !d.is_empty());
+        if let Some((_, config)) = config {
+            let at = pbo_bytes
+                .windows(config.len())
+                .position(|w| w == config)
+                .unwrap();
+            let mut bad = pbo_bytes.clone();
+            flip(&mut bad, at + config.len() / 2);
+            assert!(rejected(&bad), "{pbo_name} config.bin");
+        }
+        let mut bad_header = pbo_bytes.clone();
+        flip(&mut bad_header, 30);
+        assert!(rejected(&bad_header), "{pbo_name} header");
 
         // one flipped bit in the key's n (first byte after name and 24 header bytes)
         let key_name_len = public_bytes.iter().position(|&b| b == 0).unwrap() + 1;

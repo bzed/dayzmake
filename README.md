@@ -24,6 +24,10 @@ is maintained here.
 
 ## Changes
 
+- `verify` and `sign` recompute the SHA-1 of the PBO instead of trusting its stored trailer: a PBO whose bytes
+  changed (`config.bin`, files a signature version leaves out, the header) no longer verifies, and a PBO with a
+  wrong trailer is not signed. Both fail with a "checksum mismatch" error (#46). `inspect` and `unpack` still read
+  such files.
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
 - `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
