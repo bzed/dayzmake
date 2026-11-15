@@ -29,7 +29,8 @@ impl FileId {
 impl PartialEq for FileId {
     fn eq(&self, other: &FileId) -> bool {
         // the length is read now, not at creation: the same file always has one length at one moment
-        self.0 == other.0 && self.len().is_some() && self.len() == other.len()
+        let len = self.len();
+        self.0 == other.0 && len.is_some() && len == other.len()
     }
 }
 
@@ -50,28 +51,35 @@ impl FileId {
 
 impl FileId {
     /// The identity of the file standard output is redirected to, or `None` unless that is a regular file: a
-    /// terminal, a pipe, a device, a closed stdout or a failed duplicate all give `None`.
+    /// terminal, a device, a closed stdout or a failed duplicate all give `None`.
     ///
     /// The identity is taken from a duplicate of the stdout descriptor (handle on Windows), owned by the returned
-    /// id, so dropping it never closes the process's real stdout. On Windows the "regular file" check relies on
-    /// the metadata of a console or pipe handle failing, which gives `None`.
+    /// id, so dropping it never closes the process's real stdout. On Windows a pipe may get an identity; it lives on
+    /// the named-pipe file system's volume and never matches a file on a disk volume, so nothing is excluded.
     #[must_use]
     pub fn stdout() -> Option<FileId> {
-        #[cfg(unix)]
-        let owned = {
-            use std::os::fd::AsFd;
-            std::io::stdout().as_fd().try_clone_to_owned().ok()?
-        };
-        #[cfg(windows)]
-        let owned = {
-            use std::os::windows::io::AsHandle;
-            std::io::stdout().as_handle().try_clone_to_owned().ok()?
-        };
-        let file = std::fs::File::from(owned);
-        if !file.metadata().ok()?.is_file() {
-            return None;
+        #[cfg(any(unix, windows))]
+        {
+            #[cfg(unix)]
+            let owned = {
+                use std::os::fd::AsFd;
+                std::io::stdout().as_fd().try_clone_to_owned().ok()?
+            };
+            #[cfg(windows)]
+            let owned = {
+                use std::os::windows::io::AsHandle;
+                std::io::stdout().as_handle().try_clone_to_owned().ok()?
+            };
+            let file = std::fs::File::from(owned);
+            if !file.metadata().ok()?.is_file() {
+                return None;
+            }
+            same_file::Handle::from_file(file).ok().map(FileId)
         }
-        same_file::Handle::from_file(file).ok().map(FileId)
+        #[cfg(not(any(unix, windows)))]
+        {
+            None
+        }
     }
 }
 
