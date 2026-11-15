@@ -526,3 +526,17 @@ fn proton_messages_stay_plain_stderr_lines() {
     assert!(!err.contains("[proton"), "{err}");
     assert!(!err.contains("[binarize-output]"), "{err}");
 }
+
+#[test]
+fn pack_rejects_a_header_extension_without_equals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "a").unwrap();
+    let (code, _, err) = dayzmake(&["pack", "-e", "bad", ".", "../out.pbo"], &src);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("Invalid header extension \"bad\" (expected key=value)."),
+        "{err}"
+    );
+}
