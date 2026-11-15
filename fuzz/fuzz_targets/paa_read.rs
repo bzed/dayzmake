@@ -1,6 +1,6 @@
 #![no_main]
 
-use dayzmake::paa::Paa;
+use dayzmake_core::paa::Paa;
 use libfuzzer_sys::fuzz_target;
 use std::io::Cursor;
 

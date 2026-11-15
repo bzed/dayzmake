@@ -1,9 +1,14 @@
 //! PBO packing, unpacking, signing and verification tests.
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use dayzmake::pbo::PBO;
-use dayzmake::sign::{BISignVersion, cmd_sign, cmd_verify};
+use dayzmake::commands::sign::{cmd_sign, cmd_verify};
+use dayzmake_core::pbo::{PBO, PackOptions};
+use dayzmake_core::sign::BISignVersion;
+use dayzmake_core::warning::Warnings;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
@@ -68,9 +73,9 @@ fn verify_bi_signature_non_utf8() {
 fn read_non_utf8_name() {
     let pbo = PBO::read(&mut File::open(sign_dir().join("nonutf8.pbo")).unwrap()).unwrap();
     assert!(
-        pbo.files.contains_key("data\\a\u{2014}b.txt"),
+        pbo.entry_names().any(|n| n == "data\\a\u{2014}b.txt"),
         "{:?}",
-        pbo.files.keys().collect::<Vec<_>>()
+        pbo.entry_names().collect::<Vec<_>>()
     );
 }
 
@@ -99,30 +104,24 @@ fn prefix_of(content: &str) -> PBO {
     let root = dir.path().join("mod");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("$PBOPREFIX$"), content).unwrap();
-    PBO::from_directory(root, false, &[], &[]).unwrap()
+    PBO::from_directory(&root, &PackOptions::pack(), None, &mut Warnings::new()).unwrap()
 }
 
 #[test]
 fn prefix_trailing_slash_stripped() {
-    assert_eq!(
-        prefix_of("my\\mod\\").header_extensions["prefix"],
-        "my\\mod"
-    );
+    assert_eq!(prefix_of("my\\mod\\").prefix().unwrap(), "my\\mod");
 }
 
 #[test]
 fn prefix_normalized_crlf_and_leading_slash() {
-    assert_eq!(
-        prefix_of("\\my\\mod\\\\\r\n").header_extensions["prefix"],
-        "my\\mod"
-    );
+    assert_eq!(prefix_of("\\my\\mod\\\\\r\n").prefix().unwrap(), "my\\mod");
 }
 
 #[test]
 fn prefix_key_value_form() {
     let pbo = prefix_of("prefix=my\\mod\\\nversion=a=b\n");
-    assert_eq!(pbo.header_extensions["prefix"], "my\\mod");
-    assert_eq!(pbo.header_extensions["version"], "a=b");
+    assert_eq!(pbo.prefix(), Some("my\\mod"));
+    assert_eq!(pbo.header_extension("version"), Some("a=b"));
 }
 
 #[test]
@@ -132,7 +131,7 @@ fn roundtrip_non_utf8_prefix() {
     let at = original.windows(5).position(|w| w == b"mymod").unwrap();
     original[at..at + 5].copy_from_slice(b"my\x97od");
     let pbo = PBO::read(&mut &original[..]).unwrap();
-    assert_eq!(pbo.header_extensions["prefix"], "my\u{2014}od\\testsig");
+    assert_eq!(pbo.prefix(), Some("my\u{2014}od\\testsig"));
     let mut out = Vec::new();
     pbo.write(&mut out).unwrap();
     // everything but the SHA-1 trailer, which the edit made stale
@@ -163,22 +162,9 @@ fn garbage_is_an_error_not_a_panic() {
 }
 
 /// Builds a PBO holding exactly `entries`, with an optional prefix header extension.
-#[expect(clippy::unwrap_used, reason = "test helper")]
 fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
-    let dir = tempfile::tempdir().unwrap();
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).unwrap();
-    pbo.files.clear();
-    for (name, data) in entries {
-        pbo.files.insert(
-            (*name).to_string(),
-            std::io::Cursor::new(data.to_vec().into_boxed_slice()),
-        );
-    }
-    if let Some(prefix) = prefix {
-        pbo.header_extensions
-            .insert("prefix".to_string(), prefix.to_string());
-    }
-    pbo.to_cursor().unwrap().into_inner()
+    let extensions: Vec<(&str, &str)> = prefix.map(|p| ("prefix", p)).into_iter().collect();
+    support::raw_pbo(entries, &extensions)
 }
 
 /// Unpacks `pbo` into `<tmp>/target`; returns (tmp, exit code, stderr).
@@ -341,7 +327,7 @@ fn compressed_entry_size_bomb_is_an_error() {
 fn file_data_does_not_trust_the_original_size() {
     let data = include_bytes!("fixtures/fuzz/pbo_huge_original_size.pbo");
     if let Ok(pbo) = PBO::read(&mut &data[..]) {
-        for name in pbo.files.keys() {
+        for name in pbo.entry_names() {
             let _ = pbo.file_data(name);
         }
     }
@@ -364,14 +350,14 @@ fn cat_missing_entry_fails() {
 fn inspect_and_cat_write_to_the_given_writer() {
     let pbo = crafted_pbo(&[("a.txt", b"hello")], Some("pre"));
     let mut out = Vec::new();
-    dayzmake::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
+    dayzmake::commands::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(
         text.contains("- prefix=pre") && text.contains("a.txt"),
         "{text}"
     );
     let mut out = Vec::new();
-    dayzmake::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
+    dayzmake::commands::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
     assert_eq!(out, b"hello");
 }
 
@@ -379,7 +365,7 @@ fn inspect_and_cat_write_to_the_given_writer() {
 fn read_headers_lists_names_without_the_data() {
     let pbo = crafted_pbo(&[("a.txt", b"hello"), ("sub\\b.c", b"x")], Some("pre"));
     let (ext, names) = PBO::read_headers(&mut &pbo[..]).unwrap();
-    assert_eq!(ext.get("prefix").map(String::as_str), Some("pre"));
+    assert_eq!(ext, [("prefix".to_string(), "pre".to_string())]);
     assert_eq!(names, ["a.txt", "sub\\b.c"]);
     // Only the header block is needed: cut off right after it.
     let end = pbo.len() - 6 - 21;
@@ -453,22 +439,20 @@ fn read_entries_equals_read_for_stored_and_compressed() {
             || n == "a.txt"
     })
     .unwrap();
-    assert_eq!(sel.names, ["a.txt", "b.c"]);
-    assert_eq!(
-        sel.header_extensions.get("prefix").map(String::as_str),
-        Some("pre")
-    );
-    assert_eq!(sel.entries.len(), 2);
-    for (name, data) in sel.entries {
+    assert_eq!(sel.names(), ["a.txt", "b.c"]);
+    assert_eq!(sel.header_extension("prefix"), Some("pre"));
+    assert_eq!(sel.entries().len(), 2);
+    for entry in sel.entries() {
+        let name = entry.name();
         assert_eq!(
-            data.unwrap(),
-            full.file_data(&name).unwrap().unwrap(),
+            entry.data().unwrap(),
+            full.file_data(name).unwrap().unwrap(),
             "{name}"
         );
     }
     // entries that are not wanted are not returned
     let sel = PBO::read_entries(&mut std::io::Cursor::new(&bytes), |n| n == "b.c").unwrap();
-    assert_eq!(sel.entries.len(), 1);
+    assert_eq!(sel.entries().len(), 1);
 }
 
 #[test]
@@ -492,4 +476,49 @@ fn read_entries_rejects_truncated_and_lying_headers() {
 fn read_still_bounds_header_strings() {
     let long = vec![b'a'; 100_000];
     assert!(PBO::read(&mut &long[..]).is_err());
+}
+
+const ORDERED_PREFIX_FILE: &str = "prefix=t\nb=2\na=1\nc=3\nz=9\ny=8\n";
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn ordered_extension_folder() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("$PBOPREFIX$"), ORDERED_PREFIX_FILE).unwrap();
+    fs::write(dir.path().join("data.txt"), "x").unwrap();
+    dir
+}
+
+#[test]
+fn header_extensions_keep_file_order_and_bytes_are_stable() {
+    let dir = ordered_extension_folder();
+    let build = || {
+        PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
+            .unwrap()
+            .to_cursor()
+            .unwrap()
+            .into_inner()
+    };
+    let first = build();
+    for _ in 0..7 {
+        assert_eq!(build(), first, "PBO bytes differ between builds");
+    }
+    let pbo = PBO::read(&mut &first[..]).unwrap();
+    let keys: Vec<&str> = pbo.header_extensions().map(|(k, _)| k).collect();
+    assert_eq!(keys, ["prefix", "b", "a", "c", "z", "y"]);
+}
+
+#[test]
+fn unpack_writes_prefix_file_in_original_order() {
+    let dir = ordered_extension_folder();
+    let bytes = PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner();
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("in.pbo"), bytes).unwrap();
+    let (code, err) = run_dayzmake(&["unpack", "in.pbo", "out"], tmp.path());
+    assert_eq!(code, 0, "{err}");
+    let content = fs::read_to_string(tmp.path().join("out/$PBOPREFIX$")).unwrap();
+    assert_eq!(content, ORDERED_PREFIX_FILE);
 }

@@ -1,0 +1,11 @@
+---
+source: tests/golden_cli.rs
+expression: "listing(&e.base().join(\"x\"))"
+---
+golden/addon/$PBOPREFIX$	20	7072656669783d676f6c64656e5c6164
+golden/addon/config.bin	305	0072615000000000080000002d010000
+golden/addon/data/mat.rvmat	319	0072615000000000080000003b010000
+golden/addon/data/model.p3d	1204	4d4c4f4401010000020000005033444d
+golden/addon/data/readme.txt	14	676f6c64656e20726561646d650a
+golden/addon/data/sub/deep.txt	12	6e65737465642066696c650a
+golden/addon/inc/macros.hpp	82	23646566696e65205343414c4528612c

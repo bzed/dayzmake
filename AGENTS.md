@@ -10,15 +10,19 @@ input as hostile.
 
 | Path | Content |
 |---|---|
-| `src/*.rs` | the library (`lib.rs`) and the binary entry point (`main.rs`) |
-| `src/pbo.rs`, `config.rs`, `p3d.rs`, `paa.rs`, `sign.rs`, `io.rs` | the file-format readers and writers |
-| `src/preprocess.rs`, `eval.rs`, `binarize.rs`, `run.rs`, `error.rs` | preprocessor, `__EVAL`, binarize bridge, CLI, errors |
-| `tests/` | integration tests (public API and the CLI) |
+| `crates/dayzmake-core/` | library crate `dayzmake-core`: the file formats and their plumbing |
+| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `paa`, `sign`, `io` (readers and writers), `preprocess`, `eval`, `binarize`, `error`, `warning` |
+| `crates/dayzmake-core/tests/` | library tests (config, preprocessor, BI golden files, fuzz seeds of the format readers) |
+| `crates/dayzmake-core/benches/` | `criterion` benchmarks (`preprocess`, `config`) |
+| `src/*.rs` | root crate `dayzmake`: the CLI (`run.rs`, `main.rs`), the MCP server and the script API index (`api/`) |
+| `tests/` | binary-driven tests (CLI, MCP, snapshots) and tests of the root crate; `tests/fixtures/` is shared with core |
 | `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
 | `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
-| `benches/` | `criterion` benchmarks (`preprocess`, `config`) |
 | `fuzz/` | `cargo-fuzz` crate: targets for the untrusted-input readers, with seed corpora |
 | `docs/superpowers/` | design notes and plans |
+
+The repository is a Cargo workspace (root crate `dayzmake` plus `crates/dayzmake-core`); lints are set once in
+`[workspace.lints]`.
 
 Toolchain: Rust **1.99**, edition 2024, pinned in `rust-toolchain.toml`. `Cargo.lock` is committed and CI builds
 with `--locked`. Fuzzing and Miri need `nightly` (see below).
@@ -52,7 +56,7 @@ with `--locked`. Fuzzing and Miri need `nightly` (see below).
   real tools are `#[ignore = "needs <tool>"]` and run explicitly; they do not replace the faked tests.
 - Parsers for untrusted input (PBO, config, P3D, PAA, keys, signatures) have a fuzz target (`make fuzz`).
   A crash found by fuzzing gets a regression test in `tests/` with the minimised input, in the same commit as
-  the fix. The fuzz corpus seeds also run as ordinary tests in `make test` (`tests/fuzz_seeds.rs`).
+  the fix. The fuzz corpus seeds also run as ordinary tests in `make test` (`tests/fuzz_seeds.rs` and `crates/dayzmake-core/tests/fuzz_seeds.rs`).
 
 ## Coverage
 
@@ -63,7 +67,7 @@ with `--locked`. Fuzzing and Miri need `nightly` (see below).
 
 ## Safe Rust
 
-The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds the test exceptions.
+The lints are configured once, in `[workspace.lints]` in the root `Cargo.toml`; `clippy.toml` holds the test exceptions.
 
 **Lints**
 - Strict by design: `cargo clippy` runs with `-D warnings`; `clippy::all` and `clippy::pedantic` are enabled.
@@ -103,13 +107,14 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
   (file, offset, object). `main`/`run` decide whether to print and exit.
 - Don't swallow errors: `let _ = fallible()` and `.ok()` on a `Result` need a comment saying why.
 - Only the CLI layer prints (`print_stdout`/`print_stderr` are lints; the places that print carry
-  `#[expect(..., reason)]`).
+  `#[expect(..., reason)]`). The library never prints: a function that can warn takes a last parameter
+  `warnings: &mut dyn WarningSink`; the CLI sink (`src/cli_warnings.rs`) prints, the MCP server collects.
 - **Same input, same output:** builds are byte-for-byte reproducible. No `HashMap`/`HashSet` iteration order in
   output (sort first or use an ordered map), no timestamps in generated files unless a format requires them.
 
 **Concurrency**
-- No `static mut`, no new global mutable state; pass state explicitly. (The warning counters in `error.rs` are
-  the one existing exception.)
+- No `static mut`, no new global mutable state; pass state explicitly. Warnings go to a `WarningSink` passed to
+  the call (`dayzmake_core::warning`), never to a global.
 
 **Secrets**
 - Signing keys (`*.biprivatekey`) and other secrets never go into the repo, logs or error messages. The one
@@ -126,9 +131,24 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
   - *our standards*: tests, errors instead of panics, builds on Linux and Windows with Rust 1.99, deterministic
     output, a licence on the `deny.toml` allow-list (GPL-2.0-or-later compatible).
   A crate that fails the review is not used. The review result goes into the commit message that adds it.
-- Add dependencies with `cargo add` (latest stable), only the features needed. No git or path dependencies.
+- Add dependencies with `cargo add` (latest stable), only the features needed. No git or path dependencies, except workspace-internal crates (with a `version`).
 - `cargo deny` checks licences, RustSec advisories, duplicates and sources; run `make deny` after any
   `Cargo.toml` change.
+
+## Library rules (`dayzmake-core`)
+
+`crates/dayzmake-core` is a public library other tools (for example Náves, AGPL-3.0) link.
+
+- It never prints, never calls `process::exit`, and reads no environment variables except to locate and run external tools in
+  `binarize` (`BIOUTPUT`, `STEAM_ROOT`, `HOME`, `DAYZ_TOOLS`, `PROTON`); new settings go into options structs. Warnings go to a
+  `WarningSink` passed by the caller; there is no global warning state, and each caller thread uses its own sink.
+- New parameters of a public function go into an options struct (like `PackOptions`), not into more arguments.
+- Public data types and enums are `#[non_exhaustive]` and built through constructors or builders.
+- No `HashMap`, `HashSet` or `LinkedHashMap` in the public API (iteration order, third-party types): return
+  slices, iterators or ordered `Vec`s.
+- `dayzmake-core` has its own semver, independent of the CLI. A removed or changed public item is a breaking
+  change; the CLI depends on a compatible `dayzmake-core` version.
+- Features `sign` and `image` stay additive: the crate builds, tests and documents without them.
 
 ## Documentation
 
@@ -148,9 +168,12 @@ Run `make check`. It must pass, because CI runs the same steps:
 | Step | Target | Notes |
 |---|---|---|
 | formatting | `make fmt-check` | fix with `make fmt` |
-| lint | `make lint` | `cargo clippy --all-targets --locked -- -D warnings` |
-| rustdoc | `make doc` | `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
+| lint | `make lint` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| rustdoc | `make doc` | `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
+| features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
+| docs.rs | `make docsrs` | `cargo +nightly doc -p dayzmake-core --all-features` with `--cfg docsrs` and warnings as errors; skipped without nightly |
+| packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |
 | tests | `make test` | all targets plus doctests; includes the fuzz seeds |
 | fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |
 | coverage | `make coverage-check` | `cargo llvm-cov`; total coverage must stay at or above 70 % |
@@ -160,3 +183,13 @@ dismiss them in GitHub with a written reason. When the change touches `unsafe` c
 
 SPDX/REUSE headers are not used in this repository (the files are mostly inherited from armake2 and keep their
 original copyright holders); the licence is declared once, in `Cargo.toml` and `LICENSE`.
+
+## Releasing
+
+Publishing is done by the maintainer, never by an agent.
+
+1. Bump the versions. `dayzmake-core` follows semver on its own; a breaking core change also bumps the
+   `version` in the CLI's `dayzmake-core` dependency.
+2. `make check` (includes `make features` and `make package-check`).
+3. Tag the release.
+4. `cargo publish -p dayzmake-core`, **then** `cargo publish -p dayzmake` (the CLI depends on the published core).

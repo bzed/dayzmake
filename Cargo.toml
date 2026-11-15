@@ -1,54 +1,19 @@
-[package]
-name = "dayzmake"
-version = "2.0.0"
-description = "DayZ modding tools"
-license = "GPL-2.0-or-later"
-categories = ["command-line-utilities"]
-authors = ["KoffeinFlummi <koffeinflummi@protonmail.com>"]
-homepage = "https://github.com/bzed/dayzmake"
-repository = "https://github.com/bzed/dayzmake"
-readme = "README.md"
+[workspace]
+members = ["crates/dayzmake-core"]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
 rust-version = "1.99"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/bzed/dayzmake"
+authors = ["KoffeinFlummi <koffeinflummi@protonmail.com>"]
 
-[lib]
-name = "dayzmake"
-
-[[bench]]
-name = "preprocess"
-harness = false
-
-[[bench]]
-name = "config"
-harness = false
-
-[dependencies]
-colored = "2.1"
-byteorder = "1.5"
-docopt = "1.1"
-serde = { version = "1.0", features = ["derive"] }
-openssl = "0.10"
-linked-hash-map = "0.5.6"
-regex = "1.10"
-peg = "0.8"
-image = "0.24"
-texpresso = "2.0"
-lzo1x = "0.2.2"
-encoding_rs = "0.8"
-serde_json = "1"
-
-[target.'cfg(windows)'.dependencies]
-winreg = "0.52"
-
-[dev-dependencies]
-tempfile = "3.10"
-criterion = "0.5.1"
-
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
@@ -62,6 +27,44 @@ cast_possible_truncation = "deny"
 cast_sign_loss = "deny"
 cast_possible_wrap = "deny"
 float_cmp = "deny"
+
+[package]
+name = "dayzmake"
+version = "2.0.0"
+description = "DayZ modding tools"
+license.workspace = true
+keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
+categories = ["command-line-utilities", "game-development"]
+include = ["src/**/*", "/README.md", "/LICENSE", "/Cargo.toml"]
+authors.workspace = true
+repository.workspace = true
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "dayzmake"
+
+[dependencies]
+colored = "2.1"
+docopt = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+regex = "1.10"
+serde_json = "1"
+openssl = "0.10"
+image = "0.24"
+dayzmake-core = { path = "crates/dayzmake-core", version = "0.1.0" }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+
+[dev-dependencies]
+tempfile = "3.10"
+insta = { version = "1.49.0", features = ["json"] }
+lzo1x = "0.2.2"
+
+[lints]
+workspace = true
 
 [profile.release]
 overflow-checks = true

@@ -1,6 +1,6 @@
 #![no_main]
 
-use dayzmake::p3d::P3D;
+use dayzmake_core::p3d::P3D;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

@@ -1,0 +1,18 @@
+---
+source: tests/golden_cli.rs
+expression: r.out()
+---
+Header extensions:
+- prefix=golden\addon
+
+# Files: 6
+
+Path                                                  Method  Original    Packed
+                                                                  Size      Size
+================================================================================
+config.bin                                                 0       305       305
+data\mat.rvmat                                             0       319       319
+data\model.p3d                                             0      1204      1204
+data\readme.txt                                            0        14        14
+data\sub\deep.txt                                          0        12        12
+inc\macros.hpp                                             0        82        82

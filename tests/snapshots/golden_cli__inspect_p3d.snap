@@ -1,0 +1,27 @@
+---
+source: tests/golden_cli.rs
+expression: r.out()
+---
+Format:  MLOD (editable model)
+Version: 257
+LODs:    2
+
+  #  LOD                        Points    Faces  Normals  UV sets
+  0  Resolution 1                    4        3        2        2
+  1  Memory                          4        0        2        0
+
+Textures:
+- #(argb,8,8,3)color(0.5,0.5,0.5,1,CO) (1 faces)
+- t21\data\a_co.paa (1 faces)
+- t21\data\gone_co.paa (1 faces)
+Materials:
+- t21\data\m.rvmat (2 faces)
+
+Properties:
+- LOD 0: class = house
+- LOD 0: autocenter = 0
+- LOD 1: x = y
+
+Selections:
+- LOD 0 (Resolution 1): body, old
+- LOD 1 (Memory): start

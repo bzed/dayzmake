@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(10 + i as u64)
+---
+{
+  "content": [
+    {
+      "text": "wrote grad.paa",
+      "type": "text"
+    }
+  ],
+  "isError": false
+}

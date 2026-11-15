@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: a
+---
+{
+  "content": [
+    {
+      "text": "warnings:\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\nIn file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]\n\nwrote ../a.pbo",
+      "type": "text"
+    }
+  ],
+  "isError": false
+}

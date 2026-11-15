@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: "e.read(\"config.bin\")"
+extension: bin
+snapshot_kind: binary
+---

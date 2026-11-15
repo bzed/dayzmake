@@ -1,0 +1,7 @@
+---
+source: tests/golden_cli.rs
+expression: r.out()
+---
+class A {
+    x = "";
+};

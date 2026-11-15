@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::model::{ApiIndex, INDEX_FORMAT, InputStamp};
-use crate::error;
-use crate::error::warning;
+use dayzmake_core::error;
+use dayzmake_core::warning::{Warning, WarningSink};
 
 /// The cache directory, created (mode 0700 on unix) when missing: `$DAYZMAKE_CACHE`, else
 /// `$XDG_CACHE_HOME/dayzmake/api`, else `$HOME/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`).
@@ -107,8 +107,8 @@ fn store(dir: &Path, key: &str, index: &ApiIndex) -> Result<(), Error> {
     result
 }
 
-fn cache_warning(msg: &str) {
-    warning(msg, Some("api-cache"), (None, None));
+fn cache_warning(warnings: &mut dyn WarningSink, msg: &str) {
+    warnings.warn(Warning::new(Some("api-cache"), msg));
 }
 
 /// The cached index `key`, or the result of `build` when there is none, it does not parse, has another
@@ -124,7 +124,8 @@ pub fn cached(
     key: &str,
     inputs: &[PathBuf],
     refresh: bool,
-    build: impl FnOnce() -> Result<ApiIndex, Error>,
+    warnings: &mut dyn WarningSink,
+    build: impl FnOnce(&mut dyn WarningSink) -> Result<ApiIndex, Error>,
 ) -> Result<ApiIndex, Error> {
     if key.is_empty()
         || !key
@@ -134,7 +135,12 @@ pub fn cached(
         return Err(error!("invalid cache key \"{key}\""));
     }
     let dir = cache_dir()
-        .inspect_err(|e| cache_warning(&format!("{e}; the index is built without a cache")))
+        .inspect_err(|e| {
+            cache_warning(
+                warnings,
+                &format!("{e}; the index is built without a cache"),
+            );
+        })
         .ok();
     let want = stamps(inputs)?;
     if !refresh
@@ -143,12 +149,12 @@ pub fn cached(
     {
         return Ok(index);
     }
-    let mut index = build()?;
+    let mut index = build(warnings)?;
     index.inputs = want;
     if let Some(dir) = &dir {
         // The index is right either way; a cache that cannot be written only costs time.
         let _ = store(dir, key, &index)
-            .inspect_err(|e| cache_warning(&format!("cannot write the cache: {e}")));
+            .inspect_err(|e| cache_warning(warnings, &format!("cannot write the cache: {e}")));
     }
     Ok(index)
 }

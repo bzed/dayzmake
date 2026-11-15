@@ -2,6 +2,19 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Points `HOME` and the XDG directories of `cmd` at `home`, so a test never reads or writes the
+/// user's configuration or caches.
+fn isolate(cmd: &mut Command, home: &Path) {
+    cmd.env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env_remove("STEAM_ROOT")
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env_remove("BIOUTPUT");
+}
+
 /// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
 ///
 /// # Panics
@@ -21,11 +34,11 @@ pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
 #[must_use]
 #[expect(clippy::expect_used, reason = "test helper")]
 pub fn dayzmake_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("failed to run dayzmake");
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args).current_dir(cwd);
+    isolate(&mut cmd, home.path());
+    let out = cmd.output().expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
         out.stdout,
@@ -220,12 +233,13 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 #[must_use]
 #[expect(clippy::expect_used, reason = "test helper")]
 fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
-        .args(args)
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    isolate(&mut cmd, home.path());
+    cmd.args(args)
         .current_dir(cwd)
-        .env("DAYZ_TOOLS", "/nonexistent/dayz-tools")
-        .output()
-        .expect("failed to run dayzmake");
+        .env("DAYZ_TOOLS", "/nonexistent/dayz-tools");
+    let out = cmd.output().expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -236,6 +250,7 @@ fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
 fn prebinarized_build(file: &str, magic: &[u8]) {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
     std::fs::create_dir_all(&src).unwrap();
     let body = [magic, b"\x38\0\0\0 not a real model"].concat();
     std::fs::write(src.join(file), &body).unwrap();
@@ -269,6 +284,7 @@ fn build_keeps_prebinarized_rtm() {
 fn build_still_binarizes_mlod() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
     let (code, err) = dayzmake_no_tools(
@@ -341,4 +357,186 @@ fn readme_usage_block_equals_usage() {
         .and_then(|rest| rest.split("```\n").nth(1))
         .expect("the usage block");
     assert_eq!(block.trim(), dayzmake::run::USAGE.trim());
+}
+
+#[test]
+fn build_warnings_come_in_sorted_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/config.cpp", "class B { y = 2; };\n");
+    // created out of order; each file warns once
+    for name in ["b", "a", "c"] {
+        write(
+            dir.path(),
+            &format!("m/{name}.rvmat"),
+            "class A { x = foo; };\n",
+        );
+    }
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let order: Vec<&str> = err
+        .lines()
+        .filter(|l| l.contains("unquoted-string"))
+        .map(|l| l.split(':').next().unwrap())
+        .collect();
+    assert_eq!(order.len(), 3, "{err}");
+    assert!(
+        order[0].contains("a.rvmat")
+            && order[1].contains("b.rvmat")
+            && order[2].contains("c.rvmat"),
+        "{err}"
+    );
+}
+
+#[test]
+fn suppressed_warnings_are_summarised() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    for i in 0..12 {
+        std::fs::write(src.join(format!("c{i:02}.cpp")), b"\0raP\0\0\0\0").unwrap();
+    }
+    let (code, _, err) = dayzmake(&["build", "src", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err.matches("[prerapified-file]").count(), 10, "{err}");
+    assert!(
+        err.contains("2 warnings of type \"prerapified-file\" were suppressed to prevent spam. Use \"-w prerapified-file\" to disable these warnings entirely."),
+        "{err}"
+    );
+}
+
+/// A fake Steam tree whose `proton` creates the Wine prefix but fails every other run.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn fake_steam(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let tools = root.join("steamapps/common/DayZ Tools/Bin/Binarize");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::write(tools.join("binarize.exe"), b"").unwrap();
+    let proton_dir = root.join("steamapps/common/Proton Hotfix");
+    std::fs::create_dir_all(&proton_dir).unwrap();
+    let script = proton_dir.join("proton");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ncase \"$*\" in\n*cmd.exe*) mkdir -p \"$STEAM_COMPAT_DATA_PATH/pfx/dosdevices\"; exit 0;;\nesac\necho binarize exploded\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn build_failure_with_proton_removes_the_sandbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let steam = dir.path().join("steam");
+    let tmp = dir.path().join("tmp");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    fake_steam(&steam);
+    std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(["build", "--proton-binarize", "src", "out.pbo"])
+        .current_dir(dir.path())
+        .env("STEAM_ROOT", &steam)
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env("TMPDIR", &tmp)
+        .env("HOME", dir.path().join("home"))
+        .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
+        .env("XDG_CACHE_HOME", dir.path().join("xdg-cache"))
+        .env("XDG_DATA_HOME", dir.path().join("xdg-data"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("binarize exploded"), "{err}");
+    let left: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "sandbox left behind: {left:?}");
+}
+
+/// A fake Steam tree whose `proton` prints two lines, creates the prefix, and "binarizes" by
+/// writing a file into the output folder it is given.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn chatty_steam(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let tools = root.join("steamapps/common/DayZ Tools/Bin/Binarize");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::write(tools.join("binarize.exe"), b"").unwrap();
+    let proton_dir = root.join("steamapps/common/Proton Hotfix");
+    std::fs::create_dir_all(&proton_dir).unwrap();
+    let script = proton_dir.join("proton");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho first line\necho second line\ncase \"$*\" in\n*cmd.exe*) mkdir -p \"$STEAM_COMPAT_DATA_PATH/pfx/dosdevices\"; exit 0;;\nesac\nroot=$(dirname \"$STEAM_COMPAT_DATA_PATH\")\nout=$(printf '%s' \"$8\" | sed 's/^Z://; s#\\\\#/#g')\necho ODOL > \"$root$out/$9\"\nexit 0\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Proton's progress message and `BIOUTPUT=1` output are plain stderr lines: no `warning:`
+/// label, no `[name]`, one line per output line, and no per-name quota.
+#[cfg(unix)]
+#[test]
+fn proton_messages_stay_plain_stderr_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let steam = dir.path().join("steam");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    chatty_steam(&steam);
+    for i in 0..12 {
+        std::fs::write(src.join(format!("m{i:02}.p3d")), b"MLOD\x01\x01\0\0").unwrap();
+    }
+    let home = dir.path().join("home");
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(["build", "--proton-binarize", "src", "out.pbo"])
+        .current_dir(dir.path())
+        .env("STEAM_ROOT", &steam)
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env("BIOUTPUT", "1")
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let lines: Vec<&str> = err.lines().collect();
+    // one prefix run plus twelve models, two lines each
+    assert_eq!(
+        lines.iter().filter(|l| **l == "first line").count(),
+        13,
+        "{err}"
+    );
+    assert_eq!(
+        lines.iter().filter(|l| **l == "second line").count(),
+        13,
+        "{err}"
+    );
+    assert!(
+        lines.contains(&"Creating a Wine prefix for binarize.exe (the first run takes a while)..."),
+        "{err}"
+    );
+    assert!(!err.contains("warning: Creating"), "{err}");
+    assert!(!err.contains("[proton"), "{err}");
+    assert!(!err.contains("[binarize-output]"), "{err}");
+}
+
+#[test]
+fn pack_rejects_a_header_extension_without_equals() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "a").unwrap();
+    let (code, _, err) = dayzmake(&["pack", "-e", "bad", ".", "../out.pbo"], &src);
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("Invalid header extension \"bad\" (expected key=value)."),
+        "{err}"
+    );
 }

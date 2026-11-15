@@ -1,17 +1,20 @@
 //! Mutation test for the readers of untrusted files: byte-flipped and truncated copies of the
 //! fixtures must make the readers return an error or a value, never panic, hang or abort.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Cursor;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
-use dayzmake::config::Config;
-use dayzmake::p3d::{self, P3D};
-use dayzmake::paa::Paa;
-use dayzmake::pbo::PBO;
-use dayzmake::sign::{BIPrivateKey, BIPublicKey, BISign};
+use dayzmake_core::config::Config;
+use dayzmake_core::p3d::{self, P3D};
+use dayzmake_core::paa::Paa;
+use dayzmake_core::pbo::PBO;
+use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const MUTANTS_PER_FILE: usize = 300;
@@ -59,7 +62,7 @@ fn feed(ext: &str, data: &[u8]) {
     match ext {
         "pbo" => {
             if let Ok(pbo) = PBO::read(&mut Cursor::new(data)) {
-                let names: Vec<String> = pbo.files.keys().cloned().collect();
+                let names: Vec<String> = pbo.entry_names().map(str::to_string).collect();
                 for name in names {
                     if let Ok(Some(content)) = pbo.file_data(&name)
                         && name.to_lowercase().ends_with(".bin")
@@ -235,7 +238,7 @@ fn paa_zero_width_decode_is_an_error_not_a_panic() {
     // [0x11, 0, 0] is the LZO end-of-stream marker: it decompresses to 0 bytes
     let bytes = paa_with_mip(0xff01, 0x8000, 8, &[0x11, 0, 0]);
     let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
-    assert_eq!(paa.width, 0);
+    assert_eq!(paa.width(), 0);
     assert!(paa.to_dynamic_image().is_err());
 }
 
@@ -276,7 +279,8 @@ fn paa_lzo_expansion_is_bounded_in_total() {
 /// separator in it the signature used to be written below a directory the key file picked.
 #[test]
 fn sign_rejects_a_key_name_with_a_path_separator() {
-    use dayzmake::sign::{BISignVersion, cmd_sign};
+    use dayzmake::commands::sign::cmd_sign;
+    use dayzmake_core::sign::BISignVersion;
 
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
     let key = fs::read(fixtures.join("armk.biprivatekey")).expect("fixture");
@@ -305,20 +309,8 @@ fn sign_rejects_a_key_name_with_a_path_separator() {
 
 /// A PBO with the given entry names and header extensions, built through the library.
 fn crafted_pbo(names: &[&str], extensions: &[(&str, &str)]) -> Vec<u8> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).expect("pbo");
-    pbo.files.clear();
-    for name in names {
-        pbo.files.insert(
-            (*name).to_string(),
-            Cursor::new(b"x".to_vec().into_boxed_slice()),
-        );
-    }
-    for (k, v) in extensions {
-        pbo.header_extensions
-            .insert((*k).to_string(), (*v).to_string());
-    }
-    pbo.to_cursor().expect("cursor").into_inner()
+    let entries: Vec<(&str, &[u8])> = names.iter().map(|n| (*n, b"x".as_slice())).collect();
+    support::raw_pbo(&entries, extensions)
 }
 
 /// Runs the binary in `cwd`; returns (stdout, stderr).
@@ -370,4 +362,18 @@ fn paa_decoded_size_is_bounded() {
     let bytes = paa_with_mip(0xff01, 0x8000 | 16384, 16384, &packed);
     let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
     assert!(paa.to_dynamic_image().is_err());
+}
+
+#[test]
+fn duplicate_header_extension_keys_read_and_write_deterministically() {
+    let bytes = support::raw_pbo(
+        &[("a.txt", b"x")],
+        &[("prefix", "p"), ("k", "1"), ("j", "x"), ("k", "2")],
+    );
+    let pbo = PBO::read(&mut &bytes[..]).expect("read");
+    let pairs: Vec<(&str, &str)> = pbo.header_extensions().collect();
+    assert_eq!(pairs, [("prefix", "p"), ("k", "2"), ("j", "x")]);
+    let first = pbo.to_cursor().expect("write").into_inner();
+    let second = pbo.to_cursor().expect("write").into_inner();
+    assert_eq!(first, second);
 }

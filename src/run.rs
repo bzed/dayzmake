@@ -5,16 +5,14 @@ use std::path::{Path, PathBuf};
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
-use crate::binarize;
-use crate::config;
-use crate::error;
-use crate::error::{ErrorExt, print_warning_summary};
-use crate::io::{Input, Output};
-use crate::p3d;
-use crate::paa;
-use crate::pbo;
-use crate::preprocess;
-use crate::sign;
+use crate::cli_io::{Input, Output, create_target};
+use crate::cli_warnings::{PrintError, PrintWarnings};
+use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use dayzmake_core::error;
+use dayzmake_core::error::ErrorExt;
+use dayzmake_core::p3d::model_magic;
+use dayzmake_core::sign::BISignVersion;
+use dayzmake_core::warning::WarningSink;
 
 use serde::Deserialize;
 
@@ -198,7 +196,7 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        Ok(Output::File(crate::io::create_target(
+        Ok(Output::File(create_target(
             Path::new(target),
             args.flag_force,
         )?))
@@ -211,33 +209,35 @@ fn get_output(args: &Args) -> Result<Output, Error> {
     clippy::too_many_lines,
     reason = "one branch per CLI command keeps the dispatch readable"
 )]
-fn run_command(args: &Args) -> Result<(), Error> {
+fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_mcp {
-        crate::mcp::serve(std::io::stdin().lock(), stdout())
+        crate::mcp::serve(std::io::stdin().lock(), stdout(), args.flag_verbose)
     } else if args.cmd_api {
-        run_api(args)
+        run_api(args, warnings)
     } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
-        binarize::cmd_binarize(source, &target, args.flag_force)
+        binarize::cmd_binarize(source, &target, args.flag_force, warnings)
     } else if args.cmd_rapify {
         config::cmd_rapify(
             &mut get_input(args)?,
             &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
+            warnings,
         )
     } else if args.cmd_derapify {
         config::cmd_derapify(&mut get_input(args)?, &mut get_output(args)?)
     } else if args.cmd_preprocess {
-        preprocess::cmd_preprocess(
+        config::cmd_preprocess(
             &mut get_input(args)?,
             &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
+            warnings,
         )
     } else if args.cmd_build || args.cmd_pack {
         let flag_privatekey = args.flag_key.as_ref().map(PathBuf::from);
@@ -248,19 +248,28 @@ fn run_command(args: &Args) -> Result<(), Error> {
         }
 
         if args.cmd_build {
-            pbo::cmd_build(
-                PathBuf::from(&args.arg_sourcefolder),
+            // `close()` below removes the Proton sandbox on success and failure alike, before any exit
+            let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
+            let built = pbo::cmd_build(
+                Path::new(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &includefolders,
-            )?;
+                binarizer.as_mut(),
+                warnings,
+            );
+            // the build error wins over a cleanup error
+            let closed = binarizer.map_or(Ok(()), |b| b.close(warnings));
+            built?;
+            closed?;
         } else {
             pbo::cmd_pack(
-                PathBuf::from(&args.arg_sourcefolder),
+                Path::new(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
+                warnings,
             )?;
         }
 
@@ -270,7 +279,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
                 pkey,
                 target,
                 flag_signature,
-                sign::BISignVersion::V3,
+                BISignVersion::V3,
                 args.flag_force,
             )?;
         }
@@ -278,7 +287,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
         Ok(())
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
-        if p3d::model_magic(&mut input)?.is_some() {
+        if model_magic(&mut input)?.is_some() {
             p3d::cmd_inspect(&mut input, &mut stdout())
         } else {
             pbo::cmd_inspect(&mut input, &mut stdout())
@@ -295,14 +304,15 @@ fn run_command(args: &Args) -> Result<(), Error> {
             &PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
             args.flag_use_prefix,
+            warnings,
         )
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
     } else if args.cmd_sign {
         let version = if args.flag_v2 {
-            sign::BISignVersion::V2
+            BISignVersion::V2
         } else {
-            sign::BISignVersion::V3
+            BISignVersion::V3
         };
         sign::cmd_sign(
             PathBuf::from(&args.arg_privatekey),
@@ -337,7 +347,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
 }
 
 /// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
-fn run_api(args: &Args) -> Result<(), Error> {
+fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let ctx = api::ApiContext {
         branch: if args.flag_experimental {
             Branch::Experimental
@@ -351,14 +361,14 @@ fn run_api(args: &Args) -> Result<(), Error> {
     #[expect(clippy::print_stdout, reason = "CLI command output")]
     {
         if args.cmd_mods {
-            let text = api::mods_text(&ctx, args.flag_json)?;
+            let text = api::mods_text(&ctx, args.flag_json, warnings)?;
             if !text.is_empty() {
                 println!("{text}");
             }
             return Ok(());
         }
         if args.cmd_update {
-            for line in api::update_lines(&ctx)? {
+            for line in api::update_lines(&ctx, warnings)? {
                 println!("{line}");
             }
             return Ok(());
@@ -368,7 +378,7 @@ fn run_api(args: &Args) -> Result<(), Error> {
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
         if args.cmd_src && args.flag_cat {
-            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json)?;
+            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json, warnings)?;
             if args.flag_json {
                 println!("{text}");
             } else {
@@ -406,7 +416,14 @@ fn run_api(args: &Args) -> Result<(), Error> {
         } else {
             return Err(error!("no api command given"));
         };
-        for line in api::answer(&ctx, &query, max, args.flag_json, args.flag_verbose)? {
+        for line in api::answer(
+            &ctx,
+            &query,
+            max,
+            args.flag_json,
+            args.flag_verbose,
+            warnings,
+        )? {
             println!("{line}");
         }
     }
@@ -429,6 +446,39 @@ fn required_target(args: &Args) -> Result<PathBuf, Error> {
         .ok_or_else(|| error!("missing <target> argument"))
 }
 
+/// The binarizer for this platform: native on Windows, Proton on unix when `proton` is set,
+/// otherwise none (models are then copied with a warning).
+///
+/// # Errors
+///
+/// Returns an error if the backend cannot be created.
+pub fn platform_binarizer(
+    proton: bool,
+) -> Result<Option<dayzmake_core::binarize::Binarizer>, Error> {
+    if cfg!(windows) {
+        Ok(Some(dayzmake_core::binarize::Binarizer::new(
+            dayzmake_core::binarize::BinarizeBackend::Native,
+        )?))
+    } else if proton {
+        Ok(Some(dayzmake_core::binarize::Binarizer::new(
+            dayzmake_core::binarize::BinarizeBackend::Proton,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_binarizer_follows_the_proton_flag_on_unix() {
+        assert!(platform_binarizer(false).unwrap().is_none());
+        assert!(platform_binarizer(true).unwrap().is_some());
+    }
+}
+
 /// Entry point driving the CLI: handles `--version`, then dispatches to the command.
 pub fn args(args: &mut Args) {
     if args.flag_indent.is_none() {
@@ -443,11 +493,8 @@ pub fn args(args: &mut Args) {
         std::process::exit(0);
     }
 
-    binarize::set_proton(args.flag_proton_binarize);
-    error::init_warnings(args.flag_warning.clone(), args.flag_verbose);
-    let result = run_command(args);
-    binarize::cleanup(); // must happen before print_error, which exits on error
+    let mut warnings = PrintWarnings::new(args.flag_warning.clone(), args.flag_verbose);
+    let result = run_command(args, &mut warnings);
+    warnings.print_summary();
     result.print_error(true);
-
-    print_warning_summary();
 }

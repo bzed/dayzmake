@@ -1,0 +1,6 @@
+---
+source: tests/golden_cli.rs
+expression: r.err()
+---
+In file config.cpp:18: warning: String value "((2) * (3))" is not quoted properly. [unquoted-string]
+In file config.cpp:28: warning: String value "unquotedvalue" is not quoted properly. [unquoted-string]

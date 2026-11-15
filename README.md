@@ -3,6 +3,9 @@ dayzmake
 
 [![](https://github.com/bzed/dayzmake/actions/workflows/ci.yml/badge.svg)](https://github.com/bzed/dayzmake/actions/workflows/ci.yml)
 [![](https://github.com/bzed/dayzmake/actions/workflows/codeql.yml/badge.svg)](https://github.com/bzed/dayzmake/actions/workflows/codeql.yml)
+[![crates.io](https://img.shields.io/crates/v/dayzmake.svg)](https://crates.io/crates/dayzmake)
+[![crates.io](https://img.shields.io/crates/v/dayzmake-core.svg)](https://crates.io/crates/dayzmake-core)
+[![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 [![](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
 DayZ modding tools written in Rust: PBO packing and unpacking, config
@@ -159,6 +162,22 @@ Options:
 ```
 
 See `dayzmake --help` for more.
+
+## Using dayzmake-core as a library
+
+The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
+(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures, with no CLI dependencies. It never
+prints; warnings go to a `WarningSink` you provide, so it is safe to use from many threads.
+
+```
+cargo add dayzmake-core
+```
+
+Features: `sign` (BI keys and signatures, needs OpenSSL) and `image` (PAA from and to images), both on by
+default; `default-features = false` builds without them. The
+[API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
+The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
+independently of the CLI.
 
 ## Script API index
 

@@ -1723,7 +1723,8 @@ mod from_pbo {
     use dayzmake::api::model::{ApiIndex, INDEX_FORMAT};
     use dayzmake::api::source::{ModSpec, parse_mods, resolve_mod};
     use dayzmake::api::steam::Branch;
-    use dayzmake::pbo::PBO;
+    use dayzmake_core::pbo::{PBO, PackOptions};
+    use dayzmake_core::warning::Warnings;
 
     use super::fixture;
 
@@ -1752,7 +1753,13 @@ mod from_pbo {
         if let Some(p) = prefix {
             fs::write(work.path().join("$PBOPREFIX$"), p).expect("prefix");
         }
-        let pbo = PBO::from_directory(work.path().to_path_buf(), false, &[], &[]).expect("pbo");
+        let pbo = PBO::from_directory(
+            work.path(),
+            &PackOptions::pack(),
+            None,
+            &mut Warnings::new(),
+        )
+        .expect("pbo");
         fs::create_dir_all(out.parent().expect("parent")).expect("mkdir");
         let mut f = fs::File::create(out).expect("create");
         pbo.write(&mut f).expect("write pbo");
@@ -1963,7 +1970,7 @@ mod from_pbo {
             assert_eq!(mode & 0o777, 0o700);
         }
         let idx = ApiIndex::new("x", "x", "x");
-        let r = cached("../evil", &[], false, || Ok(idx));
+        let r = cached("../evil", &[], false, &mut Warnings::new(), |_| Ok(idx));
         assert!(r.is_err());
         assert!(stamps(&[w.cache.join("missing")]).is_err());
     }
@@ -2318,6 +2325,7 @@ mod from_pbo {
             Branch::Stable,
             std::slice::from_ref(&w.root),
             Some(&game),
+            &mut Warnings::new(),
         )
     }
 

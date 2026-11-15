@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(2)
+---
+{
+  "content": [
+    {
+      "text": "Failed to open \"nope.pbo\": No such file or directory (os error 2)",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

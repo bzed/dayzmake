@@ -1,0 +1,5 @@
+---
+source: tests/golden_cli.rs
+expression: second.err()
+---
+error: Target file "kk.biprivatekey" already exists. Use --force to overwrite.

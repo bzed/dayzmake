@@ -31,13 +31,21 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Rustdoc
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: cargo deny
         run: cargo deny check
+      - name: Feature combinations
+        run: |
+          cargo clippy -p dayzmake-core --no-default-features --lib --locked -- -D warnings
+          cargo clippy -p dayzmake-core --no-default-features --features sign --lib --locked -- -D warnings
+          cargo clippy -p dayzmake-core --no-default-features --features image --lib --locked -- -D warnings
+          cargo test -p dayzmake-core --no-default-features --locked
+      - name: Package check
+        run: cargo package --workspace --locked
       - name: Coverage floor
-        run: cargo llvm-cov --all-features --fail-under-lines 70
+        run: cargo llvm-cov --workspace --all-features --fail-under-lines 70
 
   coverage:
     name: Coverage (Codecov)
@@ -73,6 +81,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-fuzz
+      - run: make docsrs
       - run: make fuzz
 
   linux:
@@ -84,7 +93,7 @@ jobs:
       - name: Install build dependencies
         run: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Test
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Build
         run: cargo build --release --locked
       - name: Package
@@ -111,8 +120,10 @@ jobs:
         run: |
           vcpkg install openssl:x64-windows-static-md
           "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md" >> $env:GITHUB_ENV
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --locked --no-fail-fast
+        run: cargo test --workspace --locked --no-fail-fast
       - name: Build
         run: cargo build --release --locked
       - name: Package

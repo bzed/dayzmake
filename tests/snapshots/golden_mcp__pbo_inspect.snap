@@ -1,0 +1,13 @@
+---
+source: tests/golden_mcp.rs
+expression: r.result(10 + i as u64)
+---
+{
+  "content": [
+    {
+      "text": "Header extensions:\n- prefix=golden\\addon\n\n# Files: 7\n\nPath                                                  Method  Original    Packed\n                                                                  Size      Size\n================================================================================\nconfig.bin                                                 0       305       305\ndata\\mat.rvmat                                             0       319       319\ndata\\model.p3d                                             0      1204      1204\ndata\\readme.txt                                            0        14        14\ndata\\sub\\deep.txt                                          0        12        12\ngrad.png                                                   0       474       474\ninc\\macros.hpp                                             0        82        82\n",
+      "type": "text"
+    }
+  ],
+  "isError": false
+}

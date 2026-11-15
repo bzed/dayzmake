@@ -1,0 +1,10 @@
+---
+source: tests/golden_cli.rs
+expression: r.err()
+---
+error: In line bad.cpp:1:
+
+  class A { = 1; };
+            ^
+
+Unexpected token "=", expected: one of "__EXEC", "class", "delete", "}", ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']

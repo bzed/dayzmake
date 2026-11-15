@@ -1,0 +1,5 @@
+---
+source: tests/golden_cli.rs
+expression: "String::from_utf8_lossy(&e.read(\"t\"))"
+---
+golden readme

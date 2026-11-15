@@ -1,0 +1,5 @@
+---
+source: tests/golden_cli.rs
+expression: "format!(\"{}x{}\", img.width(), img.height())"
+---
+64x64

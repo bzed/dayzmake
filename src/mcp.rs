@@ -17,15 +17,13 @@ use serde_json::{Map, Value, json};
 use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
-use crate::binarize;
-use crate::config;
-use crate::error::{ErrorExt, capture_warnings};
-use crate::io::create_target;
-use crate::p3d;
-use crate::paa;
-use crate::pbo;
-use crate::preprocess;
-use crate::sign;
+use crate::cli_io::create_target;
+use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use dayzmake_core::error;
+use dayzmake_core::error::ErrorExt;
+use dayzmake_core::p3d::model_magic;
+use dayzmake_core::sign::BISignVersion;
+use dayzmake_core::warning::{WarningKind, WarningSink, Warnings};
 
 /// Longest request line accepted; a longer one is answered with an error and skipped.
 const MAX_LINE: usize = 16 * 1024 * 1024;
@@ -95,14 +93,15 @@ fn read_line<R: BufRead>(input: &mut R, cap: usize) -> io::Result<Line> {
 /// # Errors
 ///
 /// Returns an error when reading the input or writing the output fails.
-pub fn serve<R: BufRead, W: Write>(input: R, output: W) -> Result<(), Error> {
-    serve_with_limit(input, output, MAX_LINE)
+pub fn serve<R: BufRead, W: Write>(input: R, output: W, verbose: bool) -> Result<(), Error> {
+    serve_with_limit(input, output, MAX_LINE, verbose)
 }
 
 fn serve_with_limit<R: BufRead, W: Write>(
     mut input: R,
     mut output: W,
     cap: usize,
+    verbose: bool,
 ) -> Result<(), Error> {
     loop {
         let reply = match read_line(&mut input, cap)? {
@@ -112,7 +111,7 @@ fn serve_with_limit<R: BufRead, W: Write>(
                 INVALID_REQUEST,
                 "request line too long",
             )),
-            Line::Text(line) => handle_line(&line),
+            Line::Text(line) => handle_line(&line, verbose),
         };
         if let Some(reply) = reply {
             writeln!(output, "{reply}")?;
@@ -126,7 +125,7 @@ fn error_reply(id: &Value, code: i64, message: &str) -> Value {
 }
 
 /// Handles one request line; `None` for notifications and blank lines.
-fn handle_line(line: &[u8]) -> Option<Value> {
+fn handle_line(line: &[u8], verbose: bool) -> Option<Value> {
     if line.iter().all(u8::is_ascii_whitespace) {
         return None;
     }
@@ -156,13 +155,13 @@ fn handle_line(line: &[u8]) -> Option<Value> {
     };
     // notifications never get a reply
     let id = id?;
-    Some(match dispatch(method, request.get("params")) {
+    Some(match dispatch(method, request.get("params"), verbose) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err((code, message)) => error_reply(id, code, &message),
     })
 }
 
-fn dispatch(method: &str, params: Option<&Value>) -> Result<Value, (i64, String)> {
+fn dispatch(method: &str, params: Option<&Value>, verbose: bool) -> Result<Value, (i64, String)> {
     match method {
         "initialize" => {
             let asked = params
@@ -205,33 +204,47 @@ fn dispatch(method: &str, params: Option<&Value>) -> Result<Value, (i64, String)
             }) {
                 return Err((INVALID_PARAMS, format!("unknown tool \"{name}\"")));
             }
-            Ok(run_tool(name, args))
+            Ok(run_tool(name, args, verbose))
         }
         _ => Err((METHOD_NOT_FOUND, format!("method not found: {method}"))),
     }
 }
 
 /// Runs a tool and wraps its output (or its failure) as an MCP tool result.
-fn run_tool(name: &str, args: &Args) -> Value {
+fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
     let (offset, length) = match window_args(name, args) {
         Ok(w) => w,
         Err(e) => {
             return json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true});
         }
     };
-    // A panic in a tool must not kill the server. The closure only borrows plain data and the
-    // global state it touches (warning capture, proton flag) is reset below or by its guards.
-    let outcome = catch_unwind(AssertUnwindSafe(|| {
-        capture_warnings(|| call_tool(name, args))
-    }));
-    binarize::set_proton(false);
-    binarize::cleanup();
+    // A panic in a tool must not kill the server. The closure only borrows plain data and it
+    // holds no global state (a Binarizer is dropped while unwinding). Every call has its own
+    // warnings, with their own quotas.
+    let mut sink = Warnings::new();
+    if verbose {
+        sink.unlimited();
+    }
+    let outcome = catch_unwind(AssertUnwindSafe(|| call_tool(name, args, &mut sink)));
+    // notes (Proton progress, binarize.exe output) go to the server's stderr as they always did;
+    // stdout carries only JSON-RPC frames
+    let mut warnings: Vec<String> = Vec::new();
+    for w in sink.warnings() {
+        if w.kind == WarningKind::Note {
+            #[expect(clippy::print_stderr, reason = "notes go to the server's stderr")]
+            {
+                eprintln!("{w}");
+            }
+        } else {
+            warnings.push(w.to_string());
+        }
+    }
     let (text, is_error) = match outcome {
-        Ok((Ok(out), warnings)) => (
+        Ok(Ok(out)) => (
             with_warnings(&window(&out, offset, length), &warnings),
             false,
         ),
-        Ok((Err(e), warnings)) => (
+        Ok(Err(e)) => (
             with_warnings(&window(&e.to_string(), 0, MAX_OUTPUT), &warnings),
             true,
         ),
@@ -735,9 +748,9 @@ fn include_folders(args: &Args) -> Result<Vec<PathBuf>, Error> {
 // ---- tools ----
 
 /// Runs the named tool and returns its output text.
-fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
+fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
-        n if n.starts_with("api_") => api_tool_call(n, args),
+        n if n.starts_with("api_") => api_tool_call(n, args, warnings),
         "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?),
         "pbo_cat" => pbo_cat(args),
         "pbo_unpack" => {
@@ -747,6 +760,7 @@ fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
                 &target,
                 bool_arg(args, "force")?,
                 bool_arg(args, "use_prefix")?,
+                warnings,
             )?;
             Ok(format!(
                 "unpacked {} to {}",
@@ -754,13 +768,13 @@ fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
                 target.display()
             ))
         }
-        "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args),
-        _ => file_tool(name, args),
+        "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args, warnings),
+        _ => file_tool(name, args, warnings),
     }
 }
 
 /// The tools for configs, textures, keys, signatures and models.
-fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
+fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
         "config_rapify" => {
             let source = path_arg(args, "source")?;
@@ -770,6 +784,7 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
                 &mut out,
                 Some(source),
                 &include_folders(args)?,
+                warnings,
             )?;
             write_target(&path_arg(args, "target")?, &out, bool_arg(args, "force")?)
         }
@@ -781,11 +796,12 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
         "config_preprocess" => {
             let source = path_arg(args, "source")?;
             let mut out = Vec::new();
-            preprocess::cmd_preprocess(
+            config::cmd_preprocess(
                 &mut open(&source)?,
                 &mut out,
                 Some(source),
                 &include_folders(args)?,
+                warnings,
             )?;
             text_or_target(args, &out)
         }
@@ -819,9 +835,9 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
         }
         "pbo_sign" => {
             let version = if bool_arg(args, "v2")? {
-                sign::BISignVersion::V2
+                BISignVersion::V2
             } else {
-                sign::BISignVersion::V3
+                BISignVersion::V3
             };
             sign::cmd_sign(
                 path_arg(args, "private_key")?,
@@ -842,7 +858,12 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
         }
         "binarize" => {
             let target = path_arg(args, "target")?;
-            binarize::cmd_binarize(path_arg(args, "source")?, &target, bool_arg(args, "force")?)?;
+            binarize::cmd_binarize(
+                path_arg(args, "source")?,
+                &target,
+                bool_arg(args, "force")?,
+                warnings,
+            )?;
             Ok(format!("wrote {}", target.display()))
         }
         _ => Err(error!("unknown tool \"{name}\"")),
@@ -882,12 +903,16 @@ fn api_context(args: &Args, refresh: bool) -> Result<ApiContext, Error> {
     })
 }
 
-fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
+fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     if name == "api_mods" {
-        return api::mods_text(&api_context(args, false)?, bool_arg(args, "json")?);
+        return api::mods_text(
+            &api_context(args, false)?,
+            bool_arg(args, "json")?,
+            warnings,
+        );
     }
     if name == "api_update" {
-        return Ok(api::update_lines(&api_context(args, true)?)?.join("\n"));
+        return Ok(api::update_lines(&api_context(args, true)?, warnings)?.join("\n"));
     }
     let ctx = api_context(args, false)?;
     let json = bool_arg(args, "json")?;
@@ -914,7 +939,7 @@ fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
         "api_source" => {
             let name = str_arg(args, "name")?;
             if bool_arg(args, "cat")? {
-                let text = api::src_cat(&ctx, &name, json)?;
+                let text = api::src_cat(&ctx, &name, json, warnings)?;
                 return match opt_path(args, "target")? {
                     Some(target) => {
                         write_target(&target, text.as_bytes(), bool_arg(args, "force")?)
@@ -929,13 +954,13 @@ fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
         },
         _ => return Err(error!("unknown tool \"{name}\"")),
     };
-    Ok(api::answer(&ctx, &query, max_arg(args)?, json, false)?.join("\n"))
+    Ok(api::answer(&ctx, &query, max_arg(args)?, json, false, warnings)?.join("\n"))
 }
 
 fn pbo_inspect(path: &Path) -> Result<String, Error> {
     let mut file = open(path)?;
     let mut out = Vec::new();
-    if p3d::model_magic(&mut file)?.is_some() {
+    if model_magic(&mut file)?.is_some() {
         p3d::cmd_inspect(&mut file, &mut out)?;
     } else {
         pbo::cmd_inspect(&mut file, &mut out)?;
@@ -962,7 +987,7 @@ fn pbo_cat(args: &Args) -> Result<String, Error> {
 }
 
 /// `pbo_pack` and `pbo_build`: like the CLI commands, including signing with `key`.
-fn pack(build: bool, args: &Args) -> Result<String, Error> {
+fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     let source = path_arg(args, "source")?;
     let target = path_arg(args, "target")?;
     let force = bool_arg(args, "force")?;
@@ -970,22 +995,28 @@ fn pack(build: bool, args: &Args) -> Result<String, Error> {
     let exclude = strs_arg(args, "exclude")?;
     let key = opt_path(args, "key")?;
     if build {
-        // Only the build can binarize; the flag is reset by `run_tool` after the call.
-        binarize::set_proton(bool_arg(args, "proton_binarize")?);
+        // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
+        let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
         let mut file = create_target(&target, force)?;
-        pbo::cmd_build(
-            source,
+        let result = pbo::cmd_build(
+            &source,
             &mut file,
             &headerext,
             &exclude,
             &include_folders(args)?,
-        )?;
+            binarizer.as_mut(),
+            warnings,
+        );
+        // the build error wins over a cleanup error
+        let closed = binarizer.map_or(Ok(()), |b| b.close(warnings));
+        result?;
+        closed?;
     } else {
         let mut file = create_target(&target, force)?;
-        pbo::cmd_pack(source, &mut file, &headerext, &exclude)?;
+        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;
     }
     if let Some(key) = key {
-        sign::cmd_sign(key, target.clone(), None, sign::BISignVersion::V3, force)?;
+        sign::cmd_sign(key, target.clone(), None, BISignVersion::V3, force)?;
         return Ok(format!("wrote and signed {}", target.display()));
     }
     Ok(format!("wrote {}", target.display()))

@@ -13,10 +13,11 @@ use regex::Regex;
 use super::model::{ApiIndex, Module};
 use super::parse::{ScriptFile, active_defines, collect_defines, index_scripts};
 use super::steam::{Branch, workshop_dir};
-use crate::config::Config;
-use crate::error;
-use crate::error::{printable, warning};
-use crate::pbo::{PBO, safe_relative_path};
+use dayzmake_core::config::Config;
+use dayzmake_core::error;
+use dayzmake_core::error::printable;
+use dayzmake_core::pbo::{PBO, safe_relative_path};
+use dayzmake_core::warning::{Warning, WarningSink};
 
 /// Mod aliases: name and Steam workshop id.
 const ALIASES: [(&str, u64); 4] = [
@@ -224,38 +225,48 @@ struct Selected {
 }
 
 /// Read the `.c` entries and the config of a PBO by seeking to them; the rest of the PBO is never read.
-fn read_selected(path: &Path, origin: &str, with_config: bool) -> Result<Selected, Error> {
+fn read_selected(
+    path: &Path,
+    origin: &str,
+    with_config: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Selected, Error> {
     let mut file = File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
     let sel = PBO::read_entries(&mut file, |n| is_script(n) || (with_config && is_config(n)))
         .map_err(|e| error!("{}: {e}", path.display()))?;
     let mut out = Selected {
-        prefix_ext: sel.header_extensions.get("prefix").cloned(),
+        prefix_ext: sel.header_extension("prefix").map(str::to_string),
         config: Vec::new(),
         texts: Vec::new(),
     };
-    for (name, data) in sel.entries {
-        let bytes = match data {
+    for entry in sel.entries() {
+        let name = entry.name().to_string();
+        let bytes = match entry.data() {
             Ok(b) => b,
             Err(e) => {
-                warning(
-                    format!("cannot read {:?}: {e}", printable(&name)),
-                    Some("api-bad-entry"),
-                    (Some(origin.to_string()), None),
+                warnings.warn(
+                    Warning::new(
+                        Some("api-bad-entry"),
+                        format!("cannot read {:?}: {e}", printable(&name)),
+                    )
+                    .in_file(origin.to_string()),
                 );
                 continue;
             }
         };
         if is_config(&name) {
-            out.config.push((name, bytes));
+            out.config.push((name, bytes.to_vec()));
         } else if safe_relative_path(&name).is_none() {
-            warning(
-                format!("skipping unsafe entry name {:?}", printable(&name)),
-                Some("api-unsafe-entry"),
-                (Some(origin.to_string()), None),
+            warnings.warn(
+                Warning::new(
+                    Some("api-unsafe-entry"),
+                    format!("skipping unsafe entry name {:?}", printable(&name)),
+                )
+                .in_file(origin.to_string()),
             );
         } else {
             out.texts
-                .push((name, String::from_utf8_lossy(&bytes).into_owned()));
+                .push((name, String::from_utf8_lossy(bytes).into_owned()));
         }
     }
     Ok(out)
@@ -266,9 +277,14 @@ fn read_selected(path: &Path, origin: &str, with_config: bool) -> Result<Selecte
 /// # Errors
 ///
 /// Returns an error when the PBO cannot be read.
-pub fn build_vanilla(scripts_pbo: &Path, branch: Branch, build: &str) -> Result<ApiIndex, Error> {
+pub fn build_vanilla(
+    scripts_pbo: &Path,
+    branch: Branch,
+    build: &str,
+    warnings: &mut dyn WarningSink,
+) -> Result<ApiIndex, Error> {
     let origin = scripts_pbo.display().to_string();
-    let texts = read_selected(scripts_pbo, &origin, false)?.texts;
+    let texts = read_selected(scripts_pbo, &origin, false, warnings)?.texts;
     let files: Vec<ScriptFile<'_>> = texts
         .iter()
         .map(|(path, text)| ScriptFile {
@@ -303,16 +319,22 @@ fn meta_name(dir: &Path) -> Option<String> {
 }
 
 /// The `config.bin` (derapified) or `config.cpp` text of a PBO, empty when there is none.
-fn config_text(config: &[(String, Vec<u8>)], origin: &str) -> String {
+fn config_text(
+    config: &[(String, Vec<u8>)],
+    origin: &str,
+    warnings: &mut dyn WarningSink,
+) -> String {
     let find = |wanted: &str| config.iter().find(|(n, _)| n.eq_ignore_ascii_case(wanted));
     if let Some((_, bytes)) = find("config.bin") {
         return match Config::read_rapified(&mut Cursor::new(bytes)).and_then(|c| c.to_string()) {
             Ok(text) => text,
             Err(e) => {
-                warning(
-                    format!("cannot read config.bin: {e}"),
-                    Some("api-bad-config"),
-                    (Some(origin.to_string()), None),
+                warnings.warn(
+                    Warning::new(
+                        Some("api-bad-config"),
+                        format!("cannot read config.bin: {e}"),
+                    )
+                    .in_file(origin.to_string()),
                 );
                 String::new()
             }
@@ -349,7 +371,12 @@ struct ModPbo {
 }
 
 /// The PBO prefix in `\` form; the file stem when there is none. `None` when it is unsafe.
-fn pbo_prefix(prefix_ext: Option<&String>, path: &Path, origin: &str) -> Option<String> {
+fn pbo_prefix(
+    prefix_ext: Option<&String>,
+    path: &Path,
+    origin: &str,
+    warnings: &mut dyn WarningSink,
+) -> Option<String> {
     let prefix = match prefix_ext {
         Some(p) if !p.trim().is_empty() => {
             p.trim().replace('/', "\\").trim_matches('\\').to_string()
@@ -357,10 +384,12 @@ fn pbo_prefix(prefix_ext: Option<&String>, path: &Path, origin: &str) -> Option<
         _ => path.file_stem()?.to_string_lossy().into_owned(),
     };
     if safe_relative_path(&prefix).is_none() {
-        warning(
-            format!("skipping PBO with unsafe prefix {:?}", printable(&prefix)),
-            Some("api-unsafe-prefix"),
-            (Some(origin.to_string()), None),
+        warnings.warn(
+            Warning::new(
+                Some("api-unsafe-prefix"),
+                format!("skipping PBO with unsafe prefix {:?}", printable(&prefix)),
+            )
+            .in_file(origin.to_string()),
         );
         return None;
     }
@@ -375,17 +404,20 @@ fn pbo_prefix(prefix_ext: Option<&String>, path: &Path, origin: &str) -> Option<
 /// # Errors
 ///
 /// Never fails for a bad PBO (it is skipped with a warning); the `Result` is kept for the callers' sake.
-pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
+pub fn build_mod(
+    m: &ModSource,
+    branch: Branch,
+    warnings: &mut dyn WarningSink,
+) -> Result<ApiIndex, Error> {
     let mut pbos: Vec<ModPbo> = Vec::new();
     for path in &m.pbos {
         let origin = path.display().to_string();
-        let sel = match read_selected(path, &origin, true) {
+        let sel = match read_selected(path, &origin, true, warnings) {
             Ok(sel) => sel,
             Err(e) => {
-                warning(
-                    format!("skipping unreadable PBO: {e}"),
-                    Some("api-bad-pbo"),
-                    (Some(origin), None),
+                warnings.warn(
+                    Warning::new(Some("api-bad-pbo"), format!("skipping unreadable PBO: {e}"))
+                        .in_file(origin),
                 );
                 continue;
             }
@@ -393,7 +425,7 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
         if sel.texts.is_empty() && sel.config.is_empty() {
             continue;
         }
-        let Some(prefix) = pbo_prefix(sel.prefix_ext.as_ref(), path, &origin) else {
+        let Some(prefix) = pbo_prefix(sel.prefix_ext.as_ref(), path, &origin, warnings) else {
             continue;
         };
         let rel = path
@@ -406,7 +438,7 @@ pub fn build_mod(m: &ModSource, branch: Branch) -> Result<ApiIndex, Error> {
         pbos.push(ModPbo {
             prefix,
             rel,
-            config: config_text(&sel.config, &origin),
+            config: config_text(&sel.config, &origin, warnings),
             texts: sel.texts,
         });
     }
@@ -461,7 +493,7 @@ pub struct InstalledMod {
 
 /// Whether any `addons/*.pbo` of `dir` lists a `.c` entry. Only the PBO headers are read; an unreadable PBO
 /// is a warning.
-fn dir_has_scripts(dir: &Path) -> bool {
+fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> bool {
     let Some(addons) = child_ignore_case(dir, "addons").filter(|a| a.is_dir()) else {
         return false;
     };
@@ -484,10 +516,12 @@ fn dir_has_scripts(dir: &Path) -> bool {
                     return true;
                 }
             }
-            Err(e) => warning(
-                format!("cannot read the PBO header: {e}"),
-                Some("api-bad-pbo"),
-                (Some(path.display().to_string()), None),
+            Err(e) => warnings.warn(
+                Warning::new(
+                    Some("api-bad-pbo"),
+                    format!("cannot read the PBO header: {e}"),
+                )
+                .in_file(path.display().to_string()),
             ),
         }
     }
@@ -502,6 +536,7 @@ pub fn installed_mods(
     branch: Branch,
     libraries: &[PathBuf],
     game: Option<&Path>,
+    warnings: &mut dyn WarningSink,
 ) -> Vec<InstalledMod> {
     let subdirs = |dir: &Path, only_at: bool| -> Vec<(String, PathBuf)> {
         let Ok(rd) = fs::read_dir(dir) else {
@@ -546,7 +581,7 @@ pub fn installed_mods(
         found.push(InstalledMod {
             id,
             name: meta_name(&dir).unwrap_or_else(|| if is_link { entry.clone() } else { dir_name }),
-            has_scripts: dir_has_scripts(&dir),
+            has_scripts: dir_has_scripts(&dir, warnings),
             link: is_link.then_some(entry),
             dir,
         });

@@ -1,0 +1,15 @@
+---
+source: tests/golden_cli.rs
+expression: hide_quota_names(&r.err())
+---
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+warning: 2 warnings of type "prerapified-file" were suppressed to prevent spam. Use "-w prerapified-file" to disable these warnings entirely.

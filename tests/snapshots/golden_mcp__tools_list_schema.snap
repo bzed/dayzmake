@@ -1,0 +1,801 @@
+---
+source: tests/golden_mcp.rs
+expression: "r.result(2)[\"tools\"]"
+---
+[
+  {
+    "description": "Members of a DayZ script class from the installed scripts.pbo (vanilla; mods only when selected with mods).",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "inherited": {
+          "description": "Also show the base classes.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "mods_only": {
+          "description": "Show only what the selected mods declare.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Class name.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "api_class"
+  },
+  {
+    "description": "Case-insensitive regex over member names, signatures, docs, class names and enum items (so ^OnRPC finds the OnRPC methods).",
+    "inputSchema": {
+      "properties": {
+        "class": {
+          "description": "Search only the members of this class or enum.",
+          "type": "string"
+        },
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        },
+        "regex": {
+          "description": "The regular expression.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "type": "object"
+    },
+    "name": "api_find"
+  },
+  {
+    "description": "Subclasses of a class.",
+    "inputSchema": {
+      "properties": {
+        "all": {
+          "description": "Include indirect subclasses.",
+          "type": "boolean"
+        },
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Class name.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "api_subclasses"
+  },
+  {
+    "description": "Items of an enum.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Enum name.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "api_enum"
+  },
+  {
+    "description": "Base class chain of a class.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Class name.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "api_chain"
+  },
+  {
+    "description": "Files and lines that declare a class or enum; with cat the full source files.",
+    "inputSchema": {
+      "properties": {
+        "cat": {
+          "description": "Return the full source files (with json: the files as JSON).",
+          "type": "boolean"
+        },
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "length": {
+          "description": "Return at most this many bytes (default and maximum 200000).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Class or enum name.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        },
+        "target": {
+          "description": "With cat: write the files to this file instead of returning them.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "api_source"
+  },
+  {
+    "description": "Compile-time defines of the selected indexes, optionally filtered by a regex.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        },
+        "regex": {
+          "description": "Filter regular expression.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "api_defines"
+  },
+  {
+    "description": "Rebuild the cached indexes now. With mods=all this indexes every installed mod, which warms the caches for later queries.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "api_update"
+  },
+  {
+    "description": "List the installed mods (workshop id, name, directory, whether they have scripts); the names and ids can be used in the mods argument of the other api tools. Reading them is quick; querying all of them with mods=all builds the caches on the first run and can take a while; api_update with mods=all warms them.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "api_mods"
+  },
+  {
+    "description": "List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).",
+    "inputSchema": {
+      "properties": {
+        "path": {
+          "description": "PBO or P3D file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_inspect"
+  },
+  {
+    "description": "Read one entry of a PBO: returned as text if it is UTF-8, otherwise write it to target.",
+    "inputSchema": {
+      "properties": {
+        "file": {
+          "description": "Entry name.",
+          "type": "string"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "length": {
+          "description": "Return at most this many bytes (default and maximum 200000).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pbo": {
+          "description": "PBO file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Write the entry to this file instead of returning it (required for binary data).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pbo",
+        "file"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_cat"
+  },
+  {
+    "description": "Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "pbo": {
+          "description": "PBO file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Folder to extract into.",
+          "type": "string"
+        },
+        "use_prefix": {
+          "description": "Extract into <target>/<prefix>/.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pbo",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_unpack"
+  },
+  {
+    "description": "Pack a folder into a PBO without binarizing or rapifying.",
+    "inputSchema": {
+      "properties": {
+        "exclude": {
+          "description": "Glob patterns to leave out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "headerext": {
+          "description": "Header extensions as key=value.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "description": "Private key (.biprivatekey): sign the PBO after packing.",
+          "type": "string"
+        },
+        "source": {
+          "description": "Folder to pack.",
+          "type": "string"
+        },
+        "target": {
+          "description": "PBO file to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_pack"
+  },
+  {
+    "description": "Build a PBO from a folder, rapifying configs and binarizing models.",
+    "inputSchema": {
+      "properties": {
+        "exclude": {
+          "description": "Glob patterns to leave out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "headerext": {
+          "description": "Header extensions as key=value.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "include": {
+          "description": "Folders to search for includes (the current directory is always searched).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "description": "Private key (.biprivatekey): sign the PBO after packing.",
+          "type": "string"
+        },
+        "proton_binarize": {
+          "description": "Linux: binarize models with DayZ Tools' binarize.exe under Proton.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Folder to pack.",
+          "type": "string"
+        },
+        "target": {
+          "description": "PBO file to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_build"
+  },
+  {
+    "description": "Preprocess and rapify a config file.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "include": {
+          "description": "Folders to search for includes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "Config source file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "File to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "config_rapify"
+  },
+  {
+    "description": "Convert a rapified config back to text.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Rapified config.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Write the text here; absent: return it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "config_derapify"
+  },
+  {
+    "description": "Preprocess a file (macros, includes).",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "include": {
+          "description": "Folders to search for includes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "File to preprocess.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Write the result here; absent: return it.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "config_preprocess"
+  },
+  {
+    "description": "Convert a PAA texture to an image (the format follows the target extension, e.g. png).",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "PAA file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Image file to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "paa_to_image"
+  },
+  {
+    "description": "Convert an image to a PAA texture.",
+    "inputSchema": {
+      "properties": {
+        "compress": {
+          "description": "Compress the output.",
+          "type": "boolean"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Image file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "PAA file to write.",
+          "type": "string"
+        },
+        "type": {
+          "description": "PAA type, e.g. dxt1, dxt5 (default dxt5).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "image_to_paa"
+  },
+  {
+    "description": "Generate a key pair (<name>.biprivatekey and <name>.bikey).",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "Path of the key without extension.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "key_generate"
+  },
+  {
+    "description": "Sign a PBO with a private key.",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "pbo": {
+          "description": "PBO file.",
+          "type": "string"
+        },
+        "private_key": {
+          "description": "Private key file.",
+          "type": "string"
+        },
+        "signature": {
+          "description": "Signature file (default <pbo>.<key>.bisign).",
+          "type": "string"
+        },
+        "v2": {
+          "description": "Write an older v2 signature.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "private_key",
+        "pbo"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_sign"
+  },
+  {
+    "description": "Verify the signature of a PBO with a public key.",
+    "inputSchema": {
+      "properties": {
+        "pbo": {
+          "description": "PBO file.",
+          "type": "string"
+        },
+        "public_key": {
+          "description": "Public key file (.bikey).",
+          "type": "string"
+        },
+        "signature": {
+          "description": "Signature file (default <pbo>.<key>.bisign).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "public_key",
+        "pbo"
+      ],
+      "type": "object"
+    },
+    "name": "pbo_verify"
+  },
+  {
+    "description": "Binarize a model with BI's binarize.exe (Windows; on Linux through Proton).",
+    "inputSchema": {
+      "properties": {
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Model file.",
+          "type": "string"
+        },
+        "target": {
+          "description": "File to write.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "binarize"
+  }
+]

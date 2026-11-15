@@ -32,7 +32,7 @@ testharness/run.sh --keep        # keep testharness/build for inspection
 ```
 
 Requirements: Rust toolchain, a Steam installation with DayZ Server
-(app 223350) for the server test, `python3` for port picking (optional).
+(app 223350) for the server test, `python3` (port picking, `compare-release.sh`).
 
 The harness never writes into the Steam install: it builds its own server
 tree of symlinks in `testharness/build/server-tree-*`, picks random free
@@ -54,3 +54,34 @@ present in both 1.29 and 1.30, so the same PBO loads on both versions.
 - The engine logs `Can't load @dayzmake_test/Anims/cfg/skeletons.anim.xml`
   style lines while probing each loaded mod folder for animation configs;
   expected for a script-only mod.
+
+## Differential comparison against a released dayzmake
+
+`compare-release.sh <old-dayzmake> <new-dayzmake> <dayz-dir>` runs the same commands with two binaries and
+compares stdout, stderr, exit codes and every file written. It is manual (not run by CI) and is the final
+check that a refactor changed no CLI behaviour. `<dayz-dir>` (a DayZ server or client install) is only read.
+
+```sh
+git worktree add /var/tmp/dayzmake-v2/src v2.0.0
+CARGO_TARGET_DIR=/var/tmp/dayzmake-v2/target cargo build --release --locked --manifest-path /var/tmp/dayzmake-v2/src/Cargo.toml
+CARGO_TARGET_DIR=/var/tmp/dayzmake-target cargo build --release --locked
+testharness/compare-release.sh /var/tmp/dayzmake-v2/target/release/dayzmake \
+    /var/tmp/dayzmake-target/release/dayzmake ~/.steam/steam/steamapps/common/DayZServer
+git worktree remove --force /var/tmp/dayzmake-v2/src   # also after a failed run
+rm -rf /var/tmp/dayzmake-v2
+```
+
+It compares, per `addons/*.pbo`: `inspect` and `unpack`; `derapify` of every unpacked `config.bin`; `inspect`
+of the first 50 `.p3d`; and every command of `tests/golden_cli.rs` on `tests/fixtures/golden/mod`, plus
+`img2paa` of 1024x1024 gradient and noise PNGs. The work folder (`mktemp -d /var/tmp/dayzmake-compare.XXXXXX`)
+is removed unless `KEEP=1`. The summary lists `N identical, M different` per category; a difference that is
+only the header extension block of `inspect`/`$PBOPREFIX$` in another order, or build warnings in another
+order (golden commands only), is marked `order-only`; every other byte must match, so a reordered entry list or
+config member is a plain difference. The `raw` category checks, per PBO, that the new binary lists header
+extensions in the order of the PBO file. A released dayzmake that predates the order fix writes them in a random
+order per run, so the number of identical `pbo` comparisons varies between runs. Exit status 1 when anything
+differs.
+
+Against v2.0.0 the expected differences are: header extension order (file order now, random before), warning
+order (sorted file order now), suppression summary lines on stderr, and PBO bytes when more than one `-e` header
+extension is given.

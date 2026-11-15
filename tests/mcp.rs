@@ -1,12 +1,16 @@
 //! The stdio MCP server: spawns `dayzmake mcp` and talks JSON-RPC over its pipes.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
 #![expect(clippy::indexing_slicing, reason = "a failing index is a failing test")]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use dayzmake::pbo::PBO;
+use dayzmake_core::pbo::{PBO, PackOptions};
+use dayzmake_core::warning::Warnings;
 use serde_json::{Value, json};
 
 struct Run {
@@ -17,8 +21,14 @@ struct Run {
 
 /// Runs the server, feeds it `input`, closes stdin and collects everything it printed.
 fn run_raw(input: Vec<u8>, env: &[(&str, &Path)], cwd: &Path) -> Run {
+    run_with(&[], input, env, cwd)
+}
+
+/// Like `run_raw`, with extra arguments after `mcp`.
+fn run_with(extra: &[&str], input: Vec<u8>, env: &[(&str, &Path)], cwd: &Path) -> Run {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
     cmd.arg("mcp")
+        .args(extra)
         .current_dir(cwd)
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
@@ -89,16 +99,7 @@ fn is_error(reply: &Value) -> bool {
 
 /// A PBO with the given entries (name, bytes), built through the library.
 fn make_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).expect("pbo");
-    pbo.files.clear();
-    for (name, data) in entries {
-        pbo.files.insert(
-            (*name).to_string(),
-            std::io::Cursor::new(data.to_vec().into_boxed_slice()),
-        );
-    }
-    pbo.to_cursor().expect("cursor").into_inner()
+    support::raw_pbo(entries, &[])
 }
 
 fn s(p: &Path) -> &str {
@@ -315,7 +316,8 @@ fn fake_steam() -> FakeSteam {
     )
     .expect("manifest");
     let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/api/vanilla/scripts");
-    let pbo = PBO::from_directory(scripts, false, &[], &[]).expect("pbo");
+    let pbo = PBO::from_directory(&scripts, &PackOptions::pack(), None, &mut Warnings::new())
+        .expect("pbo");
     pbo.write(
         &mut fs::File::create(root.join("steamapps/common/DayZ/dta/scripts.pbo")).expect("create"),
     )
@@ -758,4 +760,32 @@ fn mcp_every_tool_that_writes_a_target_offers_force() {
             assert!(props.get("force").is_some(), "{} has no force", t["name"]);
         }
     }
+}
+
+/// 12 pre-rapified configs: one `prerapified-file` warning each when built.
+fn quota_dir() -> (tempfile::TempDir, PathBuf) {
+    let root = tempfile::tempdir().expect("tempdir");
+    let work = root.path().canonicalize().expect("canonical").join("q");
+    fs::create_dir_all(&work).expect("mkdir");
+    for i in 0..12 {
+        fs::write(work.join(format!("c{i:02}.cpp")), b"\0raP\0\0\0\0").expect("write");
+    }
+    (root, work)
+}
+
+fn prerapified_warnings(extra: &[&str]) -> usize {
+    let (_root, work) = quota_dir();
+    let req = call(
+        1,
+        "pbo_build",
+        &json!({"source": ".", "target": "../a.pbo"}),
+    );
+    let r = run_with(extra, lines(&[req]), &[], &work);
+    text(&r.replies[0]).matches("[prerapified-file]").count()
+}
+
+#[test]
+fn mcp_verbose_keeps_all_warnings() {
+    assert_eq!(prerapified_warnings(&["-v"]), 12);
+    assert_eq!(prerapified_warnings(&[]), 10);
 }
