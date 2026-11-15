@@ -1,6 +1,9 @@
 //! File format handling for DayZ: PBO archives, rapified configs, P3D models, PAA textures and BI
 //! keys and signatures, plus the preprocessor and `__EVAL` evaluator the config pipeline needs.
 
+/// The `image` crate the PAA conversion API uses, so consumers build against the same version.
+pub use image;
+
 /// Binarization through BI's `binarize.exe` (Windows or Proton).
 pub mod binarize;
 /// Config parsing and rapification/derapification.

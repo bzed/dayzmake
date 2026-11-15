@@ -117,24 +117,95 @@ fn read_mipmap<I: Read>(
     }
 }
 
+/// A format a PAA can be created in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PaaFormat {
+    /// DXT1 (BC1), no or 1-bit alpha.
+    Dxt1,
+    /// DXT3 (BC2), explicit 4-bit alpha.
+    Dxt3,
+    /// DXT5 (BC3), interpolated alpha.
+    Dxt5,
+    /// Uncompressed 8-bit RGBA.
+    Rgba,
+}
+
+impl std::str::FromStr for PaaFormat {
+    type Err = Error;
+
+    /// Parses `dxt1`, `dxt3`, `dxt5` or `rgba`, ignoring case.
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s.to_lowercase().as_str() {
+            "dxt1" => Ok(PaaFormat::Dxt1),
+            "dxt3" => Ok(PaaFormat::Dxt3),
+            "dxt5" => Ok(PaaFormat::Dxt5),
+            "rgba" => Ok(PaaFormat::Rgba),
+            _ => Err(error!("Unsupported PAA compression type for creation: {s}")),
+        }
+    }
+}
+
+impl PaaFormat {
+    /// The compression name the format has in a PAA.
+    fn name(self) -> &'static str {
+        match self {
+            PaaFormat::Dxt1 => "DXT1",
+            PaaFormat::Dxt3 => "DXT3",
+            PaaFormat::Dxt5 => "DXT5",
+            PaaFormat::Rgba => "RGBA",
+        }
+    }
+}
+
 /// A PAA texture.
 #[derive(Debug)]
 pub struct Paa {
     /// Tagg sections in file order (name → data).
-    pub taggs: LinkedHashMap<String, Vec<u8>>,
+    taggs: LinkedHashMap<String, Vec<u8>>,
     /// Palette data, if the texture is paletted.
-    pub palette: Option<Vec<u8>>,
+    palette: Option<Vec<u8>>,
     /// Mipmap data, largest first.
-    pub mipmaps: Vec<Vec<u8>>,
+    mipmaps: Vec<Vec<u8>>,
     /// Width of the largest mipmap.
-    pub width: u16,
+    width: u16,
     /// Height of the largest mipmap.
-    pub height: u16,
+    height: u16,
     /// Compression format name (e.g. "DXT5").
-    pub compression: String,
+    compression: String,
 }
 
 impl Paa {
+    /// Width of the largest mipmap in pixels.
+    #[must_use]
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    /// Height of the largest mipmap in pixels.
+    #[must_use]
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
+    /// Compression format name as read from the file, e.g. `"DXT5"`.
+    #[must_use]
+    pub fn compression(&self) -> &str {
+        &self.compression
+    }
+
+    /// Number of mipmaps.
+    #[must_use]
+    pub fn mipmap_count(&self) -> usize {
+        self.mipmaps.len()
+    }
+
+    /// The data of the tagg called `name`, if the file has one.
+    #[must_use]
+    pub fn tagg(&self, name: &str) -> Option<&[u8]> {
+        self.taggs.get(name).map(Vec::as_slice)
+    }
+
     /// Reads a PAA texture.
     ///
     /// # Errors
@@ -352,23 +423,10 @@ impl Paa {
     ///
     /// # Errors
     ///
-    /// Returns an error for unsupported PAA types or images too large for the format.
-    pub fn from_dynamic_image(
-        img: &DynamicImage,
-        paa_type: &str,
-        _compress: bool,
-    ) -> Result<Paa, Error> {
+    /// Returns an error for images too large for the format.
+    pub fn from_dynamic_image(img: &DynamicImage, format: PaaFormat) -> Result<Paa, Error> {
         let mut current = img.to_rgba8();
-        let compression = match paa_type.to_lowercase().as_str() {
-            "dxt1" | "dxt3" | "dxt5" => paa_type.to_uppercase(),
-            "rgba" => "RGBA".to_string(),
-            _ => {
-                return Err(error!(
-                    "Unsupported PAA compression type for creation: {}",
-                    paa_type
-                ));
-            }
-        };
+        let compression = format.name().to_string();
 
         // Build the mipmap chain down to 4x4.
         let mut levels: Vec<ImageBuffer<Rgba<u8>, Vec<u8>>> = vec![current.clone()];

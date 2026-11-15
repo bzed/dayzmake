@@ -6,7 +6,7 @@ use std::path::Path;
 
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
-use dayzmake_core::paa::Paa;
+use dayzmake_core::paa::{Paa, PaaFormat};
 
 /// Converts a PAA file to a standard image format.
 ///
@@ -56,7 +56,11 @@ pub fn cmd_img2paa(
     let img = image::open(input_path)
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to open input image file:")?;
-    let paa = Paa::from_dynamic_image(&img, paa_type, compress)
+    // -c did nothing before the API change and still does nothing; the flag stays for scripts
+    let _ = compress;
+    let paa = paa_type
+        .parse::<PaaFormat>()
+        .and_then(|format| Paa::from_dynamic_image(&img, format))
         .prepend_error("Failed to convert image to PAA:")?;
 
     let mut file = File::create(output_path).prepend_error("Failed to create output PAA file:")?;

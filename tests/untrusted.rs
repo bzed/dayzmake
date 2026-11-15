@@ -238,7 +238,7 @@ fn paa_zero_width_decode_is_an_error_not_a_panic() {
     // [0x11, 0, 0] is the LZO end-of-stream marker: it decompresses to 0 bytes
     let bytes = paa_with_mip(0xff01, 0x8000, 8, &[0x11, 0, 0]);
     let paa = Paa::read(&mut Cursor::new(bytes)).expect("the container is well formed");
-    assert_eq!(paa.width, 0);
+    assert_eq!(paa.width(), 0);
     assert!(paa.to_dynamic_image().is_err());
 }
 
