@@ -2101,7 +2101,7 @@ mod from_pbo {
         let mut bytes = fs::read(&pbo_path).expect("read pbo");
         let at = bytes
             .windows(12)
-            .position(|w| w == b"3_Game\\a_b.c")
+            .position(|win| win == b"3_Game\\a_b.c")
             .expect("entry name");
         bytes[at + 8] = 0x1b;
         fs::write(&pbo_path, bytes).expect("write pbo");

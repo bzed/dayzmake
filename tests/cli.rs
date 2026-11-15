@@ -1221,7 +1221,7 @@ fn stale_temp_is_skipped_but_same_name_in_subfolder_is_packed() {
 
 #[cfg(unix)]
 #[test]
-fn build_skips_file_names_that_are_unsafe_as_entry_names() {
+fn pack_skips_file_names_that_are_unsafe_as_entry_names() {
     let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};"), ("mod/ok.txt", "x")]);
     let modf = dir.path().join("mod");
     write(&modf, "a\x1bb.txt", "bad");
@@ -1237,7 +1237,7 @@ fn build_skips_file_names_that_are_unsafe_as_entry_names() {
 
 #[cfg(unix)]
 #[test]
-fn build_skips_fifos_and_device_links_in_the_source() {
+fn pack_skips_fifos_and_device_links_in_the_source() {
     let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
     let modf = dir.path().join("mod");
     assert!(
@@ -1272,30 +1272,6 @@ fn pack_skips_a_fifo_named_like_the_prefix_file() {
     let (code, err) = dayzmake_with_deadline(&["pack", ".", "../out.pbo"], &modf);
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("unsupported-file"), "{err}");
-}
-
-#[cfg(unix)]
-#[test]
-fn build_excluded_special_and_unsafe_files_are_silent() {
-    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
-    let modf = dir.path().join("mod");
-    assert!(
-        Command::new("mkfifo")
-            .arg(modf.join("pipe"))
-            .status()
-            .unwrap()
-            .success()
-    );
-    write(&modf, "bad\x1bname.txt", "x");
-    let (code, _, err) = dayzmake(
-        &["build", "-x", "pipe", "-x", "bad*", "mod", "out.pbo"],
-        dir.path(),
-    );
-    assert_eq!(code, 0, "{err}");
-    assert!(
-        !err.contains("unsupported-file") && !err.contains("unsafe-path"),
-        "{err}"
-    );
 }
 
 #[cfg(unix)]
@@ -1358,4 +1334,28 @@ fn pack_names_a_dangling_symlink_in_the_error() {
     let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
     assert_ne!(code, 0);
     assert!(err.contains("dangling"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_excluded_special_and_unsafe_files_are_silent() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    write(&modf, "bad\x1bname.txt", "x");
+    let (code, _, err) = dayzmake(
+        &["build", "-x", "pipe", "-x", "bad*", "mod", "out.pbo"],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !err.contains("unsupported-file") && !err.contains("unsafe-path"),
+        "{err}"
+    );
 }
