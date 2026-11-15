@@ -1876,6 +1876,9 @@ mod from_pbo {
         assert!(out.contains("LeadingSep"), "{out}");
         // only the `..` entry is reported, the leading separator is not
         assert!(err.contains("..\\y.c") && !err.contains("x.c"), "{err}");
+        let (code, out, err2) = w.run(&["api", "src", "LeadingSep", "--cat", "-m", &m]);
+        assert_eq!(code, 0, "{err2}");
+        assert!(out.contains("class LeadingSep"), "{out}");
         let (code, _, err) = w.run(&["api", "class", "ParentEntry", "-m", &m]);
         assert_eq!(code, 1, "{err}");
     }

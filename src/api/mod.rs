@@ -16,8 +16,8 @@ use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
 use source::{
-    InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, installed_mods, installed_source,
-    match_installed, parse_mods, resolve_mod,
+    InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, index_entry_name, installed_mods,
+    installed_source, match_installed, parse_mods, resolve_mod,
 };
 use steam::{Branch, find_game, libraries, steam_roots};
 
@@ -390,16 +390,22 @@ pub fn src_contents(
             .collect();
         let mut file = std::fs::File::open(path)
             .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
-        let sel = PBO::read_entries(&mut file, |n| wanted.contains(n))
-            .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+        let sel = PBO::read_entries(&mut file, |n| {
+            index_entry_name(n).is_some_and(|k| wanted.contains(k.as_str()))
+        })
+        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
         read.insert(path.clone(), sel);
     }
     let mut out = Vec::new();
     for (f, path) in files.into_iter().zip(&paths) {
         let data = match read
             .get(path)
-            .and_then(|sel| sel.entries().iter().find(|e| e.name() == f.path))
-        {
+            // two raw names that normalise to one index name resolve to the first match
+            .and_then(|sel| {
+                sel.entries()
+                    .iter()
+                    .find(|e| index_entry_name(e.name()).as_deref() == Some(f.path.as_str()))
+            }) {
             Some(entry) => match entry.data() {
                 Ok(data) => data.to_vec(),
                 Err(e) => return Err(error!("{}: {e}", printable(&f.path))),

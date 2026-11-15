@@ -282,7 +282,7 @@ fn read_selected(
 /// The name an entry gets in the index: leading, trailing and doubled separators dropped, `\` between
 /// components. The index builds no file-system path from it, so only names that could not be one
 /// (`.`/`..` components, a drive letter or other `:`, a control character, no name at all) are refused.
-fn index_entry_name(name: &str) -> Option<String> {
+pub(crate) fn index_entry_name(name: &str) -> Option<String> {
     let mut parts = Vec::new();
     for part in name.split(['\\', '/']).filter(|p| !p.is_empty()) {
         if part == "." || part == ".." || part.chars().any(|c| c == ':' || c.is_control()) {
