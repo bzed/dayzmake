@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- `sign` and key generation refuse keys below 384 bits, the `CryptoAPI` minimum BI's tools and the game need (smaller
+  keys could only sign with broken padding). Reading such keys and verifying their signatures still works (#55).
 - Signing and verification no longer use OpenSSL: they run on the pure-Rust `rsa` crate (blinded, constant-time private-key
   operation; the result is checked against the public key before it is written). `.bisign` output is byte-identical. A
   signature value that is not smaller than the key's modulus is a verification error.

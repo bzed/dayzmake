@@ -93,7 +93,7 @@ fn small_key_signatures_verify() {
         fs::read(sign_dir().join("testsig.pbo")).unwrap(),
     ))
     .unwrap();
-    for (seed, bits) in [(11u64, 288u32), (12, 320), (13, 512), (14, 768), (15, 1024)] {
+    for (seed, bits) in [(12u64, 384u32), (13, 512), (14, 768), (15, 1024)] {
         let bytes = key_bytes(seed, bits);
         let private = BIPrivateKey::read(&mut Cursor::new(&bytes)).unwrap();
         let public = private.to_public_key().unwrap();
@@ -123,9 +123,29 @@ fn small_key_signatures_verify() {
             // hash 1 is the PBO's SHA-1: it ends the padded block
             let v = back.to_vec();
             assert_eq!(v.len(), size - 1, "{bits} bit: 00 is trimmed");
-            // (a 288 bit key has no room for the 01 ff ... prefix: BI's padding is cut to 00 30 21 ...)
-            assert_eq!(v[0], if bits == 288 { 0x30 } else { 1 });
+            assert_eq!(v[0], 1);
             assert_eq!(&v[v.len() - 20..], pbo.checksum().unwrap());
+        }
+    }
+}
+
+#[test]
+fn sign_refuses_keys_below_384_bits() {
+    let pbo = PBO::read(&mut Cursor::new(
+        fs::read(sign_dir().join("testsig.pbo")).unwrap(),
+    ))
+    .unwrap();
+    // 288 bits is the smallest key that can be read; 368 is the largest below the limit whose length is a
+    // multiple of 16 (376 cannot be read at all)
+    for (seed, bits) in [(11u64, 288u32), (16, 368)] {
+        let private = BIPrivateKey::read(&mut Cursor::new(key_bytes(seed, bits))).unwrap();
+        for version in [BISignVersion::V2, BISignVersion::V3] {
+            let err = private.sign(&pbo, version).unwrap_err();
+            let text = err.to_string();
+            assert!(
+                text.contains("384-bit") && text.contains(&bits.to_string()),
+                "{bits}: {text}"
+            );
         }
     }
 }

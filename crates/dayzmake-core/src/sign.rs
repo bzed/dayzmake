@@ -136,6 +136,10 @@ type NameFilePair<'a> = (Vec<u8>, &'a [u8]);
 
 /// Smallest key length accepted, in bits.
 const MIN_KEY_BITS: u32 = 288;
+/// Smallest key length that `sign` and `generate` accept, in bits: the minimum of the Windows `CryptoAPI` RSA
+/// signature key (BI's tools and the game cannot use smaller ones). PKCS#1 v1.5 padding of a `SHA-1` hash needs
+/// 368 bits at least. Smaller keys can still be read, and signatures made with them verified.
+const MIN_SIGN_BITS: u32 = 384;
 /// Largest key length accepted, in bits: the largest RSA key the Windows `CryptoAPI` (which BI's key format comes
 /// from) handles. Bigger keys would only make hostile files expensive to read.
 const MAX_KEY_BITS: u32 = 16384;
@@ -184,6 +188,20 @@ fn check_key_length(length: u32) -> Result<(), Error> {
     if !(MIN_KEY_BITS..=MAX_KEY_BITS).contains(&length) {
         return Err(error!(
             "Invalid key length: {length} (supported: {MIN_KEY_BITS} to {MAX_KEY_BITS} bits)."
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses key lengths that cannot sign.
+///
+/// # Errors
+///
+/// Returns an error if `length` is below the 384-bit `CryptoAPI` minimum.
+fn check_sign_length(length: u32) -> Result<(), Error> {
+    if length < MIN_SIGN_BITS {
+        return Err(error!(
+            "A {length}-bit key is smaller than the {MIN_SIGN_BITS}-bit CryptoAPI minimum and cannot sign."
         ));
     }
     Ok(())
@@ -477,8 +495,9 @@ impl BIPrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if the keypair cannot be generated.
+    /// Returns an error if `length` is below 384 bits (the `CryptoAPI` minimum) or the keypair cannot be generated.
     pub fn generate(length: u32, name: String) -> Result<BIPrivateKey, Error> {
+        check_sign_length(length)?;
         let rsa = Rsa::generate(length).map_err(|e| error!("Failed to generate keypair: {e}"))?;
         // `OpenSSL` hands out its numbers as plain vectors; ours are wiped on drop.
         let secret = |v: &BigNumRef| BoxedUint::from_be_slice_vartime(&Zeroizing::new(v.to_vec()));
@@ -522,8 +541,10 @@ impl BIPrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if hashing or the RSA operation fails.
+    /// Returns an error if the key is below 384 bits (the `CryptoAPI` minimum), hashing fails or the RSA operation
+    /// fails.
     pub fn sign(&self, pbo: &PBO, version: BISignVersion) -> Result<BISign, Error> {
+        check_sign_length(self.length)?;
         let hashes = generate_hashes(pbo, version, self.length)?;
         let n = self.key.n().as_ref();
         let precision = n.bits_precision();
