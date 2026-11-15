@@ -208,6 +208,11 @@ the input; regression test in `crates/dayzmake-core/tests/` and a `config_parse`
   round-trips byte-identically), `generated_key_signs_and_verifies` (sign the golden PBO, verify with the derived
   public key; and verify the same signature with the **OpenSSL** implementation kept in the differential test helper),
   `seeded_generation_is_deterministic` (same seed → same key file bytes).
+- Also: #55 — `sign` (and `generate`) refuse keys below 384 bits (CryptoAPI minimum; PKCS#1 v1.5 needs ≥ 368);
+  reading such keys and verifying stays. #56 — a bad `.bisign` header names the signature file; `verify` compares the
+  signature's embedded key with the given one first and says "made with a different key". Task 3 review M1: owned
+  secret `BoxedUint`s (file dmp1/dmq1/iqmp after the comparison, n/p/q/d on error paths, `crt_coefficient()` results)
+  are `Zeroizing<BoxedUint>`. Own commits for #55 and #56 (`Fixes #N`).
 - [ ] **Step 2:** `generate` uses the OS RNG (`getrandom`); `generate_with_rng` is `pub(crate)` for the tests.
 - [ ] **Step 3:** Run → PASS. Commit `feat: generate BI keys without OpenSSL`.
 
