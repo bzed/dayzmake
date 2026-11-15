@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 #[cfg(windows)]
 use winreg::RegKey;
 #[cfg(windows)]
-use winreg::enums::*;
+use winreg::enums::HKEY_CURRENT_USER;
 
 use crate::error;
 #[cfg(windows)]
@@ -112,6 +112,15 @@ impl Binarizer {
     /// # Errors
     ///
     /// Never fails today; the result leaves room for backends whose cleanup can fail.
+    #[cfg_attr(
+        windows,
+        allow(
+            unused_variables,
+            clippy::needless_pass_by_value,
+            clippy::unused_self,
+            reason = "nothing to clean up on Windows"
+        )
+    )]
     pub fn close(self, warnings: &mut dyn WarningSink) -> Result<(), Error> {
         #[cfg(unix)]
         {
@@ -120,10 +129,6 @@ impl Binarizer {
             if let Some(message) = this.sandbox.take().and_then(|sb| proton::destroy(&sb)) {
                 warnings.warn(Warning::note(message));
             }
-        }
-        #[cfg(windows)]
-        {
-            let _ = (self, warnings);
         }
         Ok(())
     }
@@ -147,7 +152,7 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 
     let mut path;
     loop {
-        path = dir.join(format!("dayzmake_{}_{}", name, i));
+        path = dir.join(format!("dayzmake_{name}_{i}"));
         if !path.exists() {
             break;
         }
@@ -198,7 +203,7 @@ fn native_binarize(
         command.current_dir("P:\\");
     }
     let binarize_output = command
-        .args(&[
+        .args([
             "-norecurse",
             "-always",
             "-silent",
@@ -227,13 +232,13 @@ fn native_binarize(
 
     if !binarize_output.status.success() {
         let msg = match binarize_output.status.code() {
-            Some(code) => format!("binarize.exe terminated with exit code: {}", code),
+            Some(code) => format!("binarize.exe terminated with exit code: {code}"),
             None => "binarize.exe terminated by signal.".to_string(),
         };
-        let outputhint = if !piped {
-            "\nUse BIOUTPUT=1 to see binarize.exe's output."
-        } else {
+        let outputhint = if piped {
             ""
+        } else {
+            "\nUse BIOUTPUT=1 to see binarize.exe's output."
         };
 
         return Err(error!("{}{}", msg, outputhint));
