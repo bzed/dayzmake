@@ -218,7 +218,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_mcp {
-        crate::mcp::serve(std::io::stdin().lock(), stdout())
+        crate::mcp::serve(std::io::stdin().lock(), stdout(), args.flag_verbose)
     } else if args.cmd_api {
         run_api(args, warnings)
     } else if args.cmd_binarize {

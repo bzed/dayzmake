@@ -18,8 +18,14 @@ struct Run {
 
 /// Runs the server, feeds it `input`, closes stdin and collects everything it printed.
 fn run_raw(input: Vec<u8>, env: &[(&str, &Path)], cwd: &Path) -> Run {
+    run_with(&[], input, env, cwd)
+}
+
+/// Like `run_raw`, with extra arguments after `mcp`.
+fn run_with(extra: &[&str], input: Vec<u8>, env: &[(&str, &Path)], cwd: &Path) -> Run {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
     cmd.arg("mcp")
+        .args(extra)
         .current_dir(cwd)
         .env("NO_COLOR", "1")
         .stdin(Stdio::piped())
@@ -766,4 +772,32 @@ fn mcp_every_tool_that_writes_a_target_offers_force() {
             assert!(props.get("force").is_some(), "{} has no force", t["name"]);
         }
     }
+}
+
+/// 12 pre-rapified configs: one `prerapified-file` warning each when built.
+fn quota_dir() -> (tempfile::TempDir, PathBuf) {
+    let root = tempfile::tempdir().expect("tempdir");
+    let work = root.path().canonicalize().expect("canonical").join("q");
+    fs::create_dir_all(&work).expect("mkdir");
+    for i in 0..12 {
+        fs::write(work.join(format!("c{i:02}.cpp")), b"\0raP\0\0\0\0").expect("write");
+    }
+    (root, work)
+}
+
+fn prerapified_warnings(extra: &[&str]) -> usize {
+    let (_root, work) = quota_dir();
+    let req = call(
+        1,
+        "pbo_build",
+        &json!({"source": ".", "target": "../a.pbo"}),
+    );
+    let r = run_with(extra, lines(&[req]), &[], &work);
+    text(&r.replies[0]).matches("[prerapified-file]").count()
+}
+
+#[test]
+fn mcp_verbose_keeps_all_warnings() {
+    assert_eq!(prerapified_warnings(&["-v"]), 12);
+    assert_eq!(prerapified_warnings(&[]), 10);
 }

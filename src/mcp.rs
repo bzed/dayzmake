@@ -97,14 +97,15 @@ fn read_line<R: BufRead>(input: &mut R, cap: usize) -> io::Result<Line> {
 /// # Errors
 ///
 /// Returns an error when reading the input or writing the output fails.
-pub fn serve<R: BufRead, W: Write>(input: R, output: W) -> Result<(), Error> {
-    serve_with_limit(input, output, MAX_LINE)
+pub fn serve<R: BufRead, W: Write>(input: R, output: W, verbose: bool) -> Result<(), Error> {
+    serve_with_limit(input, output, MAX_LINE, verbose)
 }
 
 fn serve_with_limit<R: BufRead, W: Write>(
     mut input: R,
     mut output: W,
     cap: usize,
+    verbose: bool,
 ) -> Result<(), Error> {
     loop {
         let reply = match read_line(&mut input, cap)? {
@@ -114,7 +115,7 @@ fn serve_with_limit<R: BufRead, W: Write>(
                 INVALID_REQUEST,
                 "request line too long",
             )),
-            Line::Text(line) => handle_line(&line),
+            Line::Text(line) => handle_line(&line, verbose),
         };
         if let Some(reply) = reply {
             writeln!(output, "{reply}")?;
@@ -128,7 +129,7 @@ fn error_reply(id: &Value, code: i64, message: &str) -> Value {
 }
 
 /// Handles one request line; `None` for notifications and blank lines.
-fn handle_line(line: &[u8]) -> Option<Value> {
+fn handle_line(line: &[u8], verbose: bool) -> Option<Value> {
     if line.iter().all(u8::is_ascii_whitespace) {
         return None;
     }
@@ -158,13 +159,13 @@ fn handle_line(line: &[u8]) -> Option<Value> {
     };
     // notifications never get a reply
     let id = id?;
-    Some(match dispatch(method, request.get("params")) {
+    Some(match dispatch(method, request.get("params"), verbose) {
         Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
         Err((code, message)) => error_reply(id, code, &message),
     })
 }
 
-fn dispatch(method: &str, params: Option<&Value>) -> Result<Value, (i64, String)> {
+fn dispatch(method: &str, params: Option<&Value>, verbose: bool) -> Result<Value, (i64, String)> {
     match method {
         "initialize" => {
             let asked = params
@@ -207,14 +208,14 @@ fn dispatch(method: &str, params: Option<&Value>) -> Result<Value, (i64, String)
             }) {
                 return Err((INVALID_PARAMS, format!("unknown tool \"{name}\"")));
             }
-            Ok(run_tool(name, args))
+            Ok(run_tool(name, args, verbose))
         }
         _ => Err((METHOD_NOT_FOUND, format!("method not found: {method}"))),
     }
 }
 
 /// Runs a tool and wraps its output (or its failure) as an MCP tool result.
-fn run_tool(name: &str, args: &Args) -> Value {
+fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
     let (offset, length) = match window_args(name, args) {
         Ok(w) => w,
         Err(e) => {
@@ -225,6 +226,9 @@ fn run_tool(name: &str, args: &Args) -> Value {
     // global state it touches (the proton flag) is reset below or by its guards. Every call has its
     // own warnings, with their own quotas.
     let mut sink = Warnings::new();
+    if verbose {
+        sink.unlimited();
+    }
     let outcome = catch_unwind(AssertUnwindSafe(|| call_tool(name, args, &mut sink)));
     let warnings: Vec<String> = sink.warnings().iter().map(ToString::to_string).collect();
     binarize::set_proton(false);
