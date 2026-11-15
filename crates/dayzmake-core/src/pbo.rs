@@ -1009,13 +1009,14 @@ impl PBO {
         for (name, cursor) in &files_sorted {
             let size = u32::try_from(cursor.get_ref().len())
                 .map_err(|_| error!("PBO entry \"{}\" is too large.", printable(name)))?;
-            // an entry that was read and not replaced since keeps its compression: `files`
-            // holds its stored bytes, so the header must still say how to decode them
+            // an entry that was read and not replaced since keeps its packing method (compressed or
+            // one we do not know): `files` holds its stored bytes, so the header must still say
+            // how to decode them
             let kept = self
                 .headers
                 .iter()
                 .rfind(|h| h.filename == *name)
-                .filter(|h| h.packing_method == PACKING_COMPRESSED);
+                .filter(|h| h.packing_method != 0);
             let header = PBOHeader {
                 filename: (*name).to_string(),
                 raw_filename: self.raw_names.get(*name).cloned(),
