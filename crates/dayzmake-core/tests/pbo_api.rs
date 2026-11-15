@@ -608,6 +608,9 @@ fn replacing_a_compressed_entry_stores_it_uncompressed() {
 fn signature_of_a_rewritten_read_pbo_verifies() {
     let key = armk();
     let written = read(&rewritten(&read(&with_compressed_entry())));
+    // The old write kept the compressed bytes under a stored header, so the data read back
+    // was the compressed form, not the original.
+    assert_eq!(written.file_data("b.txt").unwrap().unwrap(), SECOND);
     let signature = key.sign(&written, BISignVersion::V3).unwrap();
     key.to_public_key()
         .unwrap()

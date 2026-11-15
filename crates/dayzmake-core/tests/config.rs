@@ -320,3 +320,28 @@ fn preprocess_errors_with_multibyte_indent_have_the_caret_in_the_right_place() {
         );
     }
 }
+
+#[test]
+fn parse_error_with_nbsp_indent_and_multibyte_letter_has_the_caret_in_column_one() {
+    // The NBSP is two bytes but one character: the old byte arithmetic subtracted 2 from
+    // column 1 and underflowed.
+    let msg = parse_err("\u{a0}\u{e9}x = 1;\n");
+    let lines: Vec<&str> = msg.lines().collect();
+    let text = lines
+        .iter()
+        .position(|l| l.contains('\u{e9}'))
+        .expect("text line");
+    assert_eq!(lines[text], "  \u{e9}x = 1;", "{msg}");
+    assert_eq!(lines[text + 1], "  ^", "{msg}");
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_on_a_line_of_only_invisible_spaces_does_not_panic() {
+    let msg = parse_err("class A {\n\u{a0}\n= 1; };");
+    assert!(msg.contains("In line 2:"), "{msg}");
+    assert!(msg.contains("\n  \n  ^\n"), "empty text line, caret at start: {msg}");
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
+    let msg = parse_err("class A {\n\u{3000}\n= 1; };");
+    assert!(msg.contains("\"\\u{3000}\""), "visible token: {msg}");
+}
