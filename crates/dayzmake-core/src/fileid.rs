@@ -13,6 +13,10 @@ use std::path::Path;
 /// `same-file` compares a 32-bit volume serial number and a 64-bit file index, but `ReFS` (Dev Drive) file ids are
 /// 128 bits, so two different files could compare equal there. Two ids therefore also have to agree on the file
 /// length to be equal; a pair of different files of the same length on `ReFS` is the one case left undetected.
+///
+/// The length is read when two ids are compared, not when they are created (a growing temp file stays equal to
+/// itself). Two ids compare equal only if both lengths can be read and match, so an id is not necessarily equal to
+/// itself and the type is `PartialEq` only.
 #[derive(Debug)]
 pub struct FileId(same_file::Handle);
 
@@ -28,8 +32,6 @@ impl PartialEq for FileId {
         self.0 == other.0 && self.len().is_some() && self.len() == other.len()
     }
 }
-
-impl Eq for FileId {}
 
 impl FileId {
     /// The identity of the file at `path` (symlinks are followed), or `None` when it cannot be opened (missing,
@@ -48,13 +50,28 @@ impl FileId {
 
 impl FileId {
     /// The identity of the file standard output is redirected to, or `None` unless that is a regular file: a
-    /// terminal, a pipe, a device, a closed stdout or a failure to duplicate the handle all give `None`.
+    /// terminal, a pipe, a device, a closed stdout or a failed duplicate all give `None`.
+    ///
+    /// The identity is taken from a duplicate of the stdout descriptor (handle on Windows), owned by the returned
+    /// id, so dropping it never closes the process's real stdout. On Windows the "regular file" check relies on
+    /// the metadata of a console or pipe handle failing, which gives `None`.
     #[must_use]
     pub fn stdout() -> Option<FileId> {
-        let handle = same_file::Handle::stdout().ok()?;
-        // the handle is a duplicate and is never read; only a regular file is wanted
-        let regular = handle.as_file().metadata().ok()?.is_file();
-        regular.then_some(FileId(handle))
+        #[cfg(unix)]
+        let owned = {
+            use std::os::fd::AsFd;
+            std::io::stdout().as_fd().try_clone_to_owned().ok()?
+        };
+        #[cfg(windows)]
+        let owned = {
+            use std::os::windows::io::AsHandle;
+            std::io::stdout().as_handle().try_clone_to_owned().ok()?
+        };
+        let file = std::fs::File::from(owned);
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
+        same_file::Handle::from_file(file).ok().map(FileId)
     }
 }
 
@@ -106,6 +123,20 @@ mod tests {
         let before = FileId::of(&a).unwrap();
         std::fs::write(&a, "longer").unwrap();
         assert_eq!(before, FileId::of(&a).unwrap());
+    }
+
+    #[test]
+    fn stdout_identity_leaves_stdout_open() {
+        // under the test harness stdout is a pipe or a file; either way the lookup must not close it
+        let _ = FileId::stdout();
+        let _ = FileId::stdout();
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsFd;
+            // fd 1 is still open: it can be duplicated again
+            assert!(std::io::stdout().as_fd().try_clone_to_owned().is_ok());
+        }
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
     }
 
     #[cfg(unix)]
