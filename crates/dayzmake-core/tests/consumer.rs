@@ -45,23 +45,45 @@ fn naves_workflow_in_parallel() {
         .map(|i| (format!("s_{i}.paa"), PaaFormat::Dxt1, "DXT1"))
         .chain((0..8).map(|i| (format!("m_{i}.paa"), PaaFormat::Dxt5, "DXT5")))
         .collect();
-    thread::scope(|scope| {
-        for (n, (name, format, _)) in jobs.iter().enumerate() {
-            let data = &data;
-            scope.spawn(move || {
-                let warnings = Warnings::new();
-                let image = tile(u8::try_from(n).unwrap());
-                let paa = Paa::from_dynamic_image(&image, *format).unwrap();
-                let mut out = File::create(data.join(name)).unwrap();
-                paa.write(&mut out).unwrap();
-                assert!(
-                    warnings.warnings().is_empty(),
-                    "{name}: {:?}",
-                    warnings.warnings()
-                );
-            });
-        }
+    // Each thread also packs its own folder with `PackOptions::build()`: an already rapified
+    // `.cpp` makes `from_directory` warn once per file. The thread count of such files varies, and
+    // every sink must hold exactly its own warnings.
+    let results: Vec<Warnings> = thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .iter()
+            .enumerate()
+            .map(|(n, (name, format, _))| {
+                let data = &data;
+                let root = tmp.path();
+                scope.spawn(move || {
+                    let mut warnings = Warnings::new();
+                    let image = tile(u8::try_from(n).unwrap());
+                    let paa = Paa::from_dynamic_image(&image, *format).unwrap();
+                    let mut out = File::create(data.join(name)).unwrap();
+                    paa.write(&mut out).unwrap();
+
+                    let own = root.join(format!("own_{n}"));
+                    fs::create_dir_all(&own).unwrap();
+                    for i in 0..=(n % 5) {
+                        fs::write(own.join(format!("t{n}_{i}.cpp")), b"\0raP\0\0\0\0").unwrap();
+                    }
+                    PBO::from_directory(&own, &PackOptions::build(), None, &mut warnings).unwrap();
+                    warnings
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
+    for (n, warnings) in results.iter().enumerate() {
+        let mut files: Vec<&str> = warnings
+            .warnings()
+            .iter()
+            .map(|w| w.file.as_deref().unwrap_or(""))
+            .collect();
+        files.sort_unstable();
+        let expected: Vec<String> = (0..=(n % 5)).map(|i| format!("t{n}_{i}.cpp")).collect();
+        assert_eq!(files, expected, "thread {n}: {:?}", warnings.warnings());
+    }
     for (name, _, compression) in &jobs {
         let mut file = BufReader::new(File::open(data.join(name)).unwrap());
         let paa = Paa::read(&mut file).unwrap();
@@ -75,6 +97,9 @@ fn naves_workflow_in_parallel() {
     assert!(warnings.warnings().is_empty(), "{:?}", warnings.warnings());
     let pbo_path = addons.join("naves_test.pbo");
     pbo.write(&mut File::create(&pbo_path).unwrap()).unwrap();
+    // A later build reads the key back from secrets/.
+    let key = BIPrivateKey::read(&mut File::open(secrets.join("naves_test.biprivatekey")).unwrap())
+        .unwrap();
     let signature = key.sign(&pbo, BISignVersion::V3).unwrap();
     let sig_path = signature_path(&pbo_path, key.name()).unwrap();
     signature
