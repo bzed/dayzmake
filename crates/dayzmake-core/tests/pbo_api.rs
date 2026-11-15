@@ -329,3 +329,24 @@ fn removing_a_missing_entry_changes_nothing() {
         before
     );
 }
+#[cfg(feature = "sign")]
+#[test]
+fn private_key_debug_has_no_key_material() {
+    let text = format!("{:?}", armk());
+    assert!(text.contains("armk"), "{text}");
+    let d = {
+        let bytes = fs::read(sign_dir().join("armk.biprivatekey")).unwrap();
+        // The private key file holds d, p, q, ... as raw bytes; none of their hex may show up.
+        bytes[bytes.len() - 32..]
+            .iter()
+            .fold(String::new(), |mut acc, b| {
+                use std::fmt::Write as _;
+                let _ = write!(acc, "{b:02x}"); // writing to a String cannot fail
+                acc
+            })
+    };
+    assert!(!text.to_lowercase().contains(&d), "{text}");
+    for field in ["dmp1", "dmq1", "iqmp", "d:", "p:", "q:"] {
+        assert!(!text.contains(field), "{text}");
+    }
+}

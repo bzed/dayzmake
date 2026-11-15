@@ -26,6 +26,7 @@ pub struct BIPrivateKey {
 }
 
 /// BI public key (.bikey)
+#[derive(Debug)]
 pub struct BIPublicKey {
     name: String,
     length: u32,
@@ -34,7 +35,7 @@ pub struct BIPublicKey {
 }
 
 /// BI signature version
-#[derive(Copy, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BISignVersion {
     /// Version 2
@@ -44,6 +45,7 @@ pub enum BISignVersion {
 }
 
 /// BI signature (.bisign)
+#[derive(Debug)]
 pub struct BISign {
     version: BISignVersion,
     name: String,
@@ -53,6 +55,16 @@ pub struct BISign {
     sig1: BigNum,
     sig2: BigNum,
     sig3: BigNum,
+}
+
+impl std::fmt::Debug for BIPrivateKey {
+    /// Prints the name and length only, never any key material.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BIPrivateKey")
+            .field("name", &self.name)
+            .field("length", &self.length)
+            .finish_non_exhaustive()
+    }
 }
 
 fn write_bignum<O: Write>(output: &mut O, bn: &BigNum, size: usize) -> Result<(), Error> {
