@@ -86,6 +86,7 @@ Yes, with conditions:
   No `rand` crate in the dependency tree (RUSTSEC-2026-0097); seeded RNG in tests via `rand_chacha` + `rand_core`.
 - Our code contains no modular arithmetic of its own: every operation on secret numbers goes through `rsa`
   (`rsa_decrypt` with an RNG for blinding) or `crypto-bigint` constant-time APIs.
+- Test keys are generated at test time from fixed seeds (`rand_chacha`); no new key files in the repo.
 - `.bisign`, `.bikey`, `.biprivatekey` formats are byte-for-byte unchanged; every BI fixture under
   `tests/fixtures/bi/sign/` stays byte-identical when re-signed.
 - `openssl` becomes a dev-dependency of `dayzmake-core` only (differential tests); `cargo tree -e normal` of both crates
@@ -114,17 +115,23 @@ Yes, with conditions:
 - [ ] **Step 1:** Tests that pin today's results with the current OpenSSL code, so the switch can be measured:
   - `fixture_signatures_are_reproduced`: for every PBO in `tests/fixtures/bi/sign/` with a BI-made `.bisign`, signing
     with `armk.biprivatekey` (V2 and V3 as the fixture says) gives the fixture bytes.
-  - `signatures_of_recorded_keys_are_stable`: OpenSSL key generation cannot be seeded, so generate 8 throwaway keys
-    once with today's `dayzmake keygen` (six 1024-bit, one 2048, one 4096; key generation takes a `length`
-    internally — use it for the larger ones), commit them under `tests/fixtures/sign/keys/` with a README saying they
-    are throwaway test keys (like `armk`), and record the V2 and V3 signatures of the golden PBO with each. The test
-    re-signs and compares byte for byte. AGENTS.md (*Secrets*) allows only the one throwaway key under
-    `tests/fixtures/bi/sign/`; extend that exception to `tests/fixtures/sign/keys/` in the same commit, and **ask the
-    maintainer before committing the keys** (alternative: generate them at test time with a seeded RNG once Task 4
-    exists, and pin only OpenSSL-vs-new agreement instead of recorded bytes).
+  - `seeded_keys_sign_like_an_independent_implementation`: **keys are generated at test time from fixed seeds, never
+    committed** (maintainer decision 2026-11-15). A test helper generates 8 keys with
+    `rsa::RsaPrivateKey::new_with_exp(&mut ChaCha20Rng::seed_from_u64(seed), bits, 65537)` (seeds 1–8; six 1024-bit,
+    one 2048, one 4096) and serialises them into `.biprivatekey` bytes (BI layout: name, header, n, p, q, dmp1, dmq1,
+    iqmp, d little-endian — the same layout `BIPrivateKey::write` produces; the helper is test code, checked by
+    reading the bytes back with `BIPrivateKey::read` and writing them again byte-identically). For each key, sign
+    the golden PBO (V2 and V3) with dayzmake and compare with the signature computed **independently** in the test
+    from the same padded hashes by the *other* library: before the switch dayzmake uses OpenSSL and the test computes
+    `rsa::hazmat::rsa_decrypt`; after the switch dayzmake uses `rsa` and the test computes OpenSSL
+    `BigNum::mod_exp(hash, d, n)`. `rsa`, `rand_chacha` and `rand_core` are dev-dependencies in this task; `rsa`
+    becomes a normal dependency in Task 2. The padded hashes come from a `pub(crate)`/`#[doc(hidden)]`-free path:
+    expose nothing new; recompute them in the test from the PBO with `sha1` and BI's padding (a short, documented
+    helper), and assert that verifying dayzmake's signature with the public key yields exactly those padded hashes.
   - `verify_accepts_and_rejects`: each fixture signature verifies; one flipped bit in the signature, in the PBO data,
     and in the key's `n` each fails verification with an error.
 - [ ] **Step 2:** Run → PASS on the OpenSSL code. Commit `test: pin BI signature results before the RSA switch`.
+  No key material is committed; only the existing throwaway `armk` key stays in the repo.
 
 ### Task 2: Private and public keys on `rsa` types
 
