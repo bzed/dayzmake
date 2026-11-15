@@ -989,7 +989,9 @@ impl PBO {
 
         if let Some(prefix) = self.header_extensions.get("prefix") {
             headers.write_all(b"prefix\0")?;
-            headers.write_cstring(self.extension_bytes(prefix))?;
+            headers
+                .write_cstring(self.extension_bytes(prefix))
+                .prepend_error("Header extension \"prefix\":")?;
         }
 
         for (key, value) in &self.header_extensions {
@@ -997,8 +999,10 @@ impl PBO {
                 continue;
             }
 
-            headers.write_cstring(self.extension_bytes(key))?;
-            headers.write_cstring(self.extension_bytes(value))?;
+            headers
+                .write_cstring(self.extension_bytes(key))
+                .and_then(|()| headers.write_cstring(self.extension_bytes(value)))
+                .prepend_error(format!("Header extension \"{}\":", printable(key)))?;
         }
         headers.write_cstring(String::new())?;
 

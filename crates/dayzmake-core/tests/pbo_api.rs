@@ -704,3 +704,13 @@ fn duplicate_names_compressed_first_stored_last_survive_a_rewrite() {
     let back = read(&rewritten(&pbo));
     assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"second");
 }
+
+#[test]
+fn a_header_extension_with_nul_is_rejected_and_nothing_written() {
+    let mut pbo = PBO::new();
+    pbo.set_header_extension("k", "a\0b");
+    let mut out = Vec::new();
+    let msg = pbo.write(&mut out).unwrap_err().to_string();
+    assert!(out.is_empty(), "{msg}");
+    assert!(msg.contains("NUL") && msg.contains('k'), "{msg}");
+}

@@ -126,3 +126,22 @@ fn a_rejected_model_writes_nothing() {
         assert!(msg.contains("LOD"), "{msg}");
     }
 }
+
+#[test]
+fn a_tagg_name_with_nul_is_rejected_and_nothing_written() {
+    let mut named = triangle_lod();
+    named.taggs.push(Tagg::new(1, "a\0b", vec![0; 4]));
+    let mut textured = triangle_lod();
+    textured.faces[0].texture = "t\0x.paa".to_string();
+    let mut material = triangle_lod();
+    material.faces[0].material = "m\0x.rvmat".to_string();
+    for bad in [named, textured, material] {
+        let mut model = P3D::new(0x101);
+        model.lods.push(triangle_lod());
+        model.lods.push(bad);
+        let mut out = Vec::new();
+        let msg = model.write(&mut out).unwrap_err().to_string();
+        assert!(out.is_empty(), "{msg}");
+        assert!(msg.contains("NUL"), "{msg}");
+    }
+}

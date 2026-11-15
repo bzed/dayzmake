@@ -441,6 +441,13 @@ impl LOD {
             .checked_add(self.faces.len())
             .ok_or_else(|| invalid("LOD section count out of range"))?;
         for (i, tagg) in self.taggs.iter().enumerate() {
+            if tagg.name.contains('\0') {
+                return Err(invalid(format!(
+                    "LOD {}: tagg {i} name \"{}\" contains a NUL byte",
+                    self.name(),
+                    printable(&tagg.name),
+                )));
+            }
             // The length of an inactive tagg is not enforced (real files carry empty ones).
             if tagg.active != 0 && tagg.is_selection() && tagg.data.len() != expected {
                 return Err(invalid(format!(
@@ -454,6 +461,15 @@ impl LOD {
             }
         }
         for (i, face) in self.faces.iter().enumerate() {
+            for (field, value) in [("texture", &face.texture), ("material", &face.material)] {
+                if value.contains('\0') {
+                    return Err(invalid(format!(
+                        "LOD {}: face {i} {field} \"{}\" contains a NUL byte",
+                        self.name(),
+                        printable(value),
+                    )));
+                }
+            }
             if face.vertices.len() != 3 && face.vertices.len() != 4 {
                 return Err(invalid(format!(
                     "LOD {}: face {i} has {} vertices (expected 3 or 4)",
