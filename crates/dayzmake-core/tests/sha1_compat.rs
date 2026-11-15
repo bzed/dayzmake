@@ -60,6 +60,10 @@ fn sha1_matches_the_fips_180_vectors() {
         "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
     );
     assert_eq!(
+        hex(b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
+        "a49b2446a02c645bf419f995b67091253a04a259"
+    );
+    assert_eq!(
         hex(&vec![b'a'; 1_000_000]),
         "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
     );

@@ -13,10 +13,10 @@ Every reader treats its input as hostile: errors instead of panics, checked arit
 
 | Feature | Default | Enables |
 |---|---|---|
-| `sign` | yes | the `sign` module (BI keys, `.bisign` creation and verification); needs OpenSSL |
+| `sign` | yes | the `sign` module (BI keys, `.bisign` creation and verification) |
 | `image` | yes | `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the re-exported `image` crate |
 
-Without them (`default-features = false`) the crate builds without OpenSSL and without `image`. PBO reading
+Without them (`default-features = false`) the crate builds without `sign` and `image`. PBO reading
 and writing, configs, P3D and PAA reading/writing stay available.
 
 ## Usage

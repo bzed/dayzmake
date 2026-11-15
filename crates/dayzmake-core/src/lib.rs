@@ -29,7 +29,7 @@
 //!
 //! # Features
 //!
-//! - `sign` (default): the `sign` module; needs OpenSSL.
+//! - `sign` (default): the `sign` module.
 //! - `image` (default): `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the
 //!   re-exported `image` crate.
 //!

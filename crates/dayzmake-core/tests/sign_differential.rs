@@ -1,7 +1,7 @@
 //! Differential tests of BI signing: they pin the RSA results of dayzmake against an independent
 //! implementation, so a change of the RSA backend can be measured.
 //!
-//! dayzmake signs with the `rsa` crate; the test computes the signatures independently with `OpenSSL`'s
+//! dayzmake signs with the `rsa` crate; the test computes the signatures independently with `num-bigint`'s
 //! `BigUint::modpow` (the roles were the other way round before the switch to `rsa`). Keys are generated here
 //! from fixed seeds; no key material is committed except the throwaway `armk` fixture key.
 #![cfg(feature = "sign")]
