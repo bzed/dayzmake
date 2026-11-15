@@ -45,7 +45,7 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
     let mut private_file = AtomicTarget::create_with(
         &private_key_path,
         true,
-        false,
+        true,
         "Failed to create private key:",
     )?;
     private_key

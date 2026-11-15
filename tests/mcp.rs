@@ -823,3 +823,22 @@ fn mcp_failed_build_keeps_the_existing_target() {
     names.sort();
     assert_eq!(names, ["out.pbo", "src"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn mcp_key_generate_creates_the_private_key_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    let r = run(
+        &[call(1, "key_generate", &json!({"name": s(&p.join("k"))}))],
+        p,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    let mode = fs::metadata(p.join("k.biprivatekey"))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+}

@@ -842,3 +842,37 @@ fn atomic_target_skips_an_existing_temp_name() {
     assert_eq!(std::fs::read(&taken).unwrap(), b"foreign");
     assert_eq!(std::fs::read(&target).unwrap(), b"data");
 }
+
+#[cfg(unix)]
+#[test]
+fn keygen_creates_the_private_key_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mode = |n: &str| {
+        std::fs::metadata(dir.path().join(n))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let (code, _, err) = dayzmake(&["keygen", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+    assert_ne!(
+        mode("k.bikey") & 0o044,
+        0,
+        "the public key keeps the default mode"
+    );
+    // over a wider existing key, and over a 0600 one
+    std::fs::set_permissions(
+        dir.path().join("k.biprivatekey"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let (code, _, err) = dayzmake(&["keygen", "-f", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+    let (code, _, err) = dayzmake(&["keygen", "-f", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+}
