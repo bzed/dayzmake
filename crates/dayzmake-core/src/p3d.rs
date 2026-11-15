@@ -433,7 +433,53 @@ impl LOD {
         })
     }
 
+    /// Checks that the LOD is consistent: selection sizes and vertex indices.
+    fn validate(&self) -> Result<(), Error> {
+        let expected = self
+            .points
+            .len()
+            .checked_add(self.faces.len())
+            .ok_or_else(|| invalid("LOD section count out of range"))?;
+        for (i, tagg) in self.taggs.iter().enumerate() {
+            // An inactive tagg is ignored by consumers; real files carry empty ones.
+            if tagg.active != 0 && tagg.is_selection() && tagg.data.len() != expected {
+                return Err(invalid(format!(
+                    "LOD {}: tagg {i} \"{}\" is a selection with {} bytes, expected {expected} ({} points + {} faces)",
+                    self.name(),
+                    printable(&tagg.name),
+                    tagg.data.len(),
+                    self.points.len(),
+                    self.faces.len(),
+                )));
+            }
+        }
+        for (i, face) in self.faces.iter().enumerate() {
+            for (j, vertex) in face.vertices.iter().enumerate() {
+                let point = usize::try_from(vertex.point_index).unwrap_or(usize::MAX);
+                if point >= self.points.len() {
+                    return Err(invalid(format!(
+                        "LOD {}: face {i} vertex {j} has point index {} but there are {} points",
+                        self.name(),
+                        vertex.point_index,
+                        self.points.len(),
+                    )));
+                }
+                let normal = usize::try_from(vertex.normal_index).unwrap_or(usize::MAX);
+                if normal >= self.face_normals.len() {
+                    return Err(invalid(format!(
+                        "LOD {}: face {i} vertex {j} has normal index {} but there are {} normals",
+                        self.name(),
+                        vertex.normal_index,
+                        self.face_normals.len(),
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
+        self.validate()?;
         let len32 =
             |len: usize| u32::try_from(len).map_err(|_| invalid("LOD section count out of range"));
         output.write_all(b"P3DM")?;
@@ -523,7 +569,8 @@ impl P3D {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure.
+    /// Returns an error on I/O failure, or if a LOD is inconsistent (a selection whose size is not
+    /// points + faces, a vertex index out of range).
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         let mut writer = BufWriter::new(output);
 
