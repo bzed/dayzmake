@@ -199,28 +199,24 @@ fn open_device(path: &Path, failure: &str) -> io::Result<Option<File>> {
     use std::os::windows::fs::OpenOptionsExt;
     // an unanswerable handle counts as a disk file: the worst case is an error, never an in-place overwrite
     let is_device = |file: &File| winapi_util::file::typ(file).is_ok_and(|t| !t.is_disk());
-    match std::fs::OpenOptions::new().access_mode(0).open(path) {
-        Ok(probe) => {
-            if is_device(&probe) {
-                drop(probe);
-                let file = std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(path)
-                    .prepend_error(failure)?;
-                return Ok(Some(file));
-            }
+    let file = if let Ok(probe) = std::fs::OpenOptions::new().access_mode(0).open(path) {
+        if !is_device(&probe) {
+            return Ok(None);
         }
+        drop(probe);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .prepend_error(failure)?
+    } else {
         // `CON` opens as `CONIN$` or `CONOUT$` depending on the requested access, so a probe without access can
         // fail for a device: ask again with write access (no create, no truncate) before giving up
-        Err(_) => {
-            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path)
-                && is_device(&file)
-            {
-                return Ok(Some(file));
-            }
+        match std::fs::OpenOptions::new().write(true).open(path) {
+            Ok(file) if is_device(&file) => file,
+            _ => return Ok(None),
         }
-    }
-    Ok(None)
+    };
+    Ok(Some(file))
 }
 
 /// Only Windows has device names that look like files.

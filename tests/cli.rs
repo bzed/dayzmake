@@ -784,10 +784,17 @@ fn build_writes_to_a_windows_device_name_directly() {
 
 /// A regular file reached under a device name through a verbatim path (`\\?\C:\tmp\NUL`).
 #[cfg(windows)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
 fn verbatim_nul_file(dir: &std::path::Path) -> String {
     let verbatim = format!(r"\\?\{}\NUL", dir.display());
     std::fs::write(&verbatim, vec![b'x'; 100_000]).unwrap();
     verbatim
+}
+
+/// Whether `bytes` start like a PBO (an empty first name, then the `sreV` product entry).
+#[cfg(windows)]
+fn looks_like_a_pbo(bytes: &[u8]) -> bool {
+    bytes.windows(4).take(8).any(|w| w == b"sreV")
 }
 
 #[cfg(windows)]
@@ -811,23 +818,27 @@ fn build_force_replaces_and_truncates_a_regular_file_with_a_device_name() {
     let (code, _, err) = dayzmake(&["build", "--force", "m", &target], dir.path());
     assert_eq!(code, 0, "{err}");
     let written = std::fs::read(&target).unwrap();
-    assert!(!written.is_empty());
+    assert!(looks_like_a_pbo(&written), "not a PBO");
     assert!(written.len() < 100_000, "the old tail is gone");
 }
 
 #[cfg(windows)]
 #[test]
 fn build_creates_a_new_target_named_like_a_device() {
+    // does this Windows treat `nul.probe` as a file? (older ones treat reserved names with any extension as devices)
+    let scratch = tempfile::tempdir().unwrap();
+    let names_with_an_extension_are_files = std::fs::File::create(scratch.path().join("nul.probe"))
+        .is_ok()
+        && std::fs::read_dir(scratch.path()).unwrap().count() == 1;
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "m/a.txt", "hello");
     let (code, _, err) = dayzmake(&["build", "m", "aux.pbo"], dir.path());
-    // either a PBO file, or (if this Windows treats the name as a device) the device took the data; in both
-    // cases the target is not reported as missing
-    if code == 0 {
-        if let Ok(bytes) = std::fs::read(dir.path().join("aux.pbo")) {
-            assert!(bytes.windows(4).take(8).any(|w| w == b"sreV"), "not a PBO");
-        }
-    } else {
+    if names_with_an_extension_are_files {
+        assert_eq!(code, 0, "{err}");
+        let bytes = std::fs::read(dir.path().join("aux.pbo")).unwrap();
+        assert!(looks_like_a_pbo(&bytes), "not a PBO");
+    } else if code != 0 {
+        // the device took the name, but the target is not reported as missing
         let lower = err.to_lowercase();
         assert!(
             !lower.contains("not found") && !lower.contains("cannot find"),
@@ -839,16 +850,23 @@ fn build_creates_a_new_target_named_like_a_device() {
 #[cfg(windows)]
 #[test]
 fn build_writes_to_con_in_place() {
+    // without a console (a CI runner with redirected handles) CON cannot be opened: nothing to test
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open("CONOUT$")
+        .is_err()
+    {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "m/a.txt", "hello");
-    // the child's stdout and stderr are captured by the helper; CON is the console, not those pipes
-    let (_, _, err) = dayzmake(&["build", "m", "CON"], dir.path());
-    let lower = err.to_lowercase();
-    assert!(!lower.contains("already exists"), "{err}");
-    assert!(
-        !lower.contains("not found") && !lower.contains("cannot find"),
-        "{err}"
-    );
+    let (code, _, err) = dayzmake(&["build", "m", "CON"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let left: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["m"], "no temp file or CON file is left");
 }
 
 #[cfg(windows)]
