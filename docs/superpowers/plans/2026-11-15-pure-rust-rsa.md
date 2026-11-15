@@ -187,6 +187,8 @@ the input; regression test in `crates/dayzmake-core/tests/` and a `config_parse`
   (a 512-bit throwaway key fixture signed with today's code, Review Focus 2) or a documented error if `rsa` cannot
   represent it. In `verify_accepts_and_rejects`, the flipped-`n` case must treat a key that `BIPublicKey::read`
   rejects as a pass (an even `n` may be refused at read time by `rsa`), not `unwrap` the read.
+- Also (#52): `BISign::read` gets the same header (bType/aiKeyAlg/magic) and modulus-width checks as
+  `BIPublicKey::read` (#48, #50); tests for a wrong magic and a narrow n.
 - Also (Task 2 review M3): every buffer holding secret key bytes (the `read_uint` buffer, the outputs of
   `to_be_bytes_trimmed_vartime` in `write_uint`/`same_value`, the d copies) is `zeroize::Zeroizing`; the OpenSSL
   copies of d disappear with this task.
