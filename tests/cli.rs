@@ -690,3 +690,63 @@ fn rapify_nbsp_indent_reports_a_parse_error() {
     assert_eq!(code, 1, "{err}");
     assert!(err.starts_with("error:"), "{err}");
 }
+
+/// File names in `dir`, sorted.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn failed_build_keeps_the_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "class A {\n");
+    std::fs::write(dir.path().join("out.pbo"), b"good pbo bytes").unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(
+        std::fs::read(dir.path().join("out.pbo")).unwrap(),
+        b"good pbo bytes"
+    );
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+}
+
+#[test]
+fn build_of_a_missing_folder_creates_no_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["build", "nodir", "out.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
+}
+
+#[test]
+fn successful_build_replaces_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::write(dir.path().join("out.pbo"), b"old").unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let pbo = std::fs::read(dir.path().join("out.pbo")).unwrap();
+    assert_ne!(pbo, b"old");
+    assert!(pbo.windows(5).any(|w| w == b"hello"));
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+}
+
+#[test]
+fn failed_rapify_keeps_the_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bad.cpp", "class A {\n");
+    std::fs::write(dir.path().join("c.bin"), b"good bin").unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "-f", "bad.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(
+        std::fs::read(dir.path().join("c.bin")).unwrap(),
+        b"good bin"
+    );
+    assert_eq!(names(dir.path()), ["bad.cpp", "c.bin"]);
+}

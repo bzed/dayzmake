@@ -1,10 +1,9 @@
 //! Key generation, signing and verification commands.
 
-use std::fs::File;
 use std::io::Error;
 use std::path::PathBuf;
 
-use crate::cli_io::open_input;
+use crate::cli_io::{AtomicTarget, open_input};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::pbo::PBO;
@@ -43,8 +42,10 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             private_key_path.display()
         ));
     }
+    let mut private_file = AtomicTarget::create(&private_key_path, true)
+        .prepend_error("Failed to create private key:")?;
     private_key
-        .write(&mut File::create(&private_key_path).prepend_error("Failed to create private key:")?)
+        .write(&mut private_file)
         .prepend_error("Failed to write private key:")?;
 
     let mut public_key_path = keyname.clone();
@@ -55,9 +56,13 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             public_key_path.display()
         ));
     }
+    let mut public_file = AtomicTarget::create(&public_key_path, true)
+        .prepend_error("Failed to create public key:")?;
     public_key
-        .write(&mut File::create(&public_key_path).prepend_error("Failed to create public key:")?)
+        .write(&mut public_file)
         .prepend_error("Failed to write public key:")?;
+    private_file.commit()?;
+    public_file.commit()?;
 
     Ok(())
 }
@@ -97,8 +102,11 @@ pub fn cmd_sign(
         ));
     }
     let sig = privatekey.sign(&pbo, version)?;
-    sig.write(&mut File::create(&sig_path).prepend_error("Failed to open signature file:")?)
+    let mut file =
+        AtomicTarget::create(&sig_path, true).prepend_error("Failed to open signature file:")?;
+    sig.write(&mut file)
         .prepend_error("Failed to write signature:")?;
+    file.commit()?;
 
     Ok(())
 }

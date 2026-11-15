@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
-use crate::cli_io::create_target;
+use crate::cli_io::AtomicTarget;
 use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -876,9 +876,11 @@ fn open(path: &Path) -> Result<File, Error> {
 
 /// Writes `data` to `path` (not over an existing file unless `force`) and says so.
 fn write_target(path: &Path, data: &[u8], force: bool) -> Result<String, Error> {
-    create_target(path, force)?
+    let mut target = AtomicTarget::create(path, force)?;
+    target
         .write_all(data)
         .prepend_error("Failed to write output:")?;
+    target.commit()?;
     Ok(format!("wrote {} ({} bytes)", path.display(), data.len()))
 }
 
@@ -997,7 +999,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
     if build {
         // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
         let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
-        let mut file = create_target(&target, force)?;
+        let mut file = AtomicTarget::create(&target, force)?;
         let result = pbo::cmd_build(
             &source,
             &mut file,
@@ -1011,9 +1013,11 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         let closed = binarizer.map_or(Ok(()), |b| b.close(warnings));
         result?;
         closed?;
+        file.commit()?;
     } else {
-        let mut file = create_target(&target, force)?;
+        let mut file = AtomicTarget::create(&target, force)?;
         pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;
+        file.commit()?;
     }
     if let Some(key) = key {
         sign::cmd_sign(key, target.clone(), None, BISignVersion::V3, force)?;

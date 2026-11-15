@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
-use crate::cli_io::{Input, Output, create_target, open_input};
+use crate::cli_io::{AtomicTarget, Input, Output, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
 use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
@@ -193,7 +193,7 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        Ok(Output::File(create_target(
+        Ok(Output::File(AtomicTarget::create(
             Path::new(target),
             args.flag_force,
         )?))
@@ -219,23 +219,29 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         let target = required_target(args)?;
         binarize::cmd_binarize(source, &target, args.flag_force, warnings)
     } else if args.cmd_rapify {
+        let mut output = get_output(args)?;
         config::cmd_rapify(
             &mut get_input(args)?,
-            &mut get_output(args)?,
+            &mut output,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
             warnings,
-        )
+        )?;
+        output.commit()
     } else if args.cmd_derapify {
-        config::cmd_derapify(&mut get_input(args)?, &mut get_output(args)?)
+        let mut output = get_output(args)?;
+        config::cmd_derapify(&mut get_input(args)?, &mut output)?;
+        output.commit()
     } else if args.cmd_preprocess {
+        let mut output = get_output(args)?;
         config::cmd_preprocess(
             &mut get_input(args)?,
-            &mut get_output(args)?,
+            &mut output,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
             warnings,
-        )
+        )?;
+        output.commit()
     } else if args.cmd_build || args.cmd_pack {
         let flag_privatekey = args.flag_key.as_ref().map(PathBuf::from);
         let flag_signature = args.flag_signature.as_ref().map(PathBuf::from);
@@ -247,9 +253,10 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         if args.cmd_build {
             // `close()` below removes the Proton sandbox on success and failure alike, before any exit
             let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
+            let mut output = get_output(args)?;
             let built = pbo::cmd_build(
                 Path::new(&args.arg_sourcefolder),
-                &mut get_output(args)?,
+                &mut output,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &includefolders,
@@ -260,14 +267,17 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             let closed = binarizer.map_or(Ok(()), |b| b.close(warnings));
             built?;
             closed?;
+            output.commit()?;
         } else {
+            let mut output = get_output(args)?;
             pbo::cmd_pack(
                 Path::new(&args.arg_sourcefolder),
-                &mut get_output(args)?,
+                &mut output,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 warnings,
             )?;
+            output.commit()?;
         }
 
         if let Some(pkey) = flag_privatekey {
@@ -290,11 +300,9 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             pbo::cmd_inspect(&mut input, &mut stdout())
         }
     } else if args.cmd_cat {
-        pbo::cmd_cat(
-            &mut get_input(args)?,
-            &mut get_output(args)?,
-            &args.arg_filename,
-        )
+        let mut output = get_output(args)?;
+        pbo::cmd_cat(&mut get_input(args)?, &mut output, &args.arg_filename)?;
+        output.commit()
     } else if args.cmd_unpack {
         pbo::cmd_unpack(
             &mut get_input(args)?,

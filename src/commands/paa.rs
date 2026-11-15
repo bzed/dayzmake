@@ -1,10 +1,9 @@
 //! PAA conversion commands.
 
-use std::fs::File;
-use std::io::Error;
+use std::io::{Cursor, Error, Write};
 use std::path::Path;
 
-use crate::cli_io::{open_failure, open_input};
+use crate::cli_io::{AtomicTarget, open_failure, open_input};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::paa::{Paa, PaaFormat};
@@ -28,9 +27,19 @@ pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result
         .to_dynamic_image()
         .prepend_error("Failed to convert PAA to image:")?;
 
-    img.save(output_path)
+    // the image format comes from the target's extension, which a temp file name would hide: encode first
+    let format = image::ImageFormat::from_path(output_path)
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to save output image:")?;
+    let mut encoded = Cursor::new(Vec::new());
+    img.write_to(&mut encoded, format)
+        .map_err(|e| error!("{}", e))
+        .prepend_error("Failed to save output image:")?;
+    let mut file =
+        AtomicTarget::create(output_path, true).prepend_error("Failed to save output image:")?;
+    file.write_all(encoded.get_ref())
+        .prepend_error("Failed to save output image:")?;
+    file.commit()?;
 
     Ok(())
 }
@@ -63,9 +72,11 @@ pub fn cmd_img2paa(
         .and_then(|format| Paa::from_dynamic_image(&img, format))
         .prepend_error("Failed to convert image to PAA:")?;
 
-    let mut file = File::create(output_path).prepend_error("Failed to create output PAA file:")?;
+    let mut file = AtomicTarget::create(output_path, true)
+        .prepend_error("Failed to create output PAA file:")?;
     paa.write(&mut file)
         .prepend_error("Failed to write PAA file:")?;
+    file.commit()?;
 
     Ok(())
 }

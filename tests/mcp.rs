@@ -789,3 +789,37 @@ fn mcp_verbose_keeps_all_warnings() {
     assert_eq!(prerapified_warnings(&["-v"]), 12);
     assert_eq!(prerapified_warnings(&[]), 10);
 }
+
+#[test]
+fn mcp_failed_build_keeps_the_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    fs::create_dir(p.join("src")).unwrap();
+    fs::write(p.join("src/config.cpp"), "class A {\n").unwrap();
+    fs::write(p.join("out.pbo"), b"good pbo bytes").unwrap();
+    let r = run(
+        &[
+            call(
+                1,
+                "pbo_build",
+                &json!({"source":"src","target":"out.pbo","force":true}),
+            ),
+            call(
+                2,
+                "pbo_build",
+                &json!({"source":"nodir","target":"new.pbo"}),
+            ),
+        ],
+        p,
+    );
+    assert!(is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(is_error(&r.replies[1]), "{}", text(&r.replies[1]));
+    assert_eq!(fs::read(p.join("out.pbo")).unwrap(), b"good pbo bytes");
+    assert!(!p.join("new.pbo").exists());
+    let mut names: Vec<_> = fs::read_dir(p)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["out.pbo", "src"]);
+}
