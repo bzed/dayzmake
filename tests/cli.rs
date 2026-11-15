@@ -1441,6 +1441,21 @@ fn build_prefers_the_compiled_config_cpp_over_a_stale_config_bin() {
     assert!(out.contains("CfgPatches"), "{out}");
 }
 
+#[cfg(unix)]
+#[test]
+fn build_skips_a_plain_file_replaced_by_a_generated_entry_without_opening_it() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class CfgPatches{class A{units[]={};};};")]);
+    // opening this would fail the build, so it must be skipped before it is processed
+    std::os::unix::fs::symlink("nowhere", dir.path().join("mod/config.bin")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("Skipping \"config.bin\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "config.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("CfgPatches"), "{out}");
+}
+
 #[test]
 fn build_prefers_the_p3do_over_a_plain_p3d() {
     let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);

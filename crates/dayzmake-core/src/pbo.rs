@@ -891,8 +891,29 @@ impl PBO {
             .collect();
 
         let addon_roots = addon_roots(directory);
-        // lower-cased entry name -> (entry name, shown source path, generated from source)
-        let mut seen_names: HashMap<String, (String, String, bool)> = HashMap::new();
+        let mut seen_names: HashMap<String, String> = HashMap::new();
+
+        // Entries generated from source (the rapified config.cpp, a .p3do packed as .p3d) win over a
+        // plain file of the same name, so find them first: the plain file is then skipped before it
+        // is binarized or read. The gates are the ones of the loop below.
+        let mut generated_names: HashMap<String, String> = HashMap::new();
+        for path in &file_list {
+            let Ok(relative) = path.strip_prefix(directory) else {
+                continue;
+            };
+            let (pre_name, name, generated) = entry_name(relative, binarize);
+            if !generated
+                || !file_allowed(&pre_name, exclude_patterns)
+                || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file())
+                || relative.to_str().is_none()
+                || safe_relative_path(&name).is_none()
+            {
+                continue;
+            }
+            generated_names
+                .entry(name.to_lowercase())
+                .or_insert_with(|| printable(&relative.to_string_lossy()));
+        }
 
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
@@ -936,31 +957,30 @@ impl PBO {
                 generated = true;
             }
             // entry names compare case-insensitively; the first file in walk order wins, except
-            // that an entry generated from source (the rapified config.cpp, a .p3do packed as
-            // .p3d) replaces a plain file of the same name
+            // that an entry generated from source replaces a plain file of the same name (found
+            // by the pre-pass above, so the plain file is skipped before it is processed)
             let key = name.to_lowercase();
-            if let Some((first, first_shown, first_generated)) = seen_names.get(&key) {
-                if generated && !first_generated {
-                    warnings.warn(Warning::new(
-                        Some("duplicate-entry"),
-                        format!(
-                            "Skipping \"{first_shown}\": the entry \"{}\" is generated from \"{shown}\".",
-                            printable(first)
-                        ),
-                    ));
-                    files.remove(first);
-                } else {
-                    warnings.warn(Warning::new(
-                        Some("duplicate-entry"),
-                        format!(
-                            "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
-                            printable(first)
-                        ),
-                    ));
-                    continue;
-                }
+            if !generated && let Some(source) = generated_names.get(&key) {
+                warnings.warn(Warning::new(
+                    Some("duplicate-entry"),
+                    format!(
+                        "Skipping \"{shown}\": the entry \"{}\" is generated from \"{source}\".",
+                        printable(&name)
+                    ),
+                ));
+                continue;
             }
-            seen_names.insert(key, (name.clone(), shown.clone(), generated));
+            if let Some(first) = seen_names.get(&key) {
+                warnings.warn(Warning::new(
+                    Some("duplicate-entry"),
+                    format!(
+                        "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
+                        printable(first)
+                    ),
+                ));
+                continue;
+            }
+            seen_names.insert(key, name.clone());
 
             let mut file =
                 File::open(&path).prepend_error(format!("Failed to open \"{shown}\":"))?;
@@ -1238,6 +1258,26 @@ fn list_files(directory: &Path, excluded: &[Excluded]) -> Result<Vec<PathBuf>, E
     }
 
     Ok(files)
+}
+
+/// The entry names a source file packs as in `build`: the name before the `.p3do` rename (what `-x`
+/// matches), the final one, and whether the entry is generated from source (the rapified
+/// `config.cpp`, a `.p3do` packed as `.p3d`).
+fn entry_name(relative: &Path, binarize: bool) -> (String, String, bool) {
+    let mut relative = relative.to_path_buf();
+    let mut generated = false;
+    if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
+        relative = relative.with_file_name("config.bin");
+        generated = true;
+    }
+    let pre = relative.to_string_lossy().replace('/', "\\");
+    let name = if P3DO_RE.is_match(&pre) {
+        generated = true;
+        P3DO_RE.replace(&pre, ".p3d").into_owned()
+    } else {
+        pre.clone()
+    };
+    (pre, name, generated)
 }
 
 /// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
