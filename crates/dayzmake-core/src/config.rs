@@ -463,7 +463,9 @@ impl ConfigArray {
                 }
                 ConfigArrayElement::ArrayElement(a) => {
                     output.write_all(&[3])?;
-                    written += 1 + a.write_rapified(output)?;
+                    written += 1 + a
+                        .write_rapified(output)
+                        .prepend_error(format!("Array element {index}:"))?;
                 }
             }
         }

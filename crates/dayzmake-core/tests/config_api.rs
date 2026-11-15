@@ -129,4 +129,10 @@ fn a_nul_in_a_string_entry_names_the_entry() {
         msg.contains("Entry \"b\"") && msg.contains("element 1"),
         "{msg}"
     );
+    let src = "class A { b[] = {\"ok\", \"ok\", {\"p\0q\"}}; };".to_string();
+    let config = Config::from_string(src, None, &[], &mut Warnings::new()).unwrap();
+    let msg = config.to_cursor().unwrap_err().to_string();
+    let outer = msg.find("Array element 2").unwrap_or(usize::MAX);
+    let inner = msg.find("Array element 0").unwrap_or(usize::MAX);
+    assert!(outer < inner, "{msg}");
 }
