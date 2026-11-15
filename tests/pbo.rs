@@ -198,8 +198,8 @@ fn unpack_rejects_absolute_entry() {
     );
     let (tmp, code, err) = unpack_crafted(&pbo, &[]);
     assert_eq!(code, 0, "{err}");
-    assert!(tmp.path().join("target/abs.txt").exists());
-    assert!(tmp.path().join("target/tmp/x").exists());
+    assert!(!tmp.path().join("target/abs.txt").exists());
+    assert!(!tmp.path().join("target/tmp").exists());
     assert!(!tmp.path().join("target/C:").exists());
     assert!(!tmp.path().join("target/x.txt").exists());
     assert!(err.contains("unsafe-path"), "{err}");
@@ -231,6 +231,25 @@ fn unpack_use_prefix_rejects_dotdot_prefix() {
     assert!(!tmp.path().join("outside/a.txt").exists());
     assert!(!tmp.path().join("target/a.txt").exists());
     assert!(!tmp.path().join("target").exists());
+}
+
+#[test]
+fn unpack_use_prefix_rejects_leading_or_doubled_separator() {
+    for prefix in ["\\x", "/x", "a\\\\b"] {
+        let pbo = crafted_pbo(&[("a.txt", b"x")], Some(prefix));
+        let (tmp, code, err) = unpack_crafted(&pbo, &["--use-prefix"]);
+        assert_ne!(code, 0, "{prefix:?}: {err}");
+        assert!(err.to_lowercase().contains("prefix"), "{prefix:?}: {err}");
+        assert!(!tmp.path().join("target").exists(), "{prefix:?}");
+    }
+}
+
+#[test]
+fn unpack_use_prefix_accepts_a_trailing_separator() {
+    let pbo = crafted_pbo(&[("a.txt", b"x")], Some("my\\mod\\"));
+    let (tmp, code, err) = unpack_crafted(&pbo, &["--use-prefix"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(tmp.path().join("target/my/mod/a.txt").exists());
 }
 
 #[test]

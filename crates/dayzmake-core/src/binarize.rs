@@ -678,11 +678,9 @@ mod proton {
             return Ok(Vec::new());
         }
         let unsafe_prefix = || error!("Unsafe PBO prefix \"{}\" for binarize.", printable(prefix));
-        // `safe_relative_path` skips empty components, so a leading separator (absolute) is checked here
-        if prefix.starts_with(['\\', '/']) {
-            return Err(unsafe_prefix());
-        }
-        let safe = crate::pbo::safe_relative_path(prefix).ok_or_else(unsafe_prefix)?;
+        // a trailing separator is harmless; a leading or doubled one is rejected by `safe_relative_path`
+        let safe = crate::pbo::safe_relative_path(prefix.trim_end_matches(['\\', '/']))
+            .ok_or_else(unsafe_prefix)?;
         safe.iter()
             .map(|c| c.to_str().map(String::from).ok_or_else(unsafe_prefix))
             .collect()
@@ -824,7 +822,18 @@ mod proton {
             assert_eq!(p_win_path("my\\mod", Path::new("")).unwrap(), "P:\\my\\mod");
         }
 
-        const BAD_PREFIXES: [&str; 5] = ["..\\..\\x", "a\\..\\..\\x", "/abs", "C:\\x", "a\\.\\b"];
+        const BAD_PREFIXES: [&str; 10] = [
+            "..\\..\\x",
+            "a\\..\\..\\x",
+            "/abs",
+            "\\abs",
+            "\\\\?\\x",
+            "C:\\x",
+            "C:x",
+            "a\\.\\b",
+            "a\\\\b",
+            "a\u{1b}b",
+        ];
 
         fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             for e in fs::read_dir(dir).unwrap() {
@@ -864,6 +873,15 @@ mod proton {
             for prefix in BAD_PREFIXES {
                 assert!(p_win_path(prefix, Path::new("")).is_err(), "{prefix}");
             }
+        }
+
+        #[test]
+        fn empty_and_trailing_separator_prefixes_are_accepted() {
+            assert_eq!(p_win_path("", Path::new("")).unwrap(), "P:\\");
+            assert_eq!(
+                p_win_path("my\\mod\\", Path::new("")).unwrap(),
+                "P:\\my\\mod"
+            );
         }
 
         #[test]

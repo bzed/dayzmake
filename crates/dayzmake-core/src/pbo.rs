@@ -1131,15 +1131,16 @@ fn is_device_name(component: &str) -> bool {
 /// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
 /// is joined to.
 ///
-/// The name is split on `\` and `/` and empty components are dropped, so a leading separator does
-/// not make the path absolute. Returns `None` if any component is `.` or `..`, consists only of
-/// dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or any control character (C0, DEL and C1, `char::is_control`), or if no
-/// component remains.
+/// The name is split on `\` and `/`. Returns `None` if any component is empty (a leading,
+/// trailing or doubled separator, so an absolute name is never accepted), is `.` or `..`, consists
+/// only of dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or any
+/// control character (C0, DEL and C1, `char::is_control`), or if the name is empty.
 #[must_use]
 pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
     let mut path = PathBuf::new();
-    for component in name.split(['\\', '/']).filter(|c| !c.is_empty()) {
-        if is_device_name(component)
+    for component in name.split(['\\', '/']) {
+        if component.is_empty()
+            || is_device_name(component)
             || component.chars().all(|c| c == '.' || c == ' ')
             || component.chars().any(|c| c == ':' || c.is_control())
         {
@@ -1222,7 +1223,8 @@ fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Er
     match pbo.header_extensions.get("prefix") {
         Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(output.to_path_buf()),
         Some(prefix) => {
-            let relative = safe_relative_path(prefix)
+            // other tools may write a trailing separator; a leading or doubled one is rejected
+            let relative = safe_relative_path(prefix.trim_end_matches(['\\', '/']))
                 .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
             if crosses_symlink(output, &relative) {
                 return Err(error!(
@@ -1405,10 +1407,19 @@ mod tests {
     }
 
     #[test]
-    fn safe_path_drops_empty_components() {
-        assert_eq!(p("\\abs.txt"), Some(PathBuf::from("abs.txt")));
-        assert_eq!(p("/tmp//x"), Some(PathBuf::from("tmp").join("x")));
-        assert_eq!(p("a\\\\b\\"), Some(PathBuf::from("a").join("b")));
+    fn safe_path_rejects_empty_components() {
+        for bad in [
+            "\\abs.txt",
+            "/abs",
+            "\\abs",
+            "/tmp//x",
+            "a\\\\b",
+            "a\\b\\",
+            "a/",
+            "\\\\?\\x",
+        ] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
