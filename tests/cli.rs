@@ -1129,6 +1129,54 @@ fn pack_through_symlinked_target_does_not_pack_it() {
     );
 }
 
+/// Runs dayzmake like `dayzmake`, but as a child with a deadline: a build that hangs fails the
+/// test (the child is killed) instead of blocking it. Returns (exit code, stderr).
+///
+/// # Panics
+///
+/// Panics if the binary cannot be spawned or does not exit within 20 seconds (it is killed first).
+#[cfg(unix)]
+#[must_use]
+#[expect(clippy::expect_used, clippy::panic, reason = "test helper")]
+fn dayzmake_with_deadline(args: &[&str], cwd: &Path) -> (i32, String) {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let mut child = cmd.spawn().expect("failed to run dayzmake");
+    let mut stderr = child.stderr.take().expect("stderr");
+    // drain stderr on a thread so a full pipe cannot stall the child
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text); // a read error only shortens the diagnostics
+        String::from_utf8_lossy(&text).into_owned()
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill(); // already gone is fine: the test fails below either way
+            let _ = child.wait();
+            panic!("build hung: killed {args:?} after 20 s");
+        }
+        std::thread::sleep(Duration::from_millis(10)); // polling interval of the deadline loop
+    };
+    (
+        status.code().unwrap_or(-1),
+        reader.join().expect("stderr reader"),
+    )
+}
+
 #[cfg(unix)]
 #[test]
 fn pack_into_fifo_inside_source_completes() {
@@ -1148,7 +1196,7 @@ fn pack_into_fifo_inside_source_completes() {
     };
     // held open so the reader sees EOF and the test cannot hang even if dayzmake never opens the FIFO
     let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
-    let (code, _, err) = dayzmake(&["pack", ".", "f.fifo", "--force"], &modf);
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "f.fifo", "--force"], &modf);
     drop(keep_open);
     assert_eq!(code, 0, "{err}");
     let data = reader.join().unwrap();
@@ -1185,4 +1233,26 @@ fn build_skips_file_names_that_are_unsafe_as_entry_names() {
     let (_, out, _) = dayzmake(&["inspect", "out.pbo"], &modf);
     assert!(out.contains("ok.txt"), "{out}");
     assert!(!out.contains("b.txt"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_skips_fifos_and_device_links_in_the_source() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::os::unix::fs::symlink("/dev/zero", modf.join("zero")).unwrap();
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsupported-file"), "{err}");
+    assert!(err.contains("pipe") && err.contains("zero"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert!(out.contains("config.cpp"), "{out}");
+    assert!(!out.contains("pipe") && !out.contains("zero"), "{out}");
 }
