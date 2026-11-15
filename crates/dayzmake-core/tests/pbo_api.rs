@@ -361,10 +361,13 @@ fn private_key_debug_has_no_key_material() {
 #[test]
 fn unpack_conflict_writes_nothing() {
     let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
     let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
     let target = tmp.path().join("out");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(target.join("a.txt"), "old").unwrap();
+    fs::create_dir_all(&target).unwrap();
+    // b.c is the last entry written, so a write-as-you-go check would already have written the
+    // prefix file and a.txt
+    fs::write(target.join("b.c"), "old").unwrap();
     let err = unpack(
         &mut Cursor::new(&bytes),
         &target,
@@ -372,24 +375,114 @@ fn unpack_conflict_writes_nothing() {
         &mut Warnings::new(),
     )
     .unwrap_err();
-    assert!(err.to_string().contains("already contains"), "{err}");
     assert_eq!(
-        std::fs::read_to_string(target.join("a.txt")).unwrap(),
-        "old"
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"b.c\"). Use --force to overwrite.",
+            target.display()
+        )
     );
-    let count = walk(&target);
-    assert_eq!(count, 1, "extra files created");
+    assert_eq!(fs::read_to_string(target.join("b.c")).unwrap(), "old");
+    assert_eq!(walk(&target), 1, "files or folders were created");
 }
 
+/// Counts the files and folders below `dir`.
 #[expect(clippy::unwrap_used, reason = "test helper")]
-fn walk(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir)
+fn walk(dir: &Path) -> usize {
+    fs::read_dir(dir)
         .unwrap()
         .map(|e| {
             let p = e.unwrap().path();
-            if p.is_dir() { walk(&p) } else { 1 }
+            1 + if p.is_dir() { walk(&p) } else { 0 }
         })
         .sum()
+}
+
+#[test]
+fn unpack_force_overwrites() {
+    let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut warnings,
+    )
+    .unwrap();
+    fs::write(target.join("a.txt"), "old").unwrap();
+    fs::write(target.join("$PBOPREFIX$"), "prefix=other\n").unwrap();
+    let mut force = UnpackOptions::default();
+    force.force = true;
+    unpack(&mut Cursor::new(&bytes), &target, &force, &mut warnings).unwrap();
+    assert_eq!(fs::read_to_string(target.join("a.txt")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(target.join("b.c")).unwrap(), "b");
+    assert_eq!(
+        fs::read_to_string(target.join("$PBOPREFIX$")).unwrap(),
+        "prefix=a\n"
+    );
+}
+
+#[test]
+fn unpack_conflict_message_escapes_control_characters() {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("o\x1but");
+    let options = UnpackOptions::default();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("o\\u{1b}ut"), "{err}");
+    assert!(!err.contains('\x1b'), "{err}");
+}
+
+#[test]
+fn unpack_conflict_with_use_prefix_names_the_prefix_folder() {
+    let tmp = addon();
+    fs::write(
+        tmp.path().join("addon").join("$PBOPREFIX$"),
+        "prefix=x\\y\n",
+    )
+    .unwrap();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    let mut options = UnpackOptions::default();
+    options.use_prefix = true;
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.",
+            target.join("x").join("y").display()
+        )
+    );
 }
 
 #[test]
@@ -397,8 +490,8 @@ fn unpack_into_a_non_empty_folder_without_conflicts_works() {
     let tmp = addon();
     let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
     let target = tmp.path().join("out");
-    std::fs::create_dir_all(&target).unwrap();
-    std::fs::write(target.join("unrelated.txt"), "x").unwrap();
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("unrelated.txt"), "x").unwrap();
     unpack(
         &mut Cursor::new(&bytes),
         &target,

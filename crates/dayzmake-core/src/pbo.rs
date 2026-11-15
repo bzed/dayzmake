@@ -1243,8 +1243,9 @@ pub struct UnpackOptions {
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
-/// file exists without `options.force`.
+/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or, without
+/// `options.force`, a file of the PBO (or `$PBOPREFIX$`) already exists in the target. That check
+/// covers every file and runs before anything is written, so a conflict leaves the target untouched.
 pub fn unpack<I: Read>(
     input: &mut I,
     target: &Path,
