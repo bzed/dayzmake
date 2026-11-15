@@ -97,7 +97,7 @@ pub struct AtomicTarget {
     temp: PathBuf,
     file: Option<File>,
     done: bool,
-    /// a device, FIFO, pipe or socket: written in place, no temp file, no rename
+    /// a device, FIFO or pipe: written in place, no temp file, no rename
     direct: bool,
 }
 
@@ -223,7 +223,19 @@ impl AtomicTarget {
                     return Ok(target);
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e).prepend_error(failure),
+                Err(e) => {
+                    // a bare file name has the empty parent: the current directory
+                    let dir = real
+                        .parent()
+                        .filter(|d| !d.as_os_str().is_empty())
+                        .map_or_else(
+                            || ".".to_string(),
+                            |d| dayzmake_core::error::printable(&d.display().to_string()),
+                        );
+                    return Err(e).prepend_error(format!(
+                        "{failure} cannot create a temporary file in \"{dir}\":"
+                    ));
+                }
             }
         }
         Err(error!(
@@ -232,15 +244,15 @@ impl AtomicTarget {
         ))
     }
 
-    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO, pipe or socket target was written
-    /// in place and is only flushed.
+    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO or pipe is written in
+    /// place and is only flushed; anything else non-regular (a socket) is opened directly and fails.
     ///
     /// # Errors
     ///
     /// Returns an error if syncing or renaming fails; the temp file is removed then.
     pub fn commit(mut self) -> io::Result<()> {
         if self.direct {
-            // devices, pipes and sockets cannot be synced; flushing is all there is
+            // devices, FIFOs and pipes cannot be synced; flushing is all there is
             return self
                 .file
                 .take()

@@ -44,6 +44,8 @@ pub fn cmd_binarize(
         return Ok(());
     }
 
+    // the target first: no sandbox is set up for a target that is rejected
+    let mut file = AtomicTarget::create_with(output, true, false, "Failed to open output:")?;
     // `dayzmake binarize` always goes through Proton on unix; `close()` below removes the sandbox
     let mut binarizer = Binarizer::new(if cfg!(windows) {
         BinarizeBackend::Native
@@ -61,7 +63,6 @@ pub fn cmd_binarize(
     let closed = binarizer.close(warnings);
     let data = result?;
     closed?;
-    let mut file = AtomicTarget::create_with(output, true, false, "Failed to open output:")?;
     file.write_all(&data)
         .prepend_error("Failed to write result to file:")?;
     file.commit()?;

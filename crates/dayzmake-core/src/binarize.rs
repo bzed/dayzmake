@@ -268,10 +268,16 @@ pub fn is_binarized(path: &Path) -> Result<bool, Error> {
 ///
 /// # Errors
 ///
-/// Returns an error if the file cannot be opened.
+/// Returns an error, naming the file, if it cannot be read.
 pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
+    use crate::error::{ErrorExt, printable};
     let mut header = Vec::with_capacity(8);
-    File::open(path)?.take(8).read_to_end(&mut header)?;
+    File::open(path)
+        .and_then(|f| f.take(8).read_to_end(&mut header))
+        .prepend_error(format!(
+            "Failed to read \"{}\":",
+            printable(&path.display().to_string())
+        ))?;
     let Some(magic) = header.get(..4) else {
         return Ok(None);
     };

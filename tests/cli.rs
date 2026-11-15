@@ -770,6 +770,48 @@ fn build_keeps_the_permissions_of_the_existing_target() {
 
 #[cfg(unix)]
 #[test]
+fn build_into_a_read_only_directory_names_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out_dir = dir.path().join("ro");
+    std::fs::create_dir(&out_dir).unwrap();
+    std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "ro/out.pbo"], dir.path());
+    std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // root ignores directory permissions
+    if code == 0 {
+        return;
+    }
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("Failed to open output file: cannot create a temporary file in \""),
+        "{err}"
+    );
+    assert!(err.contains("ro\":"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_of_a_bare_name_in_a_read_only_cwd_names_the_current_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // root ignores directory permissions
+    if code == 0 {
+        return;
+    }
+    assert!(
+        err.contains("cannot create a temporary file in \".\":"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn build_writes_through_a_symlinked_target() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "mod/a.txt", "hello");

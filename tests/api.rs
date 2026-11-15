@@ -2135,6 +2135,30 @@ mod from_pbo {
         assert!(!err.contains('\u{1b}'), "{err:?}");
     }
 
+    /// An entry that cannot be read is skipped with a warning in a fixed format, and the rest is indexed.
+    #[test]
+    fn api_unreadable_entry_is_skipped_with_a_warning() {
+        let w = World::new();
+        let pbo_path = w.stable_pbo();
+        // a truncated LZSS stream: the entry claims 64 bytes and holds none
+        let bytes = super::support::raw_pbo_with_headers(
+            &[
+                ("3_Game/Good.c", b"class GoodOne {}\n", 0, 17),
+                ("3_Game/Bad.c", b"\xFF", super::support::CPRS, 64),
+            ],
+            &[],
+        );
+        fs::write(&pbo_path, bytes).expect("write pbo");
+        let (code, out, err) = w.run(&["api", "class", "GoodOne"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("GoodOne"), "{out}");
+        assert!(
+            err.contains("warning: cannot read \"3_Game/Bad.c\": "),
+            "{err}"
+        );
+        assert!(err.contains("[api-bad-entry]"), "{err}");
+    }
+
     #[test]
     fn api_mod_unsafe_prefix_skipped() {
         let w = World::new();

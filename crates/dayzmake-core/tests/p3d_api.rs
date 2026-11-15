@@ -116,15 +116,30 @@ fn a_rejected_model_writes_nothing() {
     let mut five = triangle_lod();
     five.faces[0].vertices.push(Vertex::new());
     five.faces[0].vertices.push(Vertex::new());
-    for bad in [bad_selection, five] {
+    for (bad, reason) in [
+        (bad_selection, "is a selection with 3 bytes"),
+        (five, "face 0 has 5 vertices (expected 3 or 4)"),
+    ] {
         let mut model = P3D::new(0x101);
         model.lods.push(triangle_lod());
         model.lods.push(bad);
         let mut out = Vec::new();
         let msg = model.write(&mut out).unwrap_err().to_string();
         assert!(out.is_empty(), "{msg}");
-        assert!(msg.contains("LOD"), "{msg}");
+        assert!(msg.contains("LOD 1"), "{msg}");
+        assert!(msg.contains(reason), "{msg}");
     }
+}
+
+#[test]
+fn a_rejected_lod_is_named_by_its_index_when_resolutions_repeat() {
+    let mut bad = triangle_lod();
+    bad.faces[0].vertices[0].point_index = 9;
+    let mut model = P3D::new(0x101);
+    model.lods.push(triangle_lod());
+    model.lods.push(bad);
+    let msg = model.write(&mut Vec::new()).unwrap_err().to_string();
+    assert!(msg.contains("LOD 1 ("), "{msg}");
 }
 
 #[test]

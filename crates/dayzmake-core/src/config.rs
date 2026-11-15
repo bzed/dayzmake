@@ -13,6 +13,9 @@ use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 
+use crate::preprocess::preprocess;
+use crate::warning::{Warning, WarningSink};
+
 /// Refuses a name with a control character: the config grammar has no way to write one, and it
 /// would reach the terminal raw.
 fn text_name(name: &str, what: &str) -> Result<(), Error> {
@@ -24,8 +27,6 @@ fn text_name(name: &str, what: &str) -> Result<(), Error> {
     }
     Ok(())
 }
-use crate::preprocess::preprocess;
-use crate::warning::{Warning, WarningSink};
 
 /// State shared with the grammar for `__EVAL` / `__EXEC`.
 #[derive(Default)]

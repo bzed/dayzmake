@@ -434,7 +434,9 @@ impl LOD {
     }
 
     /// Checks that the LOD is consistent: selection sizes and vertex indices.
-    fn validate(&self) -> Result<(), Error> {
+    fn validate(&self, index: usize) -> Result<(), Error> {
+        // the index tells apart LODs of the same resolution
+        let label = format!("LOD {index} ({})", self.name());
         let expected = self
             .points
             .len()
@@ -443,16 +445,14 @@ impl LOD {
         for (i, tagg) in self.taggs.iter().enumerate() {
             if tagg.name.contains('\0') {
                 return Err(invalid(format!(
-                    "LOD {}: tagg {i} name \"{}\" contains a NUL byte",
-                    self.name(),
+                    "{label}: tagg {i} name \"{}\" contains a NUL byte",
                     printable(&tagg.name),
                 )));
             }
             // The length of an inactive tagg is not enforced (real files carry empty ones).
             if tagg.active != 0 && tagg.is_selection() && tagg.data.len() != expected {
                 return Err(invalid(format!(
-                    "LOD {}: tagg {i} \"{}\" is a selection with {} bytes, expected {expected} ({} points + {} faces)",
-                    self.name(),
+                    "{label}: tagg {i} \"{}\" is a selection with {} bytes, expected {expected} ({} points + {} faces)",
                     printable(&tagg.name),
                     tagg.data.len(),
                     self.points.len(),
@@ -464,16 +464,14 @@ impl LOD {
             for (field, value) in [("texture", &face.texture), ("material", &face.material)] {
                 if value.contains('\0') {
                     return Err(invalid(format!(
-                        "LOD {}: face {i} {field} \"{}\" contains a NUL byte",
-                        self.name(),
+                        "{label}: face {i} {field} \"{}\" contains a NUL byte",
                         printable(value),
                     )));
                 }
             }
             if face.vertices.len() != 3 && face.vertices.len() != 4 {
                 return Err(invalid(format!(
-                    "LOD {}: face {i} has {} vertices (expected 3 or 4)",
-                    self.name(),
+                    "{label}: face {i} has {} vertices (expected 3 or 4)",
                     face.vertices.len(),
                 )));
             }
@@ -481,8 +479,7 @@ impl LOD {
                 let point = usize::try_from(vertex.point_index).unwrap_or(usize::MAX);
                 if point >= self.points.len() {
                     return Err(invalid(format!(
-                        "LOD {}: face {i} vertex {j} has point index {} but there are {} points",
-                        self.name(),
+                        "{label}: face {i} vertex {j} has point index {} but there are {} points",
                         vertex.point_index,
                         self.points.len(),
                     )));
@@ -490,8 +487,7 @@ impl LOD {
                 let normal = usize::try_from(vertex.normal_index).unwrap_or(usize::MAX);
                 if normal >= self.face_normals.len() {
                     return Err(invalid(format!(
-                        "LOD {}: face {i} vertex {j} has normal index {} but there are {} normals",
-                        self.name(),
+                        "{label}: face {i} vertex {j} has normal index {} but there are {} normals",
                         vertex.normal_index,
                         self.face_normals.len(),
                     )));
@@ -593,10 +589,10 @@ impl P3D {
     ///
     /// Returns an error on I/O failure, or if a LOD is inconsistent (a selection whose size is not
     /// points + faces, a vertex index out of range, a tagg name or face texture or material
-    /// containing a NUL byte).
+    /// containing a NUL byte, a face that does not have 3 or 4 vertices).
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
-        for lod in &self.lods {
-            lod.validate()?;
+        for (index, lod) in self.lods.iter().enumerate() {
+            lod.validate(index)?;
         }
         let mut writer = BufWriter::new(output);
 

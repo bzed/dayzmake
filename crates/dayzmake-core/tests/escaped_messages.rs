@@ -172,13 +172,49 @@ fn rapified(count: u8, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// Entry bytes of a class `name` whose body, `body`, comes right after the entry (the root has one entry).
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn class_with_body(name: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut entry = vec![0];
+    entry.extend_from_slice(name);
+    entry.push(0);
+    // the root header is 18 bytes with its parent and entry count
+    let offset = 18 + entry.len() + 4;
+    entry.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+    entry.extend_from_slice(body);
+    rapified(1, &entry)
+}
+
 #[test]
-fn derapify_refuses_a_class_name_with_a_control_character() {
-    let bytes = rapified(1, b"\x02A\x1b]0;pwned\x07\0\0\0\0\0");
+fn derapify_refuses_an_external_class_name_with_a_control_character() {
+    // type 3 is an external class, type 2 an array
+    let bytes = rapified(1, b"\x03A\x1b]0;pwned\x07\0");
     let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
     let mut out = Vec::new();
     let err = config.write(&mut out).unwrap_err();
     assert_escaped(&err.to_string(), "A\\u{1b}]0;pwned\\u{7}");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_a_nested_class_name_with_a_control_character() {
+    // class Outer { class <bad>; };
+    let bytes = class_with_body(b"Outer", b"\0\x01\x03A\x1b[2J\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "A\\u{1b}[2J");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_a_parent_class_name_with_a_control_character() {
+    // class Outer: <bad> {};
+    let bytes = class_with_body(b"Outer", b"P\x1b[2J\0\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "P\\u{1b}[2J");
     assert!(!out.contains(&0x1b), "{out:?}");
 }
 
@@ -190,4 +226,12 @@ fn derapify_refuses_an_entry_name_with_a_control_character() {
     let err = config.write(&mut out).unwrap_err();
     assert_escaped(&err.to_string(), "k\\u{1b}[2J");
     assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn binarized_description_names_the_file_it_cannot_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("miss\u{1b}ing.p3d");
+    let err = dayzmake_core::binarize::binarized_description(&path).unwrap_err();
+    assert_escaped(&err.to_string(), "miss\\u{1b}ing.p3d");
 }

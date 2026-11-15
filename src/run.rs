@@ -252,8 +252,9 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
 
         if args.cmd_build {
             // `close()` below removes the Proton sandbox on success and failure alike, before any exit
-            let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
+            // the target first: no sandbox is set up for a target that is rejected
             let mut output = get_output(args)?;
+            let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
             let own = output.own_paths();
             let built = pbo::cmd_build(
                 Path::new(&args.arg_sourcefolder),

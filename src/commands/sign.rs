@@ -69,7 +69,8 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
     public_key
         .write(&mut public_file)
         .prepend_error("Failed to write public key:")?;
-    // the public key first: a failure of the second rename never leaves a new public key without its private key
+    // the public key first: if the second rename fails, the old private key is kept; that can leave a new public key
+    // without its private key, and the error says the public key was already replaced
     public_file.commit()?;
     private_file.commit().prepend_error(format!(
         "The public key \"{}\" was already replaced:",
