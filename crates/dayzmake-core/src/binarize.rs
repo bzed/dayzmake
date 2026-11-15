@@ -114,12 +114,7 @@ impl Binarizer {
     /// Never fails today; the result leaves room for backends whose cleanup can fail.
     #[cfg_attr(
         windows,
-        allow(
-            unused_variables,
-            clippy::needless_pass_by_value,
-            clippy::unused_self,
-            reason = "nothing to clean up on Windows"
-        )
+        expect(unused_variables, reason = "nothing to clean up on Windows")
     )]
     pub fn close(self, warnings: &mut dyn WarningSink) -> Result<(), Error> {
         #[cfg(unix)]

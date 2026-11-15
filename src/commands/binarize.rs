@@ -39,7 +39,7 @@ pub fn cmd_binarize(
         return Ok(());
     }
 
-    // `dayzmake binarize` always goes through Proton on unix; the sandbox is removed when `binarizer` drops
+    // `dayzmake binarize` always goes through Proton on unix; `close()` below removes the sandbox
     let mut binarizer = Binarizer::new(if cfg!(windows) {
         BinarizeBackend::Native
     } else {
@@ -52,9 +52,10 @@ pub fn cmd_binarize(
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let result = binarizer.binarize(&input, &addon_root, &prefix, warnings);
-    // remove the sandbox on success and failure alike, before any exit
-    binarizer.close(warnings)?;
+    // remove the sandbox on success and failure alike, before any exit; the binarize error wins
+    let closed = binarizer.close(warnings);
     let data = result?;
+    closed?;
     let mut file = File::create(output).prepend_error("Failed to open output:")?;
     file.write_all(&data)
         .prepend_error("Failed to write result to file:")?;

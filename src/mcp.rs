@@ -1007,10 +1007,10 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
             binarizer.as_mut(),
             warnings,
         );
-        if let Some(b) = binarizer {
-            b.close(warnings)?;
-        }
+        // the build error wins over a cleanup error
+        let closed = binarizer.map_or(Ok(()), |b| b.close(warnings));
         result?;
+        closed?;
     } else {
         let mut file = create_target(&target, force)?;
         pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;
