@@ -389,3 +389,52 @@ fn suppressed_warnings_are_summarised() {
         "{err}"
     );
 }
+
+/// A fake Steam tree whose `proton` creates the Wine prefix but fails every other run.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn fake_steam(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let tools = root.join("steamapps/common/DayZ Tools/Bin/Binarize");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::write(tools.join("binarize.exe"), b"").unwrap();
+    let proton_dir = root.join("steamapps/common/Proton Hotfix");
+    std::fs::create_dir_all(&proton_dir).unwrap();
+    let script = proton_dir.join("proton");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ncase \"$*\" in\n*cmd.exe*) mkdir -p \"$STEAM_COMPAT_DATA_PATH/pfx/dosdevices\"; exit 0;;\nesac\necho binarize exploded\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn build_failure_with_proton_removes_the_sandbox() {
+    let dir = tempfile::tempdir().unwrap();
+    let steam = dir.path().join("steam");
+    let tmp = dir.path().join("tmp");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    fake_steam(&steam);
+    std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+        .args(["build", "--proton-binarize", "src", "out.pbo"])
+        .current_dir(dir.path())
+        .env("STEAM_ROOT", &steam)
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env("TMPDIR", &tmp)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("binarize exploded"), "{err}");
+    let left: Vec<_> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(left.is_empty(), "sandbox left behind: {left:?}");
+}

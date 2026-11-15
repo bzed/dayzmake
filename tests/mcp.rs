@@ -102,6 +102,7 @@ fn make_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
         false,
         &[],
         &[],
+        None,
         &mut Warnings::new(),
     )
     .expect("pbo");
@@ -329,7 +330,8 @@ fn fake_steam() -> FakeSteam {
     )
     .expect("manifest");
     let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/api/vanilla/scripts");
-    let pbo = PBO::from_directory(scripts, false, &[], &[], &mut Warnings::new()).expect("pbo");
+    let pbo =
+        PBO::from_directory(scripts, false, &[], &[], None, &mut Warnings::new()).expect("pbo");
     pbo.write(
         &mut fs::File::create(root.join("steamapps/common/DayZ/dta/scripts.pbo")).expect("create"),
     )

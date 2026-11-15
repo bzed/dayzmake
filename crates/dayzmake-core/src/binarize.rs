@@ -6,11 +6,10 @@ use std::env::var;
 use std::fs::File;
 #[cfg(windows)]
 use std::fs::{create_dir_all, remove_dir_all};
-use std::io::{Cursor, Error, Read, Write};
+use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(windows)]
 use winreg::RegKey;
@@ -30,22 +29,85 @@ fn find_binarize_exe() -> Result<PathBuf, Error> {
     Ok(PathBuf::from(value).join("binarize_x64.exe"))
 }
 
-static PROTON_ENABLED: AtomicBool = AtomicBool::new(false);
-
-/// Opt in to binarizing models with binarize.exe under Proton (unix only, see `--proton-binarize`).
-pub fn set_proton(enabled: bool) {
-    PROTON_ENABLED.store(enabled, Ordering::SeqCst);
+/// Which tool binarizes models.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BinarizeBackend {
+    /// BI's binarize.exe found through the Windows registry (Windows only).
+    Native,
+    /// BI's binarize.exe under Proton (unix only, see `--proton-binarize`).
+    Proton,
 }
 
-/// Whether models can be binarized on this system with the current settings.
-pub fn available() -> bool {
-    cfg!(windows) || PROTON_ENABLED.load(Ordering::SeqCst)
-}
-
-/// Removes the Proton sandbox, if one was created. Does nothing on Windows.
-pub fn cleanup() {
+/// Binarizes models with BI's binarize.exe. Owns the Proton sandbox (if any) and removes it on drop.
+#[derive(Debug)]
+pub struct Binarizer {
     #[cfg(unix)]
-    proton::cleanup();
+    sandbox: Option<proton::Sandbox>,
+}
+
+impl Binarizer {
+    /// Creates a binarizer; the Proton sandbox is only built when the first model is binarized.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the backend is not available on this platform.
+    pub fn new(backend: BinarizeBackend) -> Result<Binarizer, Error> {
+        match (backend, cfg!(windows)) {
+            (BinarizeBackend::Native, false) => Err(error!(
+                "The native binarize.exe is only available on Windows; on Linux use --proton-binarize (see README) or rapify to binarize configs."
+            )),
+            (BinarizeBackend::Proton, true) => Err(error!(
+                "Proton is not used on Windows; the native binarize.exe is used there (do not pass --proton-binarize)."
+            )),
+            _ => Ok(Binarizer {
+                #[cfg(unix)]
+                sandbox: None,
+            }),
+        }
+    }
+
+    /// Binarizes the given path with BI's binarize.exe.
+    ///
+    /// `addon_root` is the folder the addon is built from and `prefix` its PBO prefix: binarize.exe
+    /// resolves texture references (`prefix\data\x.paa`) relative to its current directory, so the
+    /// addon is made available at `P:\<prefix>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Proton or binarize.exe fails.
+    pub fn binarize(
+        &mut self,
+        input: &Path,
+        addon_root: &Path,
+        prefix: &str,
+        warnings: &mut dyn WarningSink,
+    ) -> Result<Vec<u8>, Error> {
+        #[cfg(unix)]
+        {
+            if self.sandbox.is_none() {
+                self.sandbox = Some(proton::create_sandbox()?);
+            }
+            let sb = self
+                .sandbox
+                .as_mut()
+                .ok_or_else(|| error!("Binarize sandbox not initialized."))?;
+            proton::binarize(sb, input, addon_root, prefix, warnings)
+        }
+        #[cfg(windows)]
+        {
+            native_binarize(input, addon_root, prefix, warnings)
+        }
+    }
+}
+
+impl Drop for Binarizer {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(sb) = self.sandbox.take() {
+            proton::destroy(&sb);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -68,39 +130,13 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
     Ok(path)
 }
 
-/// Binarizes the given path with BI's binarize.exe (Windows, or Linux with `--proton-binarize`).
-///
-/// `addon_root` is the folder the addon is built from and `prefix` its PBO prefix: binarize.exe
-/// resolves texture references (`prefix\data\x.paa`) relative to its current directory, so the
-/// addon is made available at `P:\<prefix>`.
-///
-/// # Errors
-///
-/// Returns an error if Proton or binarize.exe fails.
-#[cfg(unix)]
-pub fn binarize(
-    input: &Path,
-    addon_root: &Path,
-    prefix: &str,
-    warnings: &mut dyn WarningSink,
-) -> Result<Cursor<Box<[u8]>>, Error> {
-    if !PROTON_ENABLED.load(Ordering::SeqCst) {
-        return Err(error!(
-            "binarize.exe is only available on Windows, or on Linux through Proton. Use --proton-binarize (see README) or rapify to binarize configs."
-        ));
-    }
-
-    proton::binarize(input, addon_root, prefix, warnings)
-}
-
-/// Binarizes the given path with BI's binarize.exe (Windows, or Linux with `--proton-binarize`).
 #[cfg(windows)]
-pub fn binarize(
-    input: &PathBuf,
+fn native_binarize(
+    input: &Path,
     _addon_root: &Path,
     _prefix: &str,
     _warnings: &mut dyn WarningSink,
-) -> Result<Cursor<Box<[u8]>>, Error> {
+) -> Result<Vec<u8>, Error> {
     let binarize_exe = find_binarize_exe().prepend_error("Failed to find BI's binarize.exe:")?;
     if !binarize_exe.exists() {
         return Err(error!(
@@ -108,8 +144,20 @@ pub fn binarize(
         ));
     }
 
-    let input_dir = PathBuf::from(input.parent().unwrap());
-    let name = input.file_name().unwrap().to_str().unwrap().to_string();
+    let input_dir = input
+        .parent()
+        .ok_or_else(|| error!("Invalid input path \"{}\".", input.display()))?
+        .to_path_buf();
+    let file_name = input
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| error!("Invalid file name \"{}\".", input.display()))?
+        .to_string();
+    let name = file_name.clone();
+    let input_dir_str = input_dir
+        .to_str()
+        .ok_or_else(|| error!("Invalid path \"{}\".", input_dir.display()))?
+        .to_string();
     let tempdir = create_temp_directory(&name).prepend_error("Failed to create tempfolder:")?;
 
     let piped = var("BIOUTPUT").unwrap_or_else(|_| "0".to_string()) == "1";
@@ -125,9 +173,11 @@ pub fn binarize(
             "-always",
             "-silent",
             "-maxProcesses=0",
-            input_dir.to_str().unwrap(),
-            tempdir.to_str().unwrap(),
-            input.file_name().unwrap().to_str().unwrap(),
+            input_dir_str.as_str(),
+            tempdir
+                .to_str()
+                .ok_or_else(|| error!("Invalid path \"{}\".", tempdir.display()))?,
+            file_name.as_str(),
         ])
         // The child must never write to our stdout: `dayzmake mcp` uses it for JSON-RPC frames only.
         // It does not read our stdin either (that is the MCP request stream).
@@ -171,7 +221,7 @@ pub fn binarize(
 
     remove_dir_all(&tempdir).prepend_error("Failed to remove temp directory:")?;
 
-    Ok(Cursor::new(buffer.into_boxed_slice()))
+    Ok(buffer)
 }
 
 /// For `dayzmake binarize` there is no PBO: the model's folder is the addon (and its name the
@@ -253,30 +303,55 @@ pub fn cmd_binarize(
         return Ok(());
     }
 
-    // on unix, `dayzmake binarize` always goes through Proton
-    set_proton(true);
+    // `dayzmake binarize` always goes through Proton on unix; the sandbox is removed when `binarizer` drops
+    let mut binarizer = Binarizer::new(if cfg!(windows) {
+        BinarizeBackend::Native
+    } else {
+        BinarizeBackend::Proton
+    })?;
     let (input, addon_root) = cli_addon(input);
     let prefix = addon_root
         .canonicalize()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let cursor = binarize(&input, &addon_root, &prefix, warnings)?;
+    let data = binarizer.binarize(&input, &addon_root, &prefix, warnings)?;
     let mut file = File::create(output).prepend_error("Failed to open output:")?;
-    file.write_all(cursor.get_ref())
+    file.write_all(&data)
         .prepend_error("Failed to write result to file:")?;
 
     Ok(())
 }
 
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_backend_is_refused_off_windows() {
+        let err = Binarizer::new(BinarizeBackend::Native).err().unwrap();
+        assert!(err.to_string().contains("--proton-binarize"));
+    }
+
+    #[test]
+    fn dropping_a_binarizer_removes_its_sandbox() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("sandbox");
+        std::fs::create_dir_all(root.join("P")).unwrap();
+        let mut b = Binarizer::new(BinarizeBackend::Proton).unwrap();
+        b.sandbox = Some(proton::Sandbox::for_test(root.clone()));
+        drop(b);
+        assert!(!root.exists());
+    }
+}
+
 #[cfg(unix)]
 mod proton {
     use std::fs::{File, create_dir_all, read_to_string, remove_dir_all, remove_file};
-    use std::io::{Cursor, Error, Read};
+    use std::io::{Error, Read};
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
-    use std::sync::Mutex;
     use std::thread::sleep;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -288,15 +363,25 @@ mod proton {
     const PREFIX_TIMEOUT: Duration = Duration::from_secs(300);
     const BINARIZE_TIMEOUT: Duration = Duration::from_secs(600);
 
-    struct Sandbox {
-        root: PathBuf,
+    #[derive(Debug)]
+    pub struct Sandbox {
+        pub(super) root: PathBuf,
         proton_dir: PathBuf,
         steam_root: PathBuf,
         counter: u32,
     }
 
-    static SANDBOX: std::sync::LazyLock<Mutex<Option<Sandbox>>> =
-        std::sync::LazyLock::new(|| Mutex::new(None));
+    impl Sandbox {
+        #[cfg(test)]
+        pub(super) fn for_test(root: PathBuf) -> Sandbox {
+            Sandbox {
+                root,
+                proton_dir: PathBuf::from("/nonexistent"),
+                steam_root: PathBuf::new(),
+                counter: 0,
+            }
+        }
+    }
 
     /// The first candidate that has `steamapps/common`.
     pub fn find_steam_root(candidates: &[PathBuf]) -> Option<PathBuf> {
@@ -511,7 +596,7 @@ mod proton {
         Ok(())
     }
 
-    fn create_sandbox() -> Result<Sandbox, Error> {
+    pub fn create_sandbox() -> Result<Sandbox, Error> {
         let steam_root = find_steam_root(&steam_candidates());
         let tools = find_dayz_tools(
             steam_root.as_deref(),
@@ -603,7 +688,7 @@ mod proton {
         }
     }
 
-    fn destroy(sb: &Sandbox) {
+    pub fn destroy(sb: &Sandbox) {
         // wineserver keeps the prefix busy after the last run; stop it before deleting
         let _ = Command::new(sb.proton_dir.join("files/bin/wineserver"))
             .arg("-k")
@@ -618,13 +703,6 @@ mod proton {
             {
                 eprintln!("Warning: failed to remove \"{}\": {}", sb.root.display(), e);
             }
-        }
-    }
-
-    pub fn cleanup() {
-        let sb = SANDBOX.lock().ok().and_then(|mut g| g.take());
-        if let Some(sb) = sb {
-            destroy(&sb);
         }
     }
 
@@ -660,21 +738,12 @@ mod proton {
     }
 
     pub fn binarize(
+        sb: &mut Sandbox,
         input: &Path,
         addon_root: &Path,
         prefix: &str,
         warnings: &mut dyn WarningSink,
-    ) -> Result<Cursor<Box<[u8]>>, Error> {
-        let mut guard = SANDBOX
-            .lock()
-            .map_err(|_| error!("Binarize sandbox lock poisoned."))?;
-        if guard.is_none() {
-            *guard = Some(create_sandbox()?);
-        }
-        let sb = guard
-            .as_mut()
-            .ok_or_else(|| error!("Binarize sandbox not initialized."))?;
-
+    ) -> Result<Vec<u8>, Error> {
         let name = input
             .file_name()
             .and_then(|n| n.to_str())
@@ -735,7 +804,7 @@ mod proton {
         }
 
         let _ = remove_dir_all(&out_dir);
-        Ok(Cursor::new(buffer.into_boxed_slice()))
+        Ok(buffer)
     }
 
     #[cfg(test)]

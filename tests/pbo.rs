@@ -100,7 +100,7 @@ fn prefix_of(content: &str) -> PBO {
     let root = dir.path().join("mod");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("$PBOPREFIX$"), content).unwrap();
-    PBO::from_directory(root, false, &[], &[], &mut Warnings::new()).unwrap()
+    PBO::from_directory(root, false, &[], &[], None, &mut Warnings::new()).unwrap()
 }
 
 #[test]
@@ -172,6 +172,7 @@ fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
         false,
         &[],
         &[],
+        None,
         &mut Warnings::new(),
     )
     .unwrap();
@@ -521,6 +522,7 @@ fn header_extensions_keep_file_order_and_bytes_are_stable() {
             false,
             &[],
             &[],
+            None,
             &mut Warnings::new(),
         )
         .unwrap()
@@ -545,6 +547,7 @@ fn unpack_writes_prefix_file_in_original_order() {
         false,
         &[],
         &[],
+        None,
         &mut Warnings::new(),
     )
     .unwrap()

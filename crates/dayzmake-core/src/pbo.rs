@@ -15,7 +15,7 @@ static BINARIZABLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".(rtm|p3d)
 #[expect(clippy::unwrap_used, reason = "the static pattern is a valid regex")]
 static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap());
 
-use crate::binarize;
+use crate::binarize::{self, Binarizer};
 use crate::config::{Config, is_rapified};
 use crate::error::{ErrorExt, printable};
 use crate::io::WriteExt;
@@ -136,7 +136,7 @@ fn parse_prefix_file(
 /// # use std::path::PathBuf;
 /// # use dayzmake_core::pbo::PBO;
 /// # use dayzmake_core::warning::Warnings;
-/// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new(), &mut Warnings::new()).expect("Failed to create PBO");
+/// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new(), None, &mut Warnings::new()).expect("Failed to create PBO");
 ///
 /// assert!(pbo.files.iter().any(|(name, _data)| name == "lib.rs"));
 ///
@@ -529,6 +529,7 @@ impl PBO {
         mut binarize: bool,
         exclude_patterns: &[String],
         includefolders: &[PathBuf],
+        mut binarizer: Option<&mut Binarizer>,
         warnings: &mut dyn WarningSink,
     ) -> Result<PBO, Error> {
         let file_list = list_files(&directory)?;
@@ -638,13 +639,17 @@ impl PBO {
                     .prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
                 }
-            } else if binarize::available() && binarize && is_binarizable && !prebinarized {
-                let cursor = binarize::binarize(&path, &directory, &prefix, warnings)
+            } else if let (Some(b), true) = (
+                binarizer.as_deref_mut(),
+                binarize && is_binarizable && !prebinarized,
+            ) {
+                let data = b
+                    .binarize(&path, &directory, &prefix, warnings)
                     .prepend_error(format!("Failed to binarize {}:", relative.display()))?;
 
-                files.insert(name, cursor);
+                files.insert(name, Cursor::new(data.into_boxed_slice()));
             } else {
-                if is_binarizable && !prebinarized && !binarize::available() {
+                if is_binarizable && !prebinarized && binarizer.is_none() {
                     warnings.warn(
                         Warning::new(
                             Some("non-windows-binarization"),
@@ -1124,7 +1129,7 @@ pub fn cmd_pack<O: Write>(
     excludes: &[String],
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new(), warnings)?;
+    let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new(), None, warnings)?;
 
     for h in headerext {
         let Some((key, value)) = h.split_once('=') else {
@@ -1151,9 +1156,10 @@ pub fn cmd_build<O: Write>(
     headerext: &[String],
     excludes: &[String],
     includefolders: &[PathBuf],
+    binarizer: Option<&mut Binarizer>,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, true, excludes, includefolders, warnings)?;
+    let mut pbo = PBO::from_directory(input, true, excludes, includefolders, binarizer, warnings)?;
 
     for h in headerext {
         let Some((key, value)) = h.split_once('=') else {

@@ -312,6 +312,7 @@ fn crafted_pbo(names: &[&str], extensions: &[(&str, &str)]) -> Vec<u8> {
         false,
         &[],
         &[],
+        None,
         &mut Warnings::new(),
     )
     .expect("pbo");

@@ -252,12 +252,21 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         }
 
         if args.cmd_build {
+            // dropped at the end of this block, removing the Proton sandbox before any exit
+            let mut binarizer = if cfg!(windows) {
+                Some(binarize::Binarizer::new(binarize::BinarizeBackend::Native)?)
+            } else if args.flag_proton_binarize {
+                Some(binarize::Binarizer::new(binarize::BinarizeBackend::Proton)?)
+            } else {
+                None
+            };
             pbo::cmd_build(
                 PathBuf::from(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &includefolders,
+                binarizer.as_mut(),
                 warnings,
             )?;
         } else {
@@ -457,10 +466,8 @@ pub fn args(args: &mut Args) {
         std::process::exit(0);
     }
 
-    binarize::set_proton(args.flag_proton_binarize);
     let mut warnings = PrintWarnings::new(args.flag_warning.clone(), args.flag_verbose);
     let result = run_command(args, &mut warnings);
-    binarize::cleanup(); // must happen before print_error, which exits on error
     warnings.print_summary();
     result.print_error(true);
 }

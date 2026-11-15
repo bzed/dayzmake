@@ -1758,6 +1758,7 @@ mod from_pbo {
             false,
             &[],
             &[],
+            None,
             &mut Warnings::new(),
         )
         .expect("pbo");

@@ -222,17 +222,15 @@ fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
             return json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true});
         }
     };
-    // A panic in a tool must not kill the server. The closure only borrows plain data and the
-    // global state it touches (the proton flag) is reset below or by its guards. Every call has its
-    // own warnings, with their own quotas.
+    // A panic in a tool must not kill the server. The closure only borrows plain data and it
+    // holds no global state (a Binarizer is dropped while unwinding). Every call has its own
+    // warnings, with their own quotas.
     let mut sink = Warnings::new();
     if verbose {
         sink.unlimited();
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| call_tool(name, args, &mut sink)));
     let warnings: Vec<String> = sink.warnings().iter().map(ToString::to_string).collect();
-    binarize::set_proton(false);
-    binarize::cleanup();
     let (text, is_error) = match outcome {
         Ok(Ok(out)) => (
             with_warnings(&window(&out, offset, length), &warnings),
@@ -989,8 +987,12 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
     let exclude = strs_arg(args, "exclude")?;
     let key = opt_path(args, "key")?;
     if build {
-        // Only the build can binarize; the flag is reset by `run_tool` after the call.
-        binarize::set_proton(bool_arg(args, "proton_binarize")?);
+        // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
+        let mut binarizer = if bool_arg(args, "proton_binarize")? {
+            Some(binarize::Binarizer::new(binarize::BinarizeBackend::Proton)?)
+        } else {
+            None
+        };
         let mut file = create_target(&target, force)?;
         pbo::cmd_build(
             source,
@@ -998,6 +1000,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
             &headerext,
             &exclude,
             &include_folders(args)?,
+            binarizer.as_mut(),
             warnings,
         )?;
     } else {
