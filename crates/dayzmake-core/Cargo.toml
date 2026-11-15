@@ -1,6 +1,6 @@
 [package]
 name = "dayzmake-core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Readers and writers for DayZ file formats: PBO, rapified config, P3D, PAA, BI keys and signatures"
 license.workspace = true
 authors.workspace = true
@@ -18,14 +18,14 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["sign", "image"]
-# BI signatures and keys (`sign` module); needs OpenSSL for RSA.
-sign = ["dep:openssl"]
+# BI signatures and keys (`sign` module): keys, signing, verification and key generation use `rsa` (pure Rust).
+sign = ["dep:rsa", "dep:getrandom", "dep:zeroize"]
 # PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
 image = ["dep:image"]
 
 [dependencies]
 byteorder = "1.5"
-openssl = { version = "0.10", optional = true }
+rsa = { version = "0.10.0", optional = true, default-features = false, features = ["std", "getrandom", "hazmat"] }
 linked-hash-map = "0.5.6"
 regex = "1.10"
 peg = "0.8"
@@ -35,6 +35,8 @@ lzo1x = "0.2.2"
 encoding_rs = "0.8"
 sha1 = { version = "0.11.0", default-features = false }
 same-file = "1.0.6"
+getrandom = { version = "0.4", default-features = false, features = ["sys_rng"], optional = true }
+zeroize = { version = "1.9.1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
@@ -42,6 +44,9 @@ winreg = "0.52"
 [dev-dependencies]
 tempfile = "3.10"
 criterion = "0.5.1"
+rand_chacha = "0.10.0"
+rand_core = "0.10.1"
+num-bigint = { version = "0.5.1", default-features = false }
 
 [[bench]]
 name = "preprocess"

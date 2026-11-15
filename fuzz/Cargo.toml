@@ -70,3 +70,10 @@ path = "fuzz_targets/config_parse.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "sign_verify"
+path = "fuzz_targets/sign_verify.rs"
+test = false
+doc = false
+bench = false

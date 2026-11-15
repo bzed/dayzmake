@@ -162,18 +162,26 @@ pub fn cached(
 /// The first 8 hex digits of the SHA-1 of the canonical `dir`, for cache keys of mods.
 #[must_use]
 pub fn dir_hash(dir: &Path) -> String {
-    use openssl::hash::{MessageDigest, hash};
+    use sha1::{Digest, Sha1};
     let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let text = canonical.to_string_lossy();
-    // A failing SHA-1 is not expected; the key then loses its hash and only mods in same-named dirs share it.
-    let digest = hash(MessageDigest::sha1(), text.as_bytes()).ok();
     let mut hex = String::new();
-    for b in digest.iter().flat_map(|d| d.iter()).take(4) {
+    for b in Sha1::digest(text.as_bytes()).iter().take(4) {
         let _ = write!(hex, "{b:02x}"); // writing to a String cannot fail
     }
-    if hex.is_empty() {
-        "00000000".to_string()
-    } else {
-        hex
+    hex
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cache key must not change between releases: `printf %s /nonexistent/dayzmake-pin/mod | sha1sum`.
+    #[test]
+    fn dir_hash_is_the_first_eight_hex_digits_of_the_sha1_of_the_path() {
+        assert_eq!(
+            dir_hash(Path::new("/nonexistent/dayzmake-pin/mod")),
+            "996712c3"
+        );
     }
 }

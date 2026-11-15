@@ -22,8 +22,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Install cargo-deny and cargo-llvm-cov
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -56,8 +54,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -75,8 +71,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
       - run: rustup toolchain install nightly --profile minimal
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -90,8 +84,6 @@ jobs:
     container: rust:1-trixie
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install build dependencies
-        run: apt-get update && apt-get install -y --no-install-recommends libssl-dev pkg-config
       - name: Test
         run: cargo test --workspace --locked --no-fail-fast
       - name: Build
@@ -112,14 +104,8 @@ jobs:
   windows:
     name: Windows (x86_64)
     runs-on: windows-latest
-    env:
-      OPENSSL_STATIC: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install static OpenSSL
-        run: |
-          vcpkg install openssl:x64-windows-static-md
-          "OPENSSL_DIR=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md" >> $env:GITHUB_ENV
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test

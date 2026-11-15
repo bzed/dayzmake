@@ -1,7 +1,0 @@
----
-source: tests/golden_cli.rs
-expression: r.err()
----
-error: Hash 3 doesn't match
-Signed hash: ba347ddb0a7c652775696f6966107ea2b7ded554
-Real hash:   dd43e28b5fdf6ace9cdb50fef93e36f08411fd01

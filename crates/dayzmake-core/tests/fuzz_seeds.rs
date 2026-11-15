@@ -96,3 +96,34 @@ fn sign_read_seeds() -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(feature = "sign")]
+#[test]
+fn sign_verify_seeds() -> io::Result<()> {
+    use dayzmake_core::sign::BISignVersion;
+
+    // the same layout and calls as the fuzz target `sign_verify`
+    let template = fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/sign/testsig.pbo"),
+    )?;
+    for data in seeds("sign_verify")? {
+        let [a, b, c, d, rest @ ..] = &data[..] else {
+            continue;
+        };
+        let key_len = usize::from(u16::from_be_bytes([*a, *b])).min(rest.len());
+        let (key, rest) = rest.split_at(key_len);
+        let sig_len = usize::from(u16::from_be_bytes([*c, *d])).min(rest.len());
+        let (sig, private) = rest.split_at(sig_len);
+        let pbo = PBO::read(&mut Cursor::new(&template))?;
+        if let (Ok(key), Ok(sig)) = (
+            BIPublicKey::read(&mut &key[..]),
+            BISign::read(&mut &sig[..]),
+        ) {
+            let _ = key.verify(&pbo, &sig);
+        }
+        if let Ok(private) = BIPrivateKey::read(&mut &private[..]) {
+            let _ = private.sign(&pbo, BISignVersion::V3);
+        }
+    }
+    Ok(())
+}
