@@ -868,7 +868,13 @@ impl PBO {
         // the prefix is needed while binarizing, so read it before looking at the other files
         let mut pre_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
         for prefix_file in &["$PBOPREFIX$", "$PREFIX$"] {
-            if let Ok(content) = std::fs::read_to_string(directory.join(prefix_file)) {
+            let prefix_path = directory.join(prefix_file);
+            // a FIFO or device named like the prefix file would block the read; the walk below
+            // reports it
+            if !std::fs::metadata(&prefix_path).is_ok_and(|m| m.file_type().is_file()) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(prefix_path) {
                 parse_prefix_file(&content, &mut pre_extensions, false, warnings);
             }
         }

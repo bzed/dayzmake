@@ -1256,3 +1256,20 @@ fn build_skips_fifos_and_device_links_in_the_source() {
     assert!(out.contains("config.cpp"), "{out}");
     assert!(!out.contains("pipe") && !out.contains("zero"), "{out}");
 }
+
+#[cfg(unix)]
+#[test]
+fn pack_skips_a_fifo_named_like_the_prefix_file() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("$PBOPREFIX$"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsupported-file"), "{err}");
+}
