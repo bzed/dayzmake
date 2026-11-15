@@ -1350,6 +1350,26 @@ fn write_prefix_file(
     Ok(())
 }
 
+/// The relative path an unpacked entry is written to, and whether leading separators were
+/// stripped from its name (`\scripts\x.c` is written as `scripts/x.c`). Everything else
+/// [`safe_relative_path`] rejects stays rejected.
+fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
+    let stripped = name.trim_start_matches(['\\', '/']);
+    safe_relative_path(stripped).map(|relative| (relative, stripped.len() != name.len()))
+}
+
+/// Warns that an entry name starts with a separator that was stripped.
+fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
+    warnings.warn(Warning::new(
+        Some("leading-separator"),
+        format!(
+            "Entry \"{}\" starts with a path separator; extracting it as \"{}\".",
+            printable(name),
+            printable(&relative.to_string_lossy())
+        ),
+    ));
+}
+
 /// The folder a PBO is unpacked into: `output`, or with `use_prefix` `<output>/<prefix>`. An empty
 /// prefix (or one of only separators) means no prefix.
 fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Error> {
@@ -1387,7 +1407,8 @@ pub struct UnpackOptions {
 ///
 /// Entry names and the prefix come from the (untrusted) PBO: entries whose name does not map to a
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
-/// with an entry already written in this run are skipped with a warning. With `options.use_prefix`
+/// with an entry already written in this run are skipped with a warning. Leading separators are
+/// stripped from a name (`leading-separator` warning). With `options.use_prefix`
 /// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix.
 ///
 /// # Errors
@@ -1414,7 +1435,7 @@ pub fn unpack<I: Read>(
             .into_iter()
             .chain(pbo.files.keys().map(String::as_str))
             .find(|name| {
-                safe_relative_path(name).is_some_and(|relative| {
+                unpack_relative(name).is_some_and(|(relative, _)| {
                     !crosses_symlink(&base, &relative) && base.join(relative).exists()
                 })
             });
@@ -1443,13 +1464,16 @@ pub fn unpack<I: Read>(
                 ),
             ));
         }
-        let Some(relative) = safe_relative_path(file_name) else {
+        let Some((relative, stripped)) = unpack_relative(file_name) else {
             warnings.warn(Warning::new(
                 Some("unsafe-path"),
                 format!("Skipping \"{}\": unsafe path.", printable(file_name)),
             ));
             continue;
         };
+        if stripped {
+            warn_leading_separator(file_name, &relative, warnings);
+        }
         let key = relative.to_string_lossy().to_lowercase();
         if written.contains(&key) {
             warnings.warn(Warning::new(

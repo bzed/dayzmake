@@ -191,19 +191,47 @@ fn unpack_rejects_parent_dir_entry() {
 }
 
 #[test]
-fn unpack_rejects_absolute_entry() {
-    let pbo = crafted_pbo(
-        &[("\\abs.txt", b"a"), ("/tmp/x", b"b"), ("C:\\x.txt", b"c")],
-        None,
-    );
+fn unpack_rejects_drive_letter_entries() {
+    let pbo = crafted_pbo(&[("C:\\x.txt", b"c"), ("ok.txt", b"y")], None);
     let (tmp, code, err) = unpack_crafted(&pbo, &[]);
     assert_eq!(code, 0, "{err}");
-    assert!(!tmp.path().join("target/abs.txt").exists());
-    assert!(!tmp.path().join("target/tmp").exists());
     assert!(!tmp.path().join("target/C:").exists());
     assert!(!tmp.path().join("target/x.txt").exists());
     assert!(err.contains("unsafe-path"), "{err}");
-    assert!(err.contains("Skipping \"\\abs.txt\""), "{err}");
+}
+
+#[test]
+fn unpack_strips_a_leading_separator_and_warns() {
+    let pbo = crafted_pbo(&[("\\scripts\\a.c", b"a"), ("/tmp/x", b"b")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        fs::read(tmp.path().join("target/scripts/a.c")).unwrap(),
+        b"a"
+    );
+    assert_eq!(fs::read(tmp.path().join("target/tmp/x")).unwrap(), b"b");
+    assert!(err.contains("leading-separator"), "{err}");
+    assert!(err.contains("\\scripts\\a.c"), "{err}");
+    assert!(!err.contains("unsafe-path"), "{err}");
+}
+
+#[test]
+fn unpack_still_skips_parent_dir_after_a_leading_separator() {
+    let pbo = crafted_pbo(&[("\\..\\x", b"x"), ("ok.txt", b"y")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(!tmp.path().join("x").exists() && !tmp.path().join("target/x").exists());
+    assert!(tmp.path().join("target/ok.txt").exists());
+}
+
+#[test]
+fn unpack_entries_that_collide_after_stripping_use_the_duplicate_rule() {
+    let pbo = crafted_pbo(&[("\\a.c", b"1"), ("a.c", b"2")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert_eq!(fs::read(tmp.path().join("target/a.c")).unwrap(), b"1");
 }
 
 #[test]

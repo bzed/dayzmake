@@ -31,9 +31,11 @@ is maintained here.
 - `build .` (and a symlinked addon folder) without `$PBOPREFIX$` uses the folder's name as the prefix instead of
   failing with "Invalid addon directory" (#11).
 - Preprocessor parse errors report 1-based line numbers (#12).
-- Unpacking a PBO skips entry names with any control character (C1 included), a leading separator or an empty
-  component (`unsafe-path` warning); modifying a PBO rejects them. The API index (`api`) is more lenient: an entry
-  with a leading or trailing separator is indexed under its normalised name instead of being skipped (#13, #21).
+- Unpacking a PBO skips entry names with any control character (C1 included), `..` or drive-letter components or
+  an empty component (`unsafe-path` warning); a leading separator is stripped instead (`\scripts\x.c` is written as
+  `scripts/x.c`, `leading-separator` warning). Modifying a PBO rejects such names. The API index (`api`) is more
+  lenient: an entry with a leading or trailing separator is indexed under its normalised name instead of being
+  skipped (#13, #21).
 - Rewriting a read PBO keeps the packing method of entries it does not know (#14).
 - Names, paths and values from untrusted files are shown with control characters escaped in errors, warnings and
   `inspect` listings. `derapify` refuses a class or entry name that cannot be written as config text (#15, #22, #26,
