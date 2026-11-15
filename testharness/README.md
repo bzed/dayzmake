@@ -32,7 +32,7 @@ testharness/run.sh --keep        # keep testharness/build for inspection
 ```
 
 Requirements: Rust toolchain, a Steam installation with DayZ Server
-(app 223350) for the server test, `python3` for port picking (optional).
+(app 223350) for the server test, `python3` (port picking, `compare-release.sh`).
 
 The harness never writes into the Steam install: it builds its own server
 tree of symlinks in `testharness/build/server-tree-*`, picks random free

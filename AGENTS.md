@@ -11,7 +11,7 @@ input as hostile.
 | Path | Content |
 |---|---|
 | `crates/dayzmake-core/` | library crate `dayzmake-core`: the file formats and their plumbing |
-| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `paa`, `sign`, `io` (readers and writers), `preprocess`, `eval`, `binarize`, `error` |
+| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `paa`, `sign`, `io` (readers and writers), `preprocess`, `eval`, `binarize`, `error`, `warning` |
 | `crates/dayzmake-core/tests/` | library tests (config, preprocessor, BI golden files, fuzz seeds of the format readers) |
 | `crates/dayzmake-core/benches/` | `criterion` benchmarks (`preprocess`, `config`) |
 | `src/*.rs` | root crate `dayzmake`: the CLI (`run.rs`, `main.rs`), the MCP server and the script API index (`api/`) |
@@ -67,7 +67,7 @@ with `--locked`. Fuzzing and Miri need `nightly` (see below).
 
 ## Safe Rust
 
-The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds the test exceptions.
+The lints are configured once, in `[workspace.lints]` in the root `Cargo.toml`; `clippy.toml` holds the test exceptions.
 
 **Lints**
 - Strict by design: `cargo clippy` runs with `-D warnings`; `clippy::all` and `clippy::pedantic` are enabled.
@@ -168,10 +168,11 @@ Run `make check`. It must pass, because CI runs the same steps:
 | Step | Target | Notes |
 |---|---|---|
 | formatting | `make fmt-check` | fix with `make fmt` |
-| lint | `make lint` | `cargo clippy --all-targets --locked -- -D warnings` |
-| rustdoc | `make doc` | `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
+| lint | `make lint` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| rustdoc | `make doc` | `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
 | features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
+| docs.rs | `make docsrs` | `cargo +nightly doc -p dayzmake-core --all-features` with `--cfg docsrs` and warnings as errors; skipped without nightly |
 | packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |
 | tests | `make test` | all targets plus doctests; includes the fuzz seeds |
 | fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |

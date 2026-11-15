@@ -5,7 +5,7 @@
 //!
 //! - [`pbo`]: read, build, pack, unpack and selectively read PBO archives ([`pbo::PBO`]).
 //! - [`config`], [`preprocess`]: config parsing, rapification and derapification.
-//! - [`p3d`]: MLOD/ODOL model reading and inspection.
+//! - [`p3d`]: MLOD model reading and inspection (ODOL is only detected, not read).
 //! - [`paa`]: PAA textures, with conversion from and to images (feature `image`).
 //! - `sign`: BI keys and `.bisign` signatures (feature `sign`).
 //! - [`binarize`]: BI's `binarize.exe`, natively on Windows or under Proton.
