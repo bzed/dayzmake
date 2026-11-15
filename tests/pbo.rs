@@ -235,6 +235,17 @@ fn unpack_entries_that_collide_after_stripping_use_the_duplicate_rule() {
 }
 
 #[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_a_skipped_duplicate() {
+    // #41: "A.c" is extracted first; "\\a.c" is then skipped, so only the duplicate is reported
+    let pbo = crafted_pbo(&[("A.c", b"1"), ("\\a.c", b"2")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert_eq!(fs::read(tmp.path().join("target/A.c")).unwrap(), b"1");
+}
+
+#[test]
 fn unpack_rejects_dot_space_components() {
     let pbo = crafted_pbo(
         &[

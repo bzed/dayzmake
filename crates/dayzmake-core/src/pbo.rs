@@ -991,7 +991,8 @@ impl PBO {
         // Entries generated from source (the rapified config.cpp, a .p3do packed as .p3d) win over a
         // plain file of the same name, so find them first: the plain file is then skipped before it
         // is binarized or read. The gates are the ones of the loop below.
-        let mut generated_names: HashMap<String, String> = HashMap::new();
+        // key -> (source file, stored entry name)
+        let mut generated_names: HashMap<String, (String, String)> = HashMap::new();
         for path in &file_list {
             let Ok(relative) = path.strip_prefix(directory) else {
                 continue;
@@ -1007,7 +1008,7 @@ impl PBO {
             }
             generated_names
                 .entry(name.to_lowercase())
-                .or_insert_with(|| printable(&relative.to_string_lossy()));
+                .or_insert_with(|| (printable(&relative.to_string_lossy()), printable(&name)));
         }
 
         for path in file_list {
@@ -1015,15 +1016,12 @@ impl PBO {
                 continue;
             };
             let shown = printable(&relative.to_string_lossy());
-            let mut generated = false;
+            let (pre_name, name, generated) = entry_name(&relative, binarize);
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
                 relative = relative.with_file_name("config.bin");
-                generated = true;
             }
-
-            let mut name: String = relative.to_string_lossy().replace('/', "\\");
             // excluded files are silent, whatever they are
-            if !file_allowed(&name, exclude_patterns) {
+            if !file_allowed(&pre_name, exclude_patterns) {
                 continue;
             }
             // only regular files (or links to them): a FIFO would block the build, a device never
@@ -1038,7 +1036,7 @@ impl PBO {
                 );
                 continue;
             }
-            if relative.to_str().is_none() || safe_relative_path(&name).is_none() {
+            if relative.to_str().is_none() || safe_relative_path(&pre_name).is_none() {
                 warnings.warn(Warning::new(
                     Some("unsafe-path"),
                     format!("Skipping \"{shown}\": unsafe entry name."),
@@ -1046,21 +1044,16 @@ impl PBO {
                 continue;
             }
             // a .p3do is packed as .p3d (it is not binarized itself, so decide that first)
-            let is_binarizable = BINARIZABLE_RE.is_match(&name);
-            if P3DO_RE.is_match(&name) {
-                name = P3DO_RE.replace(&name, ".p3d").into_owned();
-                generated = true;
-            }
+            let is_binarizable = BINARIZABLE_RE.is_match(&pre_name);
             // entry names compare case-insensitively; the first file in walk order wins, except
             // that an entry generated from source replaces a plain file of the same name (found
             // by the pre-pass above, so the plain file is skipped before it is processed)
             let key = name.to_lowercase();
-            if !generated && let Some(source) = generated_names.get(&key) {
+            if !generated && let Some((source, stored)) = generated_names.get(&key) {
                 warnings.warn(Warning::new(
                     Some("duplicate-entry"),
                     format!(
-                        "Skipping \"{shown}\": the entry \"{}\" is generated from \"{source}\".",
-                        printable(&name)
+                        "Skipping \"{shown}\": the entry \"{stored}\" is generated from \"{source}\"."
                     ),
                 ));
                 continue;
@@ -1607,9 +1600,6 @@ pub fn unpack<I: Read>(
             ));
             continue;
         };
-        if stripped {
-            warn_leading_separator(file_name, &relative, warnings);
-        }
         let key = relative.to_string_lossy().to_lowercase();
         if written.contains(&key) {
             warnings.warn(Warning::new(
@@ -1642,6 +1632,9 @@ pub fn unpack<I: Read>(
                 continue;
             }
         };
+        if stripped {
+            warn_leading_separator(file_name, &relative, warnings);
+        }
         let path = base.join(&relative);
         written.insert(key);
         let written_ok = create_dir_all(path.parent().unwrap_or(&base))

@@ -1576,6 +1576,46 @@ fn build_prefers_the_p3do_over_a_plain_p3d() {
 
 #[cfg(unix)]
 #[test]
+fn build_replace_warning_names_the_generated_entry_not_the_plain_spelling() {
+    // #41: the skipped plain file keeps its spelling, the entry named is the one that is stored
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class CfgPatches{class A{units[]={};};};"),
+        ("mod/Config.bin", "stale"),
+        ("mod/M.p3do", "from-p3do"),
+        ("mod/m.P3D", "plain"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(
+            "Skipping \"Config.bin\": the entry \"config.bin\" is generated from \"config.cpp\""
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("Skipping \"m.P3D\": the entry \"M.p3d\" is generated from \"M.p3do\""),
+        "{err}"
+    );
+}
+
+#[test]
+fn build_skips_a_prebinarized_plain_p3d_next_to_a_p3do_without_inspecting_it() {
+    // #41: the plain file is replaced, so it is neither inspected nor reported as pre-binarized
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/m.p3d"), b"ODOL\x31\0\0\0 model").unwrap();
+    std::fs::write(dir.path().join("m/m.p3do"), b"from-p3do").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(!err.contains("prebinarized-file"), "{err}");
+    assert!(!err.contains("In file m.p3d"), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "from-p3do");
+}
+
+#[cfg(unix)]
+#[test]
 fn pack_names_a_dangling_symlink_in_the_error() {
     let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
     let modf = dir.path().join("mod");
