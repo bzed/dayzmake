@@ -1,6 +1,6 @@
 //! The CLI's warning sink: prints every warning to stderr as it is raised, and the error line.
 
-use std::io::Error;
+use std::io::{self, Error, Write};
 
 use colored::Colorize;
 use dayzmake_core::warning::{Warning, WarningKind, WarningSink, Warnings};
@@ -12,15 +12,19 @@ pub struct PrintWarnings {
     inner: Warnings,
 }
 
-#[expect(clippy::print_stderr, reason = "CLI diagnostics")]
 fn print_line(location: &str, message: &str, name: Option<&str>) {
     let name = name.map_or_else(String::new, |n| format!(" [{n}]"));
-    eprintln!("{location}{}: {message}{name}", "warning".yellow().bold());
+    // a failed write to stderr (the reader is gone) cannot be reported anywhere; `eprintln!` would panic on it
+    let _ = writeln!(
+        io::stderr(),
+        "{location}{}: {message}{name}",
+        "warning".yellow().bold()
+    );
 }
 
-#[expect(clippy::print_stderr, reason = "CLI diagnostics")]
 fn print_note(message: &str) {
-    eprintln!("{message}");
+    // a failed write to stderr (the reader is gone) cannot be reported anywhere; `eprintln!` would panic on it
+    let _ = writeln!(io::stderr(), "{message}");
 }
 
 impl PrintWarnings {
@@ -80,10 +84,8 @@ pub trait PrintError {
 impl<T> PrintError for Result<T, Error> {
     fn print_error(self, exit: bool) {
         if let Err(error) = self {
-            #[expect(clippy::print_stderr, reason = "CLI diagnostics")]
-            {
-                eprintln!("{}: {}", "error".red().bold(), error);
-            }
+            // a failed write to stderr cannot be reported anywhere; the exit status stays 1
+            let _ = writeln!(io::stderr(), "{}: {}", "error".red().bold(), error);
             if exit {
                 std::process::exit(1);
             }

@@ -1,4 +1,8 @@
 //! Tests that drive the built `dayzmake` binary.
+#[cfg(unix)]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -1798,7 +1802,7 @@ fn closed_stdout_pipe_ends_cat_quietly() {
 fn closed_stdout_pipe_ends_inspect_quietly() {
     let dir = tempfile::tempdir().unwrap();
     // a listing longer than a pipe buffer
-    for i in 0..600 {
+    for i in 0..2000 {
         write(dir.path(), &format!("mod/{}{i}.txt", "n".repeat(120)), "x");
     }
     let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir.path());
@@ -1808,23 +1812,79 @@ fn closed_stdout_pipe_ends_inspect_quietly() {
     assert_eq!(code, 0, "{err}");
 }
 
+/// Runs `args` in `cwd` with stdout discarded and stderr a pipe whose read end is already closed.
 #[cfg(unix)]
-#[test]
-fn closed_stderr_pipe_still_fails() {
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn run_with_closed_stderr(args: &[&str], cwd: &Path) -> Option<i32> {
     use std::process::Stdio;
 
-    let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    // the read end is gone before the child starts: its error line hits a closed pipe
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
-    cmd.args(["inspect", "nope.pbo"])
-        .current_dir(dir.path())
+    cmd.args(args)
+        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(writer);
     isolate(&mut cmd, home.path());
-    let code = cmd.status().unwrap().code();
-    assert_ne!(code, Some(0));
+    cmd.status().unwrap().code()
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_still_fails() {
+    // the error line cannot be written; the exit status stays 1 and nothing panics
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        run_with_closed_stderr(&["inspect", "nope.pbo"], dir.path()),
+        Some(1)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_does_not_fail_a_command_with_warnings() {
+    // an unpacked entry with a leading separator makes unpack warn (leading-separator)
+    let dir = tempfile::tempdir().unwrap();
+    let pbo = support::raw_pbo(&[("\\scripts\\a.c", b"a")], &[]);
+    std::fs::write(dir.path().join("in.pbo"), pbo).unwrap();
+    assert_eq!(
+        run_with_closed_stderr(&["unpack", "in.pbo", "target"], dir.path()),
+        Some(0)
+    );
+    assert!(dir.path().join("target/scripts/a.c").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
+    use std::io::Read;
+
+    let dir = tempfile::tempdir().unwrap();
+    big_pbo(dir.path());
+    let fifo = dir.path().join("sink");
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success());
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(["pack", "-f", "mod", "sink"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let child = cmd.spawn().unwrap();
+    // read a little, then close the read end while the child still has data to write
+    let mut reader = std::fs::File::open(&fifo).unwrap();
+    let mut first = [0u8; 16];
+    reader.read_exact(&mut first).unwrap();
+    drop(reader);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

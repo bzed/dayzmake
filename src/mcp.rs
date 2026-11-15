@@ -231,10 +231,9 @@ fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
     let mut warnings: Vec<String> = Vec::new();
     for w in sink.warnings() {
         if w.kind == WarningKind::Note {
-            #[expect(clippy::print_stderr, reason = "notes go to the server's stderr")]
-            {
-                eprintln!("{w}");
-            }
+            // a failed write to stderr (the reader is gone) cannot be reported anywhere, and must not
+            // stop the server: `eprintln!` would panic on it
+            let _ = writeln!(std::io::stderr(), "{w}");
         } else {
             warnings.push(w.to_string());
         }
