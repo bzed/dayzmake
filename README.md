@@ -27,7 +27,37 @@ is maintained here.
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
 - `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
-  stored as `""`.
+  stored as `""` (#19).
+- `build .` (and a symlinked addon folder) without `$PBOPREFIX$` uses the folder's name as the prefix instead of
+  failing with "Invalid addon directory" (#11).
+- Preprocessor parse errors report 1-based line numbers (#12).
+- Unpacking a PBO skips entry names with any control character (C1 included), a leading separator or an empty
+  component (`unsafe-path` warning); modifying a PBO rejects them. The API index (`api`) is more lenient: an entry
+  with a leading or trailing separator is indexed under its normalised name instead of being skipped (#13, #21).
+- Rewriting a read PBO keeps the packing method of entries it does not know (#14).
+- Names, paths and values from untrusted files are shown with control characters escaped in errors, warnings and
+  `inspect` listings. `derapify` refuses a class or entry name that cannot be written as config text (#15, #22, #26,
+  #28).
+- Writing a P3D rejects an inconsistent model (bad selection size, vertex index out of range, a face without 3 or 4
+  vertices, a NUL in a name) before the first byte is written; the error names the LOD index (#16).
+- A string with an embedded NUL fails rapifying with an error naming the config entry, instead of writing a corrupt
+  file (#23).
+- Proton binarizing rejects a `$PBOPREFIX$` that would leave its sandbox (#17).
+- Output files (`build`, `pack`, `rapify`, `binarize`, `keygen`, ...) are replaced atomically: a failed command
+  keeps the old target, an existing target keeps its permissions, a symlink is written through, and a device, FIFO
+  or pipe (`/dev/null`, `/dev/stdout`) is written in place. A failure to create the temporary file names the
+  directory (#18, #25).
+- `build` never packs its own output: the target and its temporary file are left out when they lie inside the
+  source folder (#24).
+- The `api` warning for a mod with an unsafe prefix shows the prefix escaped once, not twice (#31).
+- `keygen` creates the private key readable by its owner only (`0600`) (#20).
+- `build` and `pack` skip FIFOs, devices and sockets in the source folder (`unsupported-file` warning, no more hanging
+  on a FIFO) and files whose names are unsafe as PBO entry names (`unsafe-path` warning); `-x` excludes apply first.
+  Names that collide (case-insensitively, for example `config.cpp` and `config.bin`) give a `duplicate-entry`
+  warning; the first in sorted order wins. An unreadable source file, such as a dangling symlink, is named in the
+  error (#27, #30, #32, #33).
+- `build` matches the model extensions `.p3d`, `.rtm` and `.p3do` case-insensitively (`N.P3D` is binarized like
+  `n.p3d`; `xp3d` is not a model) (#34).
 
 ## Building
 
