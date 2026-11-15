@@ -126,7 +126,7 @@ header_split() {
 # classify <category> <out|err|code> <old-file> <new-file>: names a difference. Allowed, expected kinds:
 #   out(header-ext-order-only)  only the header extension block of `inspect` has the same lines in another
 #                               order (pbo and golden); the rest of the output is byte-identical
-#   err(order-only)             warnings in another order (golden only, build-related commands)
+#   err(order-only)             the same warning lines in another order (golden only; any command)
 #   err(suppression-summary-only)  the new "were suppressed" line (golden only)
 # Everything else (including any reordering in the config and p3d categories) is the bare part name.
 classify() {
@@ -204,23 +204,28 @@ d = open(sys.argv[1], "rb").read(1 << 20)
 if d[:1] != b"\0" or d[1:5] != b"sreV":
     sys.exit(0)  # no header extensions
 i, out = 21, sys.stdout.buffer
-while i < len(d) and d[i] != 0:
-    j = d.index(b"\0", i)
-    k = d[i:j]
-    e = d.index(b"\0", j + 1)
-    out.write(k + b"=" + d[j + 1:e] + b"\n")
-    i = e + 1
+try:
+    while i < len(d) and d[i] != 0:
+        j = d.index(b"\0", i)
+        k = d[i:j]
+        e = d.index(b"\0", j + 1)
+        out.write(k + b"=" + d[j + 1:e] + b"\n")
+        i = e + 1
+except ValueError:
+    # truncated or hostile header: a marker line, so it shows up as a recorded `raw` difference
+    out.write(b"!unreadable-header\n")
 PY
 }
 
 # check_raw_order <pbo> <id>: the NEW binary's header extension order (`inspect` and the unpacked
 # `$PBOPREFIX$`) must equal the order in the PBO file. Counted in category "raw".
 check_raw_order() {
-    local pbo=$1 id=$2 n parts=() t
+    local pbo=$1 id=$2 n r parts=() t
     n=$(printf '%s' "raw-$id" | tr -c 'A-Za-z0-9._-' '_')
+    r=$(printf '%s' "pbo-inspect/$id" | tr -c 'A-Za-z0-9._-' '_')  # the name both() gave the result files
     t=$(mktemp -d "$WORK/raw.XXXXXX")
     raw_header "$pbo" >"$t/raw"
-    header_split "$WORK/new/res-pbo-inspect_$id.out" "$t/blk" "$t/rest"
+    header_split "$WORK/new/res-$r.out" "$t/blk" "$t/rest"
     { sed -n 's/^- //p' "$t/blk"; } >"$t/inspect"
     cmp -s "$t/raw" "$t/inspect" || parts+=("inspect-order-not-file-order")
     if [ -f "$WORK/new/unpack/$id/\$PBOPREFIX\$" ]; then
