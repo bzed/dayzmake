@@ -50,14 +50,19 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {
-                let line_origin = u32::try_from(pe.location.line - 1)
+                let line_index = pe
+                    .location
+                    .line
+                    .checked_sub(1)
+                    .ok_or_else(|| error!("invalid line number {}", pe.location.line))?;
+                let line_origin = u32::try_from(line_index)
                     .map_err(|_| error!("invalid line number {}", pe.location.line))?;
                 let file_origin = match origin {
                     Some(path) => format!("{}:", path.display()),
                     None => String::new(),
                 };
 
-                let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
+                let line = input.lines().nth(line_index).unwrap_or("");
 
                 Err(format_parse_error(
                     line,
@@ -88,7 +93,7 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 // line_origins is never empty: preprocess() always seeds it with the
                 // top-level file, and its length is an upper bound for the parser's
                 // 1-based line numbers.
-                let idx = min(pe.location.line, info.line_origins.len()) - 1;
+                let idx = min(pe.location.line, info.line_origins.len()).saturating_sub(1);
                 let Some((line_origin, file)) = info.line_origins.get(idx) else {
                     return Err(error!(
                         "Parse error location out of range: line {}",
@@ -101,7 +106,10 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                     None => String::new(),
                 };
 
-                let line = input.lines().nth(pe.location.line - 1).unwrap_or("");
+                let line = input
+                    .lines()
+                    .nth(pe.location.line.saturating_sub(1))
+                    .unwrap_or("");
 
                 Err(format_parse_error(
                     line,
@@ -123,19 +131,21 @@ fn format_parse_error(
     expected: &impl Display,
 ) -> Error {
     let trimmed = line.trim_start();
+    // The parser's column counts characters, so every width here is in characters too.
+    let stripped = line.chars().count() - trimmed.chars().count();
+    let column = column_number.saturating_sub(1);
+    let offending = line
+        .chars()
+        .nth(column)
+        .map_or_else(|| "\\n".to_string(), |c| c.to_string());
 
     error!(
-        "In line {}{}:\n\n  {}\n  {}{}\n\nUnexpected token \"{}\", expected: {}",
+        "In line {}{}:\n\n  {}\n  {}^\n\nUnexpected token \"{}\", expected: {}",
         file,
         line_number,
         trimmed,
-        " ".to_string()
-            .repeat(column_number - 1 - (line.len() - trimmed.len())),
-        "^",
-        line.chars()
-            .map(|x| x.to_string())
-            .nth(column_number - 1)
-            .unwrap_or_else(|| "\\n".to_string()),
+        " ".repeat(column.saturating_sub(stripped)),
+        offending,
         expected
     )
 }

@@ -681,3 +681,12 @@ fn unpack_conflict_message_uses_the_target_folder() {
         "error: Target folder \"out\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.\n"
     );
 }
+
+#[test]
+fn rapify_nbsp_indent_reports_a_parse_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("nbsp.cpp"), b"\xc2\xa0foo = 1;\n").unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "nbsp.cpp", "out.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.starts_with("error:"), "{err}");
+}
