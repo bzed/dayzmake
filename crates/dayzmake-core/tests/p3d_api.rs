@@ -90,6 +90,7 @@ fn write_rejects_a_vertex_index_out_of_range() {
     lod.faces[0].vertices[1].point_index = 3;
     let msg = write_error(lod);
     assert!(msg.contains("face 0"), "{msg}");
+    assert!(msg.contains("Resolution 1"), "{msg}");
     assert!(msg.contains("point index 3"), "{msg}");
 
     let mut lod = triangle_lod();
@@ -106,4 +107,22 @@ fn write_accepts_an_inactive_selection_of_any_length() {
     let mut model = P3D::new(0x101);
     model.lods.push(lod);
     model.write(&mut Vec::new()).unwrap();
+}
+
+#[test]
+fn a_rejected_model_writes_nothing() {
+    let mut bad_selection = LOD::new(2.0);
+    bad_selection.taggs.push(Tagg::new(1, "body", vec![0; 3]));
+    let mut five = triangle_lod();
+    five.faces[0].vertices.push(Vertex::new());
+    five.faces[0].vertices.push(Vertex::new());
+    for bad in [bad_selection, five] {
+        let mut model = P3D::new(0x101);
+        model.lods.push(triangle_lod());
+        model.lods.push(bad);
+        let mut out = Vec::new();
+        let msg = model.write(&mut out).unwrap_err().to_string();
+        assert!(out.is_empty(), "{msg}");
+        assert!(msg.contains("LOD"), "{msg}");
+    }
 }
