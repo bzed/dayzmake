@@ -2,6 +2,8 @@
 //! keys and signatures, plus the preprocessor and `__EVAL` evaluator the config pipeline needs.
 
 /// The `image` crate the PAA conversion API uses, so consumers build against the same version.
+#[cfg(feature = "image")]
+#[cfg_attr(docsrs, doc(cfg(feature = "image")))]
 pub use image;
 
 /// Binarization through BI's `binarize.exe` (Windows or Proton).
@@ -23,6 +25,8 @@ pub mod pbo;
 /// Config preprocessing (macros, includes, conditionals).
 pub mod preprocess;
 /// BI signature (`.bisign`) creation and verification.
+#[cfg(feature = "sign")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sign")))]
 pub mod sign;
 /// Warnings raised by library calls and the sinks that receive them.
 pub mod warning;

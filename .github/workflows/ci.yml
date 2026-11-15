@@ -36,6 +36,13 @@ jobs:
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: cargo deny
         run: cargo deny check
+      - name: Feature combinations
+        run: |
+          cargo clippy -p dayzmake-core --no-default-features --lib --locked -- -D warnings
+          cargo clippy -p dayzmake-core --no-default-features --features sign --lib --locked -- -D warnings
+          cargo clippy -p dayzmake-core --no-default-features --features image --lib --locked -- -D warnings
+      - name: Package check
+        run: cargo package --workspace --locked
       - name: Coverage floor
         run: cargo llvm-cov --workspace --all-features --fail-under-lines 70
 

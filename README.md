@@ -3,6 +3,9 @@ dayzmake
 
 [![](https://github.com/bzed/dayzmake/actions/workflows/ci.yml/badge.svg)](https://github.com/bzed/dayzmake/actions/workflows/ci.yml)
 [![](https://github.com/bzed/dayzmake/actions/workflows/codeql.yml/badge.svg)](https://github.com/bzed/dayzmake/actions/workflows/codeql.yml)
+[![crates.io](https://img.shields.io/crates/v/dayzmake.svg)](https://crates.io/crates/dayzmake)
+[![crates.io](https://img.shields.io/crates/v/dayzmake-core.svg)](https://crates.io/crates/dayzmake-core)
+[![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 [![](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
 DayZ modding tools written in Rust: PBO packing and unpacking, config

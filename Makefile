@@ -10,7 +10,7 @@ FUZZ_TIME ?= 10
 # cargo-fuzz binaries from prebuilt releases default to a musl target, where sanitizers do not work.
 FUZZ_HOST = $(shell rustc +nightly -vV | sed -n "s/^host: //p")
 
-.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri check
+.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri features package-check check
 
 fmt:
 	$(CARGO) fmt --all
@@ -51,4 +51,14 @@ coverage-check:
 miri:
 	$(CARGO) +nightly miri test --workspace $(LOCKED)
 
-check: fmt-check lint doc deny test fuzz coverage-check
+# The library must build with each feature alone and with none.
+features:
+	$(CARGO) clippy -p dayzmake-core --no-default-features --lib $(LOCKED) -- -D warnings
+	$(CARGO) clippy -p dayzmake-core --no-default-features --features sign --lib $(LOCKED) -- -D warnings
+	$(CARGO) clippy -p dayzmake-core --no-default-features --features image --lib $(LOCKED) -- -D warnings
+
+# Packages both crates (the CLI against the packaged core). CI runs it without --allow-dirty.
+package-check:
+	$(CARGO) package --workspace $(LOCKED) --allow-dirty
+
+check: fmt-check lint doc deny test features package-check fuzz coverage-check

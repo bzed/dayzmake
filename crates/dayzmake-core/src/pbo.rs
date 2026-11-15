@@ -568,6 +568,7 @@ impl PBO {
 
     /// The SHA-1 the PBO has as its trailer: the stored one for a PBO that was read, the one
     /// [`PBO::write`] would produce otherwise (nothing is kept in memory or on disk for it).
+    #[cfg(feature = "sign")]
     pub(crate) fn trailer_checksum(&self) -> Result<Vec<u8>, Error> {
         match &self.checksum {
             Some(checksum) => Ok(checksum.clone()),

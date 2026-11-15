@@ -18,10 +18,13 @@
 use std::io::{Error, Read, Seek, SeekFrom, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+#[cfg(feature = "image")]
 use image::{DynamicImage, ImageBuffer, Rgba};
 use linked_hash_map::LinkedHashMap;
 use lzo1x;
-use texpresso::{Algorithm, Format, Params};
+use texpresso::Format;
+#[cfg(feature = "image")]
+use texpresso::{Algorithm, Params};
 
 const OFFS_TAGG: &str = "GGATSFFO"; // mipmap offsets (16 u32, zero padded)
 
@@ -148,6 +151,7 @@ impl std::str::FromStr for PaaFormat {
 
 impl PaaFormat {
     /// The compression name the format has in a PAA.
+    #[cfg(feature = "image")]
     fn name(self) -> &'static str {
         match self {
             PaaFormat::Dxt1 => "DXT1",
@@ -329,6 +333,8 @@ impl Paa {
     ///
     /// Returns an error if the PAA has no image data, the format is unsupported
     /// or the data does not fit the declared dimensions.
+    #[cfg_attr(docsrs, doc(cfg(feature = "image")))]
+    #[cfg(feature = "image")]
     pub fn to_dynamic_image(&self) -> Result<DynamicImage, Error> {
         let Some(main_mipmap) = self.mipmaps.first() else {
             return Err(error!("PAA has no image data"));
@@ -406,6 +412,7 @@ impl Paa {
     /// # Errors
     ///
     /// Returns an error if `data` does not hold `width * height` pixels.
+    #[cfg(feature = "image")]
     fn rgba_image(
         width: usize,
         height: usize,
@@ -424,6 +431,8 @@ impl Paa {
     /// # Errors
     ///
     /// Returns an error for images too large for the format.
+    #[cfg_attr(docsrs, doc(cfg(feature = "image")))]
+    #[cfg(feature = "image")]
     pub fn from_dynamic_image(img: &DynamicImage, format: PaaFormat) -> Result<Paa, Error> {
         let mut current = img.to_rgba8();
         let compression = format.name().to_string();

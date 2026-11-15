@@ -156,6 +156,8 @@ Run `make check`. It must pass, because CI runs the same steps:
 | lint | `make lint` | `cargo clippy --all-targets --locked -- -D warnings` |
 | rustdoc | `make doc` | `cargo doc --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
+| features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
+| packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |
 | tests | `make test` | all targets plus doctests; includes the fuzz seeds |
 | fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |
 | coverage | `make coverage-check` | `cargo llvm-cov`; total coverage must stay at or above 70 % |
@@ -165,3 +167,13 @@ dismiss them in GitHub with a written reason. When the change touches `unsafe` c
 
 SPDX/REUSE headers are not used in this repository (the files are mostly inherited from armake2 and keep their
 original copyright holders); the licence is declared once, in `Cargo.toml` and `LICENSE`.
+
+## Releasing
+
+Publishing is done by the maintainer, never by an agent.
+
+1. Bump the versions. `dayzmake-core` follows semver on its own; a breaking core change also bumps the
+   `version` in the CLI's `dayzmake-core` dependency.
+2. `make check` (includes `make features` and `make package-check`).
+3. Tag the release.
+4. `cargo publish -p dayzmake-core`, **then** `cargo publish -p dayzmake` (the CLI depends on the published core).

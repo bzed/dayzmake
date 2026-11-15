@@ -57,6 +57,7 @@ fn pbo_trailer_is_unchanged() {
     assert!(accepted >= 2, "the signing fixtures must be read");
 }
 
+#[cfg(feature = "sign")]
 #[test]
 fn sha1_matches_openssl_on_padding_boundaries() {
     let mut inputs: Vec<Vec<u8>> = [0usize, 1, 55, 56, 63, 64, 65, 119, 120, 128]

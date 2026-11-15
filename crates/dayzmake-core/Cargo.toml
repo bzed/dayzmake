@@ -8,14 +8,29 @@ homepage.workspace = true
 repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+readme = "README.md"
+keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
+categories = ["parser-implementations", "game-development"]
+include = ["src/**/*", "/README.md", "/LICENSE", "/Cargo.toml"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["sign", "image"]
+# BI signatures and keys (`sign` module); needs OpenSSL for RSA.
+sign = ["dep:openssl"]
+# PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
+image = ["dep:image"]
 
 [dependencies]
 byteorder = "1.5"
-openssl = "0.10"
+openssl = { version = "0.10", optional = true }
 linked-hash-map = "0.5.6"
 regex = "1.10"
 peg = "0.8"
-image = "0.24"
+image = { version = "0.24", optional = true }
 texpresso = "2.0"
 lzo1x = "0.2.2"
 encoding_rs = "0.8"
@@ -35,6 +50,18 @@ harness = false
 [[bench]]
 name = "config"
 harness = false
+
+[[test]]
+name = "pbo_api"
+required-features = ["sign"]
+
+[[test]]
+name = "paa_api"
+required-features = ["image"]
+
+[[test]]
+name = "fuzz_seeds"
+required-features = ["sign", "image"]
 
 [lints]
 workspace = true
