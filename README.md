@@ -44,8 +44,9 @@ is maintained here.
   file (#23).
 - Proton binarizing rejects a `$PBOPREFIX$` that would leave its sandbox (#17).
 - Output files (`build`, `pack`, `rapify`, `binarize`, `keygen`, ...) are replaced atomically: a failed command
-  keeps the old target, an existing target keeps its permissions, a symlink is written through, and a device, FIFO
-  or pipe (`/dev/null`, `/dev/stdout`) is written in place. A failure to create the temporary file names the
+  keeps the old target, an existing target keeps its permissions (with `--force` a read-only target is replaced on unix and stays
+  read-only; Windows refuses it and leaves it intact), a symlink is written through, and a device, FIFO
+  or pipe (`/dev/null`, `/dev/stdout`, and on Windows `NUL`, `CON`, ...) is written in place. A failure to create the temporary file names the
   directory (#18, #25).
 - `build` never packs its own output: the target and its temporary file are left out when they lie inside the
   source folder (#24).

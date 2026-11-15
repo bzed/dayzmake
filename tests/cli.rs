@@ -784,6 +784,49 @@ fn build_writes_to_a_windows_device_name_directly() {
 
 #[cfg(unix)]
 #[test]
+fn build_force_replaces_a_read_only_target_and_keeps_it_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "--force", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_ne!(std::fs::read(&out).unwrap(), b"old");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+        0o444
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn build_force_refuses_a_read_only_target_and_leaves_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    let mut permissions = std::fs::metadata(&out).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&out, permissions).unwrap();
+    let (code, _, err) = dayzmake(&["build", "--force", "mod", "out.pbo"], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert_eq!(std::fs::read(&out).unwrap(), b"old");
+    let mut names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["mod", "out.pbo"], "no temp file is left");
+    let mut permissions = std::fs::metadata(&out).unwrap().permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "test cleanup")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&out, permissions).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn build_into_a_read_only_directory_names_the_directory() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
