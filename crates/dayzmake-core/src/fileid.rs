@@ -54,8 +54,9 @@ impl FileId {
     /// terminal, a device, a closed stdout or a failed duplicate all give `None`.
     ///
     /// The identity is taken from a duplicate of the stdout descriptor (handle on Windows), owned by the returned
-    /// id, so dropping it never closes the process's real stdout. On Windows a pipe may get an identity; it lives on
-    /// the named-pipe file system's volume and never matches a file on a disk volume, so nothing is excluded.
+    /// id, so dropping it never closes the process's real stdout. On Windows a pipe or `NUL` may get an identity; a
+    /// pipe lives on the named-pipe file system's volume and never matches a file on a disk volume, so nothing is
+    /// excluded (`NUL` is no disk file either, so an identity for it is harmless).
     #[must_use]
     pub fn stdout() -> Option<FileId> {
         #[cfg(any(unix, windows))]
