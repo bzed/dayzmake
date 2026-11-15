@@ -1,6 +1,6 @@
 //! Reading, writing and inspecting P3D models.
 //!
-//! [`P3D`](crate::p3d::P3D) handles the editable MLOD format and keeps everything the file holds, so that
+//! `P3D` handles the editable MLOD format and keeps everything the file holds, so that
 //! `write(read(x))` reproduces `x` byte for byte. Binarized ODOL models are only recognised
 //! (format and version); they are produced by BI's binarize.exe, not by this crate.
 
@@ -250,7 +250,7 @@ impl Tagg {
     ///
     /// For a selection, `data` holds one weight byte per point followed by one per face of the
     /// LOD (`points + faces` bytes). For `#Property#` it is the 128 byte name/value pair (see
-    /// [`property`](Self::property)); other taggs carry their format's raw payload.
+    /// [`Tagg::property`]); other taggs carry their format's raw payload.
     #[must_use]
     pub fn new(active: u8, name: impl Into<String>, data: Vec<u8>) -> Tagg {
         Tagg {

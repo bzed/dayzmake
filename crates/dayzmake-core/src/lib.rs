@@ -16,15 +16,15 @@
 //!
 //! # Warnings
 //!
-//! Calls that can warn take a `&mut dyn` [`WarningSink`](warning::WarningSink). [`Warnings`](warning::Warnings)
-//! is the ready-made sink: it collects [`Warning`](warning::Warning)s (and plain notes), can mute
+//! Calls that can warn take a `&mut dyn` [`warning::WarningSink`]. [`warning::Warnings`]
+//! is the ready-made sink: it collects [`warning::Warning`]s (and plain notes), can mute
 //! warnings by name and caps repeats. Warnings are never global: give every thread or job its own sink and
 //! its warnings stay with it.
 //!
 //! # Binarizing
 //!
 //! [`binarize::Binarizer`] owns the Proton sandbox, if any. Pass it to
-//! [`pbo::PBO::from_directory`] and call [`Binarizer::close`](binarize::Binarizer::close) when done so the
+//! [`pbo::PBO::from_directory`] and call [`binarize::Binarizer::close`] when done so the
 //! sandbox is removed and its warnings reach your sink; dropping it also cleans up, but cannot report.
 //!
 //! # Features
@@ -35,7 +35,7 @@
 //!
 //! # Licence
 //!
-//! GPL-2.0-or-later, inherited from armake2. GPLv3 and AGPLv3 projects may link it.
+//! GPL-2.0-or-later, inherited from armake2. Projects under GPLv3 or AGPL-3.0 may link it.
 //!
 //! # Example
 //!
