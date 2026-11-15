@@ -5,7 +5,7 @@ expression: r.result(10 + i as u64)
 {
   "content": [
     {
-      "text": "class CfgPatches {\n    class golden_addon {\n        units[] = {};\n        weapons[] = {\"golden_a\", \"golden_b\"};\n        requiredAddons[] = {\"DZ_Data\"};\n    };\n};\nclass Base;\nclass CfgGolden {\n    class Parent {\n        scale = \"((2) * (3))\";\n        sum = 3;\n        ratio = 0.75;\n        offset = -5;\n        name = \"parent\";\n    };\n    class Child: Parent {\n        name = \"child\";\n        class Obsolete {};\n        label = \"unquotedvalue\";\n        mode = 1;\n    };\n};\n",
+      "text": "class CfgPatches {\n    class golden_addon {\n        units[] = {};\n        weapons[] = {\"golden_a\", \"golden_b\"};\n        requiredAddons[] = {\"DZ_Data\"};\n    };\n};\nclass Base;\nclass CfgGolden {\n    class Parent {\n        scale = \"((2) * (3))\";\n        sum = 3;\n        ratio = 0.75;\n        offset = -5;\n        name = \"parent\";\n    };\n    class Child: Parent {\n        name = \"child\";\n        delete Obsolete;\n        label = \"unquotedvalue\";\n        mode = 1;\n    };\n};\n",
       "type": "text"
     }
   ],

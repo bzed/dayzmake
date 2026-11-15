@@ -15,5 +15,5 @@ class CfgVehicles {
         hiddenSelectionsTextures[] = {"g\data\g_co.paa"};
         class Foo {};
     };
-    class Bar {};
+    delete Bar;
 };

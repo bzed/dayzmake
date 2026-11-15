@@ -20,7 +20,7 @@ class CfgGolden {
     };
     class Child: Parent {
         name = "child";
-        class Obsolete {};
+        delete Obsolete;
         label = "unquotedvalue";
         mode = 1;
     };

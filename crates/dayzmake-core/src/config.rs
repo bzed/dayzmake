@@ -878,7 +878,7 @@ impl ConfigClass {
                 let class_entry = ConfigClass {
                     parent: String::new(),
                     is_external: entry_type == 3,
-                    is_deletion: entry_type == 5,
+                    is_deletion: entry_type == 4,
                     entries: None,
                 };
 

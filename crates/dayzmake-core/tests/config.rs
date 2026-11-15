@@ -218,3 +218,39 @@ fn rapified_shared_class_body_fan_out_is_an_error() {
     assert!(err.contains("shared"), "{err}");
     assert!(started.elapsed().as_secs() < 2);
 }
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn rapify_src(src: &str) -> Vec<u8> {
+    let config = Config::from_string(String::from(src), None, &[], &mut Warnings::new()).unwrap();
+    config.to_cursor().unwrap().into_inner().into_vec()
+}
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn derapify(bytes: Vec<u8>) -> String {
+    read_bytes(bytes).unwrap().to_string().unwrap()
+}
+
+#[test]
+fn derapify_keeps_nested_delete() {
+    let text = derapify(rapify_src("class A { x = 1; delete B; };"));
+    assert!(text.contains("delete B;"), "{text}");
+    assert!(!text.contains("class B"), "{text}");
+}
+
+#[test]
+fn derapify_keeps_top_level_delete() {
+    let text = derapify(rapify_src("delete X;\nclass Y {};"));
+    assert!(text.contains("delete X;"), "{text}");
+}
+
+#[test]
+fn rapified_delete_roundtrips_byte_for_byte() {
+    let bytes1 = rapify_src("class A { x = 1; delete B; };\ndelete X;\nclass Y {};");
+    let bytes2 = read_bytes(bytes1.clone())
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner()
+        .into_vec();
+    assert_eq!(bytes1, bytes2);
+}
