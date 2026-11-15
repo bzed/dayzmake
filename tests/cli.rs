@@ -427,6 +427,10 @@ fn build_failure_with_proton_removes_the_sandbox() {
         .env_remove("DAYZ_TOOLS")
         .env_remove("PROTON")
         .env("TMPDIR", &tmp)
+        .env("HOME", dir.path().join("home"))
+        .env("XDG_CONFIG_HOME", dir.path().join("xdg-config"))
+        .env("XDG_CACHE_HOME", dir.path().join("xdg-cache"))
+        .env("XDG_DATA_HOME", dir.path().join("xdg-data"))
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);

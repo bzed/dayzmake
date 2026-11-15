@@ -988,11 +988,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
     let key = opt_path(args, "key")?;
     if build {
         // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
-        let mut binarizer = if bool_arg(args, "proton_binarize")? {
-            Some(binarize::Binarizer::new(binarize::BinarizeBackend::Proton)?)
-        } else {
-            None
-        };
+        let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
         let mut file = create_target(&target, force)?;
         pbo::cmd_build(
             source,

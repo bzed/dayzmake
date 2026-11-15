@@ -253,13 +253,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
 
         if args.cmd_build {
             // dropped at the end of this block, removing the Proton sandbox before any exit
-            let mut binarizer = if cfg!(windows) {
-                Some(binarize::Binarizer::new(binarize::BinarizeBackend::Native)?)
-            } else if args.flag_proton_binarize {
-                Some(binarize::Binarizer::new(binarize::BinarizeBackend::Proton)?)
-            } else {
-                None
-            };
+            let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
             pbo::cmd_build(
                 PathBuf::from(&args.arg_sourcefolder),
                 &mut get_output(args)?,
@@ -450,6 +444,37 @@ fn required_target(args: &Args) -> Result<PathBuf, Error> {
         .as_ref()
         .map(PathBuf::from)
         .ok_or_else(|| error!("missing <target> argument"))
+}
+
+/// The binarizer for this platform: native on Windows, Proton on unix when `proton` is set,
+/// otherwise none (models are then copied with a warning).
+///
+/// # Errors
+///
+/// Returns an error if the backend cannot be created.
+pub fn platform_binarizer(proton: bool) -> Result<Option<binarize::Binarizer>, Error> {
+    if cfg!(windows) {
+        Ok(Some(binarize::Binarizer::new(
+            binarize::BinarizeBackend::Native,
+        )?))
+    } else if proton {
+        Ok(Some(binarize::Binarizer::new(
+            binarize::BinarizeBackend::Proton,
+        )?))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn platform_binarizer_follows_the_proton_flag_on_unix() {
+        assert!(platform_binarizer(false).unwrap().is_none());
+        assert!(platform_binarizer(true).unwrap().is_some());
+    }
 }
 
 /// Entry point driving the CLI: handles `--version`, then dispatches to the command.
