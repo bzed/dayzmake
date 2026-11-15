@@ -146,7 +146,7 @@ fn format_parse_error(
         },
     );
     // Control characters are escaped for display, so the caret pads by the displayed width.
-    let padding = printable(
+    let padding = printable_line(
         &trimmed
             .chars()
             .take(column.saturating_sub(stripped))
@@ -159,11 +159,19 @@ fn format_parse_error(
         "In line {}{}:\n\n  {}\n  {}^\n\nUnexpected token \"{}\", expected: {}",
         file,
         line_number,
-        printable(trimmed),
+        printable_line(trimmed),
         " ".repeat(padding),
         offending,
         expected
     )
+}
+
+/// Like [`printable`], but tabs pass through, as they always did in the displayed parse-error line.
+fn printable_line(text: &str) -> String {
+    text.split('\t')
+        .map(printable)
+        .collect::<Vec<_>>()
+        .join("\t")
 }
 
 /// Makes text from an untrusted file safe to print: control characters (escape sequences, line

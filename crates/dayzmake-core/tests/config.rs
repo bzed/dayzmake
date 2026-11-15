@@ -340,8 +340,18 @@ fn parse_error_with_nbsp_indent_and_multibyte_letter_has_the_caret_in_column_one
 fn parse_error_on_a_line_of_only_invisible_spaces_does_not_panic() {
     let msg = parse_err("class A {\n\u{a0}\n= 1; };");
     assert!(msg.contains("In line 2:"), "{msg}");
-    assert!(msg.contains("\n  \n  ^\n"), "empty text line, caret at start: {msg}");
+    assert!(
+        msg.contains("\n  \n  ^\n"),
+        "empty text line, caret at start: {msg}"
+    );
     assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
     let msg = parse_err("class A {\n\u{3000}\n= 1; };");
     assert!(msg.contains("\"\\u{3000}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_shows_tabs_in_the_line_unescaped() {
+    let msg = parse_err("class A {\n\tx\t= 1; ?\n};");
+    assert!(msg.contains("x\t= 1; ?"), "real tab in the line: {msg}");
+    assert!(!msg.contains("\\t"), "no escaped tab: {msg}");
 }
