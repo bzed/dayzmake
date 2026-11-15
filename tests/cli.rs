@@ -664,3 +664,20 @@ fn missing_pbo_and_signature_are_named() {
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("Failed to open signature \""), "{err}");
 }
+
+#[test]
+fn unpack_conflict_message_uses_the_target_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/$PBOPREFIX$", "x\\y");
+    write(dir.path(), "m/data/a.txt", "a");
+    let (code, _, err) = dayzmake(&["pack", "m", "x.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["unpack", "x.pbo", "out"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["unpack", "x.pbo", "out"], dir.path());
+    assert_eq!(code, 1);
+    assert_eq!(
+        err,
+        "error: Target folder \"out\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.\n"
+    );
+}

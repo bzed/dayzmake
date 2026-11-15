@@ -276,3 +276,16 @@ fn error_reply_for_missing_file() {
     );
     insta::assert_json_snapshot!(r.result(2));
 }
+
+#[test]
+fn pbo_pack_missing_source() {
+    let (_root, work) = setup();
+    let r = session(
+        &[
+            init(),
+            call(2, "pbo_pack", &json!({"source":"nope","target":"../p.pbo"})),
+        ],
+        &work,
+    );
+    insta::assert_json_snapshot!(r.result(2));
+}

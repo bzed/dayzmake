@@ -78,6 +78,7 @@ fn build_option_rapifies_config_cpp() {
 #[test]
 fn unpack_refuses_existing_files_without_force() {
     let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
     let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
     let target = tmp.path().join("out");
     let options = UnpackOptions::default();
@@ -95,7 +96,13 @@ fn unpack_refuses_existing_files_without_force() {
         &mut Warnings::new(),
     )
     .unwrap_err();
-    assert!(err.to_string().contains("already exists"), "{err}");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.",
+            target.display()
+        )
+    );
 
     let mut force = UnpackOptions::default();
     force.force = true;
@@ -349,4 +356,56 @@ fn private_key_debug_has_no_key_material() {
     for field in ["dmp1", "dmq1", "iqmp", "d:", "p:", "q:"] {
         assert!(!text.contains(field), "{text}");
     }
+}
+
+#[test]
+fn unpack_conflict_writes_nothing() {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("a.txt"), "old").unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("already contains"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(target.join("a.txt")).unwrap(),
+        "old"
+    );
+    let count = walk(&target);
+    assert_eq!(count, 1, "extra files created");
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn walk(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            if p.is_dir() { walk(&p) } else { 1 }
+        })
+        .sum()
+}
+
+#[test]
+fn unpack_into_a_non_empty_folder_without_conflicts_works() {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("unrelated.txt"), "x").unwrap();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(target.join("unrelated.txt").exists());
+    assert!(target.join("a.txt").exists());
 }

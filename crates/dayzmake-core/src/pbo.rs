@@ -473,7 +473,7 @@ struct AddonRelative<'a> {
 
 /// The addon folder as given and canonicalised, computed once per pack.
 fn addon_roots(directory: &Path) -> [PathBuf; 2] {
-    // canonicalize fails only for an unreadable folder; matching against the path as given still
+    // canonicalize fails for a missing or unreadable folder; matching against the path as given still
     // works, so warnings are not lost
     let canonical = directory
         .canonicalize()
@@ -1174,7 +1174,6 @@ fn sanitize_header(text: &str) -> String {
 fn write_prefix_file(
     extensions: &LinkedHashMap<String, String>,
     base: &Path,
-    force: bool,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let prefix_path = base.join("$PBOPREFIX$");
@@ -1184,12 +1183,6 @@ fn write_prefix_file(
             "Not writing $PBOPREFIX$: it is a symlink.",
         ));
         return Ok(());
-    }
-    if !force && prefix_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            prefix_path.display()
-        ));
     }
     let mut prefix_file =
         File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
@@ -1264,10 +1257,30 @@ pub fn unpack<I: Read>(
 
     let base = unpack_base(&pbo, output, use_prefix)?;
 
+    if !force {
+        // Check every target before writing anything, so a conflict leaves the folder untouched.
+        let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
+        let first = prefix
+            .into_iter()
+            .chain(pbo.files.keys().map(String::as_str))
+            .find(|name| {
+                safe_relative_path(name).is_some_and(|relative| {
+                    !crosses_symlink(&base, &relative) && base.join(relative).exists()
+                })
+            });
+        if let Some(name) = first {
+            return Err(error!(
+                "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
+                printable(&base.display().to_string()),
+                printable(name)
+            ));
+        }
+    }
+
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
 
     if !pbo.header_extensions.is_empty() {
-        write_prefix_file(&pbo.header_extensions, &base, force, warnings)?;
+        write_prefix_file(&pbo.header_extensions, &base, warnings)?;
     }
 
     let mut written: HashSet<String> = HashSet::new();
@@ -1320,12 +1333,6 @@ pub fn unpack<I: Read>(
             }
         };
         let path = base.join(&relative);
-        if !force && path.exists() {
-            return Err(error!(
-                "Target file \"{}\" already exists. Use --force to overwrite.",
-                path.display()
-            ));
-        }
         written.insert(key);
         let written_ok = create_dir_all(path.parent().unwrap_or(&base))
             .prepend_error("Failed to create output folder:")

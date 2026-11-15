@@ -2,4 +2,4 @@
 source: tests/golden_cli.rs
 expression: r.err()
 ---
-error: Target file "../x/$PBOPREFIX$" already exists. Use --force to overwrite.
+error: Target folder "../x" already contains files of this PBO (first: "$PBOPREFIX$"). Use --force to overwrite.
