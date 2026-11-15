@@ -1297,3 +1297,54 @@ fn build_excluded_special_and_unsafe_files_are_silent() {
         "{err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn pack_warns_about_names_that_are_not_utf8_and_packs_neither() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    for n in [&b"x\xff.txt"[..], &b"x\xfe.txt"[..]] {
+        std::fs::write(modf.join(std::ffi::OsStr::from_bytes(n)), "d").unwrap();
+    }
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err.matches("unsafe-path").count(), 2, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert!(
+        out.contains("config.cpp") && out.contains("# Files: 1"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_warns_about_names_that_differ_only_in_case() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/A.txt", "upper"),
+        ("mod/a.txt", "lower"),
+    ]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("a.txt") && err.contains("A.txt"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert_eq!(out.to_lowercase().matches("a.txt").count(), 1, "{out}");
+}
+
+#[test]
+fn build_warns_when_config_cpp_and_config_bin_collide() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/config.bin", "bin"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(
+        err.contains("config.cpp") && err.contains("config.bin"),
+        "{err}"
+    );
+}

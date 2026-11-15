@@ -891,11 +891,13 @@ impl PBO {
             .collect();
 
         let addon_roots = addon_roots(directory);
+        let mut seen_names: HashMap<String, String> = HashMap::new();
 
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
             };
+            let shown = printable(&relative.to_string_lossy());
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
                 relative = relative.with_file_name("config.bin");
             }
@@ -913,17 +915,29 @@ impl PBO {
                         Some("unsupported-file"),
                         "Skipping a file that is not a regular file (FIFO, device or socket).",
                     )
-                    .in_file(printable(&relative.to_string_lossy())),
+                    .in_file(shown),
                 );
                 continue;
             }
-            if safe_relative_path(&name).is_none() {
+            if relative.to_str().is_none() || safe_relative_path(&name).is_none() {
                 warnings.warn(Warning::new(
                     Some("unsafe-path"),
-                    format!("Skipping \"{}\": unsafe entry name.", printable(&name)),
+                    format!("Skipping \"{shown}\": unsafe entry name."),
                 ));
                 continue;
             }
+            // entry names compare case-insensitively; the first file in walk order wins
+            if let Some(first) = seen_names.get(&name.to_lowercase()) {
+                warnings.warn(Warning::new(
+                    Some("duplicate-entry"),
+                    format!(
+                        "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
+                        printable(first)
+                    ),
+                ));
+                continue;
+            }
+            seen_names.insert(name.to_lowercase(), name.clone());
             let is_binarizable = BINARIZABLE_RE.is_match(&name);
 
             let mut file = File::open(&path)?;
