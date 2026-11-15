@@ -368,5 +368,15 @@ fn empty_value_raises_a_warning() {
     assert!(shown.contains("empty string"), "{shown}");
     assert_eq!(warnings[0].line, Some(1));
     assert_eq!(warnings[0].name, Some("empty-value"));
-    drop(config);
+    assert!(matches!(
+        config.root().get("A"),
+        Some(ConfigEntry::ClassEntry(c)) if matches!(c.get("x"), Some(ConfigEntry::StringEntry(v)) if v.is_empty())
+    ));
+}
+
+#[test]
+fn empty_value_warning_points_at_the_entry_line() {
+    let mut w = Warnings::default();
+    Config::from_string("class A {\n  n =\n;\n};".to_string(), None, &[], &mut w).unwrap();
+    assert_eq!(w.warnings()[0].line, Some(2));
 }

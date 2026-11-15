@@ -106,7 +106,8 @@ peg::parser! {
         rule unquoted_string() -> String = pos:position!() s:$((![';' | '}' | '\r' | '\n'] [_])*) {
             let result = s.to_string().trim().to_string();
             // an empty value comes from a macro that expanded to nothing (e.g. an argument-count
-            // mismatch, which has its own warning); CfgConvert makes it "" as well
+            // mismatch, which has its own warning); CfgConvert makes it "" as well.
+            // `unquoted_string_entry` raises `empty-value` for it
             if !result.is_empty() {
                 warnings.push((pos, format!("String value \"{result}\" is not quoted properly."), Some("unquoted-string")));
             }
@@ -164,7 +165,7 @@ peg::parser! {
             (n, ce)
         }
 
-        rule unquoted_string_entry() -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? pos:position!() s:unquoted_string() {
+        rule unquoted_string_entry() -> (String, ConfigEntry) = pos:position!() n:name() whitespace()? "=" whitespace()? s:unquoted_string() {
             if s.is_empty() {
                 // `x = ;`, or a macro that expanded to nothing; kept as "" so existing mods still build
                 warnings.push((pos, format!("Entry \"{}\" has no value; it is stored as an empty string.", printable(&n)), Some("empty-value")));

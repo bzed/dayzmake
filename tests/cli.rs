@@ -159,8 +159,9 @@ fn macro_arity_warning_has_location() {
         "{}",
         err
     );
-    // the empty value it expands to is not reported again as an unquoted string
+    // the empty value it expands to is not reported again as an unquoted string, but as an empty value
     assert!(!err.contains("unquoted-string"), "{}", err);
+    assert!(err.contains("empty-value"), "{}", err);
 }
 
 #[test]

@@ -26,6 +26,8 @@ is maintained here.
 
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
+- `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
+  stored as `""`.
 
 ## Building
 
