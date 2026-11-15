@@ -75,7 +75,6 @@
 //! # fn main() {}
 //! ```
 
-
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 /// The `image` crate the PAA conversion API uses, so consumers build against the same version.
