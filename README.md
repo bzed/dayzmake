@@ -24,6 +24,34 @@ is maintained here.
 
 ## Changes
 
+- OpenSSL is gone from the dependency tree, tests included (they use `num-bigint` as the independent check): building
+  and testing need no system libraries, and the CI and the Dockerfile no longer install `libssl-dev` or `pkg-config`.
+  `dayzmake keygen` generates the RSA key pair with the pure-Rust `rsa` crate and the operating system's random number
+  generator, and signing and verification run on `rsa` too (blinded, constant-time private-key operation; the result is
+  checked against the public key before it is written). Key files and `.bisign` output are byte-identical to before. A
+  signature value that is not smaller than the key's modulus is a verification error. Our copies of key components
+  read from a key file are wiped from memory when dropped (best effort: the `rsa` crate makes internal copies it does
+  not wipe).
+- Two misleading errors are fixed: a `.bisign` with a bad header says "Invalid signature file" (not "public key"), and
+  verifying with a key other than the one that made the signature says "The signature was made with a different key"
+  (names and lengths only) instead of a complaint about the modulus (#56).
+- `sign` and key generation refuse keys below 384 bits, the `CryptoAPI` minimum BI's tools and the game need (smaller
+  keys could only sign with broken padding). Reading such keys and verifying their signatures still works (#55).
+- A `.bisign` file is read with the same checks as a public key: its embedded key must carry the `RSA1` blob header and a
+  modulus exactly as wide as the header length says; anything else is a read error (#52).
+- Macro expansion has a depth limit on every path (64 levels); a config that nests deeper, or expands a macro into
+  itself through its arguments, is an error naming the macro instead of a stack overflow (#51).
+- Key files must carry the CryptoAPI blob header (type, key algorithm, `RSA1`/`RSA2` magic) that `dayzmake` and BI's
+  tools write; any other header is a read error (#50).
+- Keys and `.bisign` files are limited to 16384 bits (288 at the low end); a larger header length is a read error
+  (#49).
+- A key file whose modulus is not exactly as wide as its header length says, and a private key whose length is not a
+  multiple of 16, is rejected when read (#48).
+- `verify` and `sign` recompute the SHA-1 of the PBO instead of trusting its stored trailer: a PBO whose bytes
+  changed (`config.bin`, files a signature version leaves out, the header) no longer verifies, and a PBO with a
+  wrong trailer is not signed. Both fail with a "checksum mismatch" error (#46); repack the PBO
+  (`dayzmake pack`/`build`) before signing. BI's `DSCheckSignatures` trusts the stored trailer, `dayzmake verify` does
+  not. `inspect` and `unpack` still read such files.
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
 - `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
@@ -65,7 +93,8 @@ is maintained here.
 
 ## Building
 
-The build requires `cargo`, Rust's package manager and the OpenSSL development libraries.
+The build requires `cargo`, Rust's package manager. No system libraries are needed: everything, including the RSA
+code for `sign` and `keygen`, is pure Rust.
 To compile and run, use:
 
 ```
@@ -77,16 +106,6 @@ To build a release, use:
 ```
 cargo build --release
 ```
-
-In order to build, you'll need to have OpenSSL installed on your system.
-
-On **Linux**, the easiest way is to install OpenSSL via your system's package manager (if it is not installed already). Make sure you also have the development packages of OpenSSL installed. For example, `libssl-dev` on Ubuntu or `openssl-devel` on Fedora.
-
-On **Windows**, the easiest way to get compilation and static linking of OpenSSL to work is to download [pre-compiled OpenSSL binaries](http://slproweb.com/products/Win32OpenSSL.html) (non-light, 64-bit) and set the following environment variables:
-
-- `OPENSSL_DIR=C:\OpenSSL-WIN64`
-- `OPENSSL_STATIC=1`
-- `OPENSSL_LIBS=libssl_static:libcrypto_static`
 
 ## Testing
 
@@ -211,7 +230,7 @@ prints; warnings go to a `WarningSink` you provide, so it is safe to use from ma
 cargo add dayzmake-core
 ```
 
-Features: `sign` (BI keys and signatures, needs OpenSSL) and `image` (PAA from and to images), both on by
+Features: `sign` (BI keys and signatures) and `image` (PAA from and to images), both on by
 default; `default-features = false` builds without them. The
 [API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
 The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned

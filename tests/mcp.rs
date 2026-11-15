@@ -842,3 +842,31 @@ fn mcp_key_generate_creates_the_private_key_owner_only() {
         & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[test]
+fn mcp_verify_and_sign_reject_a_pbo_with_a_stale_trailer() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let sign = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
+    let mut bytes = fs::read(sign.join("testsig.pbo")).expect("read");
+    *bytes.get_mut(261).unwrap() ^= 0x20;
+    fs::write(tmp.path().join("t.pbo"), bytes).expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "pbo_verify",
+                &json!({"public_key":s(&sign.join("armk.bikey")),"pbo":"t.pbo","signature":s(&sign.join("testsig.pbo.armk.bisign"))}),
+            ),
+            call(
+                2,
+                "pbo_sign",
+                &json!({"private_key":s(&sign.join("armk.biprivatekey")),"pbo":"t.pbo"}),
+            ),
+        ],
+        tmp.path(),
+    );
+    for reply in &r.replies {
+        assert!(is_error(reply), "{}", text(reply));
+        assert!(text(reply).contains("checksum mismatch"), "{}", text(reply));
+    }
+}

@@ -570,3 +570,52 @@ fn unpack_writes_prefix_file_in_original_order() {
     let content = fs::read_to_string(tmp.path().join("out/$PBOPREFIX$")).unwrap();
     assert_eq!(content, ORDERED_PREFIX_FILE);
 }
+
+/// The fixture PBO with a byte of config.bin changed and its trailer kept (#46).
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn tampered_fixture(dir: &Path) -> PathBuf {
+    let mut bytes = fs::read(sign_dir().join("testsig.pbo")).unwrap();
+    *bytes.get_mut(261).unwrap() ^= 0x20;
+    let path = dir.join("tampered.pbo");
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+#[test]
+fn cli_verify_rejects_a_pbo_with_a_stale_trailer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tampered_fixture(tmp.path());
+    let (code, err) = run_dayzmake(
+        &[
+            "verify",
+            sign_dir().join("armk.bikey").to_str().unwrap(),
+            pbo.to_str().unwrap(),
+            sign_dir().join("testsig.pbo.armk.bisign").to_str().unwrap(),
+        ],
+        tmp.path(),
+    );
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("checksum mismatch"), "{err}");
+    assert!(!err.contains("repack"), "{err}");
+}
+
+#[test]
+fn cli_sign_refuses_a_pbo_with_a_stale_trailer() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tampered_fixture(tmp.path());
+    let sig = tmp.path().join("out.bisign");
+    let (code, err) = run_dayzmake(
+        &[
+            "sign",
+            "-f",
+            sign_dir().join("armk.biprivatekey").to_str().unwrap(),
+            pbo.to_str().unwrap(),
+            sig.to_str().unwrap(),
+        ],
+        tmp.path(),
+    );
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("checksum mismatch"), "{err}");
+    assert!(err.contains("repack it"), "{err}");
+    assert!(!sig.exists());
+}

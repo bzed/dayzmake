@@ -176,6 +176,25 @@ pub struct PBO {
     /// only defined when reading existing PBOs, for created PBOs this is calculated during writing
     /// and included in the output
     checksum: Option<Vec<u8>>,
+    /// The SHA-1 of the bytes that were read (header block and entry data, everything before the
+    /// trailer); only defined together with `checksum`.
+    computed_checksum: Option<Vec<u8>>,
+}
+
+/// Hashes everything that is read through it.
+struct HashingReader<'a, I> {
+    inner: &'a mut I,
+    hash: Sha1,
+}
+
+impl<I: Read> Read for HashingReader<'_, I> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if let Some(read) = buf.get(..n) {
+            self.hash.update(read);
+        }
+        Ok(n)
+    }
 }
 
 impl PBOHeader {
@@ -572,6 +591,7 @@ impl PBO {
             raw_extensions: HashMap::new(),
             headers: Vec::new(),
             checksum: None,
+            computed_checksum: None,
         }
     }
 
@@ -632,6 +652,7 @@ impl PBO {
     /// Sets a header extension; a repeated key keeps its position and takes the new value.
     pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.checksum = None;
+        self.computed_checksum = None;
         set_extension(&mut self.header_extensions, &key.into(), value.into());
     }
 
@@ -647,10 +668,19 @@ impl PBO {
         self.checksum.as_deref()
     }
 
+    /// The SHA-1 of the bytes of a PBO that was read and not modified (header block and entry
+    /// data, everything before the trailer); `None` otherwise. A PBO whose stored
+    /// [`checksum`](PBO::checksum) differs from it is corrupt or was tampered with.
+    #[must_use]
+    pub fn computed_checksum(&self) -> Option<&[u8]> {
+        self.computed_checksum.as_deref()
+    }
+
     /// A stored entry changes: the stored trailer no longer describes the PBO, and the header of
     /// the entry (packing method) no longer describes its data.
     fn modified(&mut self, name: &str) {
         self.checksum = None;
+        self.computed_checksum = None;
         self.headers.retain(|h| h.filename != name);
     }
 
@@ -664,13 +694,27 @@ impl PBO {
         files
     }
 
-    /// The SHA-1 the PBO has as its trailer: the stored one for a PBO that was read, the one
-    /// [`PBO::write`] would produce otherwise (nothing is kept in memory or on disk for it).
+    /// The SHA-1 of the PBO: the one computed while reading for a PBO that was read (an error if
+    /// the stored trailer differs; `signing` adds the advice to repack), the one [`PBO::write`] would produce otherwise (nothing is
+    /// kept in memory or on disk for it).
     #[cfg(feature = "sign")]
-    pub(crate) fn trailer_checksum(&self) -> Result<Vec<u8>, Error> {
-        match &self.checksum {
-            Some(checksum) => Ok(checksum.clone()),
-            None => self.write_with_checksum(&mut std::io::sink()),
+    pub(crate) fn trailer_checksum(&self, signing: bool) -> Result<Vec<u8>, Error> {
+        match (&self.checksum, &self.computed_checksum) {
+            (Some(stored), Some(computed)) => {
+                if stored == computed {
+                    Ok(computed.clone())
+                } else {
+                    Err(error!(
+                        "PBO checksum mismatch: the stored SHA-1 trailer does not match the SHA-1 of the PBO's contents (the PBO is corrupt or was modified){}.",
+                        if signing {
+                            "; repack it before signing"
+                        } else {
+                            ""
+                        }
+                    ))
+                }
+            }
+            _ => self.write_with_checksum(&mut std::io::sink()),
         }
     }
 
@@ -712,6 +756,11 @@ impl PBO {
     ///
     /// Returns an error if the input is not a valid PBO.
     pub fn read<I: Read>(input: &mut I) -> Result<PBO, Error> {
+        let mut hashing = HashingReader {
+            inner: input,
+            hash: Sha1::new(),
+        };
+        let input = &mut hashing;
         let HeaderBlock {
             extensions: header_extensions,
             raw_extensions,
@@ -743,6 +792,9 @@ impl PBO {
             );
         }
 
+        // the trailer's SHA-1 covers everything before the 0 byte that precedes it
+        let computed_checksum = hashing.hash.clone().finalize().to_vec();
+        let input = hashing.inner;
         let mut skip = [0u8; 1];
         let _ = input.read(&mut skip)?;
         let mut checksum = vec![0; 20];
@@ -755,6 +807,7 @@ impl PBO {
             raw_extensions,
             headers,
             checksum: Some(checksum),
+            computed_checksum: Some(computed_checksum),
         })
     }
 
@@ -1103,6 +1156,7 @@ impl PBO {
             raw_extensions: HashMap::new(),
             headers: Vec::new(),
             checksum: None,
+            computed_checksum: None,
         })
     }
 

@@ -304,3 +304,19 @@ fn parse_error_inside_an_included_file_names_it() {
     .to_string();
     assert!(msg.contains("inc.hpp:2:"), "{msg}");
 }
+
+/// #51: a parameter whose value holds a call of a macro that is on the expansion stack was re-expanded
+/// without end (argument pre-expansion starts with an empty stack). Found by fuzzing; minimised input.
+#[test]
+fn macro_expansion_depth_is_limited() {
+    let input = String::from("#define QUOTE(x) x\n#define TWO(a,b) \"\"TWO(,x)\nQUOTE(TWO(,))");
+
+    let err = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("expands too deep"), "{message}");
+    assert!(
+        message.contains("\"TWO\"") || message.contains("\"QUOTE\""),
+        "{message}"
+    );
+}

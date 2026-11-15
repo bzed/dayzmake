@@ -1,14 +1,19 @@
 //! Functions for creating and working with BI keys and signatures
 
+use std::fmt::Write as _;
 use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use openssl::bn::{BigNum, BigNumContext, BigNumRef};
-use openssl::hash::{DigestBytes, Hasher, MessageDigest};
-use openssl::rsa::Rsa;
+use getrandom::SysRng;
+use rsa::hazmat::{rsa_decrypt_and_check, rsa_encrypt};
+use rsa::rand_core::TryCryptoRng;
+use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+use rsa::{BoxedUint, PrivateKey, PublicKey};
+use sha1::{Digest, Sha1};
+use zeroize::Zeroizing;
 
-use crate::error::ErrorExt;
+use crate::error::{ErrorExt, printable};
 use crate::io::{ReadExt, WriteExt};
 use crate::pbo::PBO;
 
@@ -17,13 +22,8 @@ pub struct BIPrivateKey {
     name: String,
     length: u32,
     exponent: u32,
-    n: BigNum,
-    p: BigNum,
-    q: BigNum,
-    dmp1: BigNum,
-    dmq1: BigNum,
-    iqmp: BigNum,
-    d: BigNum,
+    /// The validated key: `n`, `e`, `d`, `p`, `q` and the CRT values, checked against each other on creation.
+    key: PrivateKey,
 }
 
 /// BI public key (.bikey)
@@ -32,7 +32,7 @@ pub struct BIPublicKey {
     name: String,
     length: u32,
     exponent: u32,
-    n: BigNum,
+    key: PublicKey,
 }
 
 /// BI signature version
@@ -52,10 +52,10 @@ pub struct BISign {
     name: String,
     length: u32,
     exponent: u32,
-    n: BigNum,
-    sig1: BigNum,
-    sig2: BigNum,
-    sig3: BigNum,
+    n: BoxedUint,
+    sig1: BoxedUint,
+    sig2: BoxedUint,
+    sig3: BoxedUint,
 }
 
 impl std::fmt::Debug for BIPrivateKey {
@@ -68,33 +68,116 @@ impl std::fmt::Debug for BIPrivateKey {
     }
 }
 
-fn write_bignum<O: Write>(output: &mut O, bn: &BigNum, size: usize) -> Result<(), Error> {
-    let mut vec: Vec<u8> = bn.to_vec();
-    vec = vec.iter().rev().copied().collect();
-    vec.resize(size, 0);
+/// Writes `value` little-endian, zero-padded to `size` bytes.
+///
+/// # Errors
+///
+/// Returns an error if the value does not fit into `size` bytes, or on I/O failure.
+fn write_uint<O: Write>(output: &mut O, value: &BoxedUint, size: usize) -> Result<(), Error> {
+    // Both buffers can hold secret key bytes: they are wiped on drop, and the output buffer is allocated at its
+    // final size so that no reallocation leaves a copy behind.
+    let trimmed = Zeroizing::new(value.to_be_bytes_trimmed_vartime().into_vec());
+    if trimmed.len() > size {
+        return Err(error!("Key component does not fit into {size} bytes."));
+    }
+    let mut vec = Zeroizing::new(vec![0u8; size]);
+    for (dst, src) in vec.iter_mut().zip(trimmed.iter().rev()) {
+        *dst = *src;
+    }
 
     output.write_all(&vec)
+}
+
+/// Reads a key component of `size` little-endian bytes.
+fn read_uint<I: Read>(input: &mut I, size: usize) -> Result<BoxedUint, Error> {
+    // The buffer can hold a secret key component: wiped on drop, also on the error paths.
+    let mut buffer = Zeroizing::new(vec![0; size]);
+    input.read_exact(&mut buffer)?;
+    uint_from_le(&buffer)
+}
+
+/// Converts little-endian bytes into an integer wide enough for them.
+fn uint_from_le(bytes: &[u8]) -> Result<BoxedUint, Error> {
+    let bits = u32::try_from(bytes.len())
+        .ok()
+        .and_then(|len| len.checked_mul(8))
+        .ok_or_else(|| error!("Key component is too large."))?;
+    BoxedUint::from_le_slice(bytes, bits).map_err(|_| error!("Invalid key data."))
+}
+
+/// Whether two integers have the same value, whatever their storage widths.
+///
+/// Variable time: used only to check a key file against itself, where the file's owner knows every value.
+fn same_value(a: &BoxedUint, b: &BoxedUint) -> bool {
+    let a = Zeroizing::new(a.to_be_bytes_trimmed_vartime().into_vec());
+    let b = Zeroizing::new(b.to_be_bytes_trimmed_vartime().into_vec());
+    *a == *b
+}
+
+/// Whether `value` is zero or one: no key component can be.
+fn is_trivial(value: &BoxedUint) -> bool {
+    value.bit_width_vartime() <= 1
+}
+
+/// Maps an `rsa` error onto a message that carries no key material.
+///
+/// `rsa` errors name the kind of defect only; they never contain a value.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "used as a map_err closure; the error is formatted, not stored"
+)]
+fn key_err(err: rsa::Error) -> Error {
+    error!("{err}")
 }
 
 /// A PBO entry's lowercased raw name bytes paired with its contents.
 type NameFilePair<'a> = (Vec<u8>, &'a [u8]);
 
-/// Creates a SHA-1 hasher.
+/// Smallest key length accepted, in bits.
+const MIN_KEY_BITS: u32 = 288;
+/// Smallest key length that `sign` and `generate` accept, in bits: the minimum of the Windows `CryptoAPI` RSA
+/// signature key (BI's tools and the game cannot use smaller ones). PKCS#1 v1.5 padding of a `SHA-1` hash needs
+/// 368 bits at least. Smaller keys can still be read, and signatures made with them verified.
+const MIN_SIGN_BITS: u32 = 384;
+/// Largest key length accepted, in bits: the largest RSA key the Windows `CryptoAPI` (which BI's key format comes
+/// from) handles. Bigger keys would only make hostile files expensive to read.
+const MAX_KEY_BITS: u32 = 16384;
+
+/// bType, bVersion and reserved of a private key blob (`PRIVATEKEYBLOB`, version 2), as a little-endian word.
+const PRIVATE_BLOB: u32 = 0x0207;
+/// The same for a public key blob (`PUBLICKEYBLOB`).
+const PUBLIC_BLOB: u32 = 0x0206;
+/// `aiKeyAlg` of every key: `CALG_RSA_SIGN`.
+const KEY_ALG: u32 = 0x2400;
+/// Magic of a private key blob.
+const PRIVATE_MAGIC: [u8; 4] = *b"RSA2";
+/// Magic of a public key blob.
+const PUBLIC_MAGIC: [u8; 4] = *b"RSA1";
+
+/// Reads and checks the 12 bytes of a `CryptoAPI` key blob header that follow the blob length: type and
+/// version, key algorithm and magic.
 ///
 /// # Errors
 ///
-/// Returns an error if OpenSSL cannot provide the hasher.
-fn sha1() -> Result<Hasher, Error> {
-    Hasher::new(MessageDigest::sha1()).map_err(sha1_err)
-}
-
-/// Maps an OpenSSL error into an `std::io::Error`.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "used as a map_err closure; the error is formatted, not stored"
-)]
-fn sha1_err(err: openssl::error::ErrorStack) -> Error {
-    error!("OpenSSL operation failed: {err}")
+/// Returns an error on I/O failure or if the header is not the one of a `kind` key. `file` names the kind of file
+/// ("private key", "public key", "signature") in the message.
+fn check_blob_header<I: Read>(
+    input: &mut I,
+    blob: u32,
+    magic: [u8; 4],
+    file: &str,
+    kind: &str,
+) -> Result<(), Error> {
+    let found_blob = input.read_u32::<LittleEndian>()?;
+    let found_alg = input.read_u32::<LittleEndian>()?;
+    let mut found_magic = [0; 4];
+    input.read_exact(&mut found_magic)?;
+    if found_blob != blob || found_alg != KEY_ALG || found_magic != magic {
+        return Err(error!(
+            "Invalid {file} file (bad header: not a {kind} key blob)."
+        ));
+    }
+    Ok(())
 }
 
 /// Validates a key length read from a key or signature file.
@@ -103,8 +186,24 @@ fn sha1_err(err: openssl::error::ErrorStack) -> Error {
 ///
 /// Returns an error if the length is not a sane RSA key length.
 fn check_key_length(length: u32) -> Result<(), Error> {
-    if !(288..=(1 << 20)).contains(&length) {
-        return Err(error!("Invalid key length: {length}."));
+    if !(MIN_KEY_BITS..=MAX_KEY_BITS).contains(&length) {
+        return Err(error!(
+            "Invalid key length: {length} (supported: {MIN_KEY_BITS} to {MAX_KEY_BITS} bits)."
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses key lengths that cannot sign.
+///
+/// # Errors
+///
+/// Returns an error if `length` is below the 384-bit `CryptoAPI` minimum.
+fn check_sign_length(length: u32) -> Result<(), Error> {
+    if length < MIN_SIGN_BITS {
+        return Err(error!(
+            "A {length}-bit key is smaller than the {MIN_SIGN_BITS}-bit CryptoAPI minimum and cannot sign."
+        ));
     }
     Ok(())
 }
@@ -133,37 +232,30 @@ pub fn signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error>
     Ok(path)
 }
 
-/// Converts bytes into a `BigNum`.
-///
-/// # Errors
-///
-/// Returns an error if the bytes are not a valid big number.
-fn bignum(bytes: &[u8]) -> Result<BigNum, Error> {
-    BigNum::from_slice(bytes).map_err(|e| error!("Invalid key data: {e}"))
-}
-
-fn namehash(pbo: &PBO) -> Result<DigestBytes, Error> {
+/// SHA-1 of the lowercased names of the non-empty entries, in byte order.
+fn namehash(pbo: &PBO) -> [u8; 20] {
     let mut files_sorted: Vec<NameFilePair<'_>> = pbo
         .entries()
         .map(|(a, b)| (pbo.name_bytes(a).to_ascii_lowercase(), b))
         .collect();
     files_sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let mut h = sha1()?;
+    let mut h = Sha1::new();
 
     for (name, data) in &files_sorted {
         if data.is_empty() {
             continue;
         }
 
-        h.update(name).map_err(sha1_err)?;
+        h.update(name);
     }
 
-    h.finish().map_err(sha1_err)
+    h.finalize().into()
 }
 
-fn filehash(pbo: &PBO, version: BISignVersion) -> Result<DigestBytes, Error> {
-    let mut h = sha1()?;
+/// SHA-1 of the entries the signature `version` covers.
+fn filehash(pbo: &PBO, version: BISignVersion) -> [u8; 20] {
+    let mut h = Sha1::new();
     let mut nothing = true;
 
     for (name, data) in pbo.entries() {
@@ -209,67 +301,70 @@ fn filehash(pbo: &PBO, version: BISignVersion) -> Result<DigestBytes, Error> {
             }
         }
 
-        h.update(data).map_err(sha1_err)?;
+        h.update(data);
         nothing = false;
     }
 
     match version {
         BISignVersion::V2 => {
             if nothing {
-                h.update(b"nothing").map_err(sha1_err)?;
+                h.update(b"nothing");
             }
         }
         BISignVersion::V3 => {
             if nothing {
-                h.update(b"gnihton").map_err(sha1_err)?;
+                h.update(b"gnihton");
             }
         }
     }
 
-    h.finish().map_err(sha1_err)
+    h.finalize().into()
 }
 
+/// The three padded hashes that BI signs, big-endian, `length / 8` bytes each.
 fn generate_hashes(
     pbo: &PBO,
     version: BISignVersion,
     length: u32,
-) -> Result<(BigNum, BigNum, BigNum), Error> {
-    // a PBO that was read keeps its stored trailer (a foreign one may differ from what we would
-    // write); one that was not read gets the trailer `PBO::write` would produce
-    let checksum = pbo.trailer_checksum()?;
-    let hash1 = checksum.as_slice();
+    signing: bool,
+) -> Result<[Vec<u8>; 3], Error> {
+    // the SHA-1 of the PBO's contents: computed while reading for a PBO that was read (a stored trailer that
+    // differs is an error), the one `PBO::write` would produce for one that was not read
+    let checksum = pbo.trailer_checksum(signing)?;
+    let hash1 = &checksum[..];
 
-    let mut h = sha1()?;
-    h.update(hash1).map_err(sha1_err)?;
-    h.update(&namehash(pbo)?).map_err(sha1_err)?;
+    let namehash = namehash(pbo);
+    // the prefix part both of the following hashes end with
+    let mut suffix = Vec::new();
     if let Some(prefix) = pbo.prefix() {
-        h.update(&pbo.extension_bytes(prefix)).map_err(sha1_err)?;
+        suffix.extend(pbo.extension_bytes(prefix));
         if !prefix.ends_with('\\') {
-            h.update(b"\\").map_err(sha1_err)?;
+            suffix.push(b'\\');
         }
     }
-    let hash2 = h.finish().map_err(sha1_err)?;
 
-    let mut h = sha1()?;
-    h.update(&filehash(pbo, version)?).map_err(sha1_err)?;
-    h.update(&namehash(pbo)?).map_err(sha1_err)?;
-    if let Some(prefix) = pbo.prefix() {
-        h.update(&pbo.extension_bytes(prefix)).map_err(sha1_err)?;
-        if !prefix.ends_with('\\') {
-            h.update(b"\\").map_err(sha1_err)?;
-        }
-    }
-    let hash3 = h.finish().map_err(sha1_err)?;
+    let mut h = Sha1::new();
+    h.update(hash1);
+    h.update(namehash);
+    h.update(&suffix);
+    let hash2 = h.finalize();
+
+    let mut h = Sha1::new();
+    h.update(filehash(pbo, version));
+    h.update(namehash);
+    h.update(&suffix);
+    let hash3 = h.finalize();
 
     let size = usize::try_from(length / 8).map_err(|_| error!("Invalid key length: {length}."))?;
-    Ok((
+    Ok([
         pad_hash(hash1, size)?,
         pad_hash(&hash2, size)?,
         pad_hash(&hash3, size)?,
-    ))
+    ])
 }
 
-fn pad_hash(hash: &[u8], size: usize) -> Result<BigNum, Error> {
+/// The PKCS#1 v1.5 (`SHA-1`) padded block of `hash`, `size` bytes big-endian.
+fn pad_hash(hash: &[u8], size: usize) -> Result<Vec<u8>, Error> {
     if size < 36 {
         return Err(error!("Key length too small: {size} bytes."));
     }
@@ -282,24 +377,44 @@ fn pad_hash(hash: &[u8], size: usize) -> Result<BigNum, Error> {
     vec.extend(b"\x0e\x03\x02\x1a\x05\x00\x04\x14");
     vec.extend(hash);
 
-    bignum(&vec)
+    Ok(vec)
 }
 
-fn display_hashes(signed: &BigNum, real: &BigNum) -> Result<(String, String), Error> {
-    let hex_signed = signed.to_hex_str().map_err(sha1_err)?.to_lowercase();
-    let hex_real = real.to_hex_str().map_err(sha1_err)?.to_lowercase();
+/// `bytes` without its leading zero bytes.
+fn trim_zeros(bytes: &[u8]) -> &[u8] {
+    let start = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    bytes.get(start..).unwrap_or_default()
+}
+
+/// Lowercase hex of a number (`0` for zero).
+fn hex(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "0".to_string();
+    }
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        // writing into a String cannot fail
+        let _ = write!(out, "{b:02x}");
+    }
+    out
+}
+
+/// The two numbers as hex, reduced to the hashes if their padding is the same.
+fn display_hashes(signed: &[u8], real: &[u8]) -> (String, String) {
+    let hex_signed = hex(signed);
+    let hex_real = hex(real);
 
     if hex_signed.len() != hex_real.len() || hex_signed.len() <= 40 {
-        return Ok((hex_signed, hex_real));
+        return (hex_signed, hex_real);
     }
 
     let (signed_padding, signed_hash) = hex_signed.split_at(hex_signed.len() - 40);
     let (real_padding, real_hash) = hex_real.split_at(hex_real.len() - 40);
 
     if signed_padding == real_padding {
-        Ok((signed_hash.to_string(), real_hash.to_string()))
+        (signed_hash.to_string(), real_hash.to_string())
     } else {
-        Ok((hex_signed, hex_real))
+        (hex_signed, hex_real)
     }
 }
 
@@ -318,9 +433,7 @@ impl BIPrivateKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPrivateKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PRIVATE_BLOB, PRIVATE_MAGIC, "private key", "private")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -328,81 +441,115 @@ impl BIPrivateKey {
         if temp != length / 16 * 9 + 20 {
             return Err(error!("Invalid private key file (bad length field)."));
         }
+        if length % 16 != 0 {
+            return Err(error!(
+                "Invalid private key file (the length {length} is not a multiple of 16)."
+            ));
+        }
 
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let n = bignum(&buffer)?;
+        let full = (length / 8) as usize;
+        let half = (length / 16) as usize;
+        // Everything but `n` is secret: wiped on drop, also on the error returns below.
+        let n = read_uint(input, full)?;
+        let p = Zeroizing::new(read_uint(input, half)?);
+        let q = Zeroizing::new(read_uint(input, half)?);
+        let exp_p = Zeroizing::new(read_uint(input, half)?);
+        let exp_q = Zeroizing::new(read_uint(input, half)?);
+        let iqmp = Zeroizing::new(read_uint(input, half)?);
+        let d = Zeroizing::new(read_uint(input, full)?);
 
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let p = bignum(&buffer)?;
+        // `rsa` would reject most of these, but some values would reach its arithmetic first (a modulus of
+        // one, a prime of zero), so every component is checked here.
+        for value in [&n, &*p, &*q, &*exp_p, &*exp_q, &*iqmp, &*d] {
+            if is_trivial(value) {
+                return Err(error!("Invalid private key (a component is zero or one)."));
+            }
+        }
+        if n.bit_width_vartime() != length {
+            return Err(error!(
+                "Invalid private key file (the modulus is not {length} bits wide)."
+            ));
+        }
+        // `from_components` takes its numbers by value: the key owns (and wipes) copies, ours are wiped here.
+        let key = PrivateKey::from_components(
+            n,
+            BoxedUint::from(u64::from(exponent)),
+            (*d).clone(),
+            vec![(*p).clone(), (*q).clone()],
+        )
+        .map_err(key_err)
+        .prepend_error("Invalid private key:")?;
 
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let q = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let exponent1 = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let exponent2 = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let q_inv = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let d = bignum(&buffer)?;
+        // `rsa` recomputes the CRT values from `d`, `p` and `q`; the file's copies must agree.
+        let consistent = match (
+            key.dp(),
+            key.dq(),
+            key.crt_coefficient().map(Zeroizing::new),
+        ) {
+            (Some(dp), Some(dq), Some(qinv)) => {
+                same_value(dp, &exp_p) && same_value(dq, &exp_q) && same_value(&qinv, &iqmp)
+            }
+            _ => false,
+        };
+        if !consistent {
+            return Err(error!(
+                "Invalid private key (CRT values do not match the primes)."
+            ));
+        }
 
         Ok(BIPrivateKey {
             name,
             length,
             exponent,
-            n,
-            p,
-            q,
-            dmp1: exponent1,
-            dmq1: exponent2,
-            iqmp: q_inv,
-            d,
+            key,
         })
     }
 
-    /// Generate a new private key with the given name and bitlength.
+    /// Generate a new private key with the given name and bitlength, with the exponent 65537.
     ///
-    /// Arma 3 uses 1024 bit keys.
+    /// Arma 3 uses 1024 bit keys. The length must be a multiple of 16 (the key file layout) between 384 bits (the
+    /// `CryptoAPI` minimum, see [`BIPrivateKey::sign`]) and 16384 bits. Primes come from the operating system's
+    /// random number generator.
     ///
     /// # Errors
     ///
-    /// Returns an error if the keypair cannot be generated.
+    /// Returns an error if `length` is not usable or the keypair cannot be generated.
     pub fn generate(length: u32, name: String) -> Result<BIPrivateKey, Error> {
-        let rsa = Rsa::generate(length).map_err(|e| error!("Failed to generate keypair: {e}"))?;
-        let factor = |v: Option<&BigNumRef>| {
-            let v = v.ok_or_else(|| error!("Generated keypair is missing a factor."))?;
-            bignum(&v.to_vec())
-        };
+        Self::generate_with_rng(length, name, &mut SysRng)
+    }
+
+    /// [`generate`](Self::generate) with a caller-supplied random number generator (seeded ones in tests).
+    pub(crate) fn generate_with_rng<R: TryCryptoRng + ?Sized>(
+        length: u32,
+        name: String,
+        rng: &mut R,
+    ) -> Result<BIPrivateKey, Error> {
+        check_sign_length(length)?;
+        check_key_length(length)?;
+        if !length.is_multiple_of(16) {
+            return Err(error!(
+                "Invalid key length: {length} (it must be a multiple of 16)."
+            ));
+        }
+        let exponent = 65537;
+        // `rsa` refuses anything below 1024 bits by default; BI keys may be smaller (down to 384 bits for
+        // signing), so the unchecked variant is used and the size limits are ours.
+        let bits = usize::try_from(length).map_err(|_| error!("Invalid key length: {length}."))?;
+        let key =
+            PrivateKey::new_with_exp_unchecked(rng, bits, BoxedUint::from(u64::from(exponent)))
+                .map_err(key_err)
+                .prepend_error("Failed to generate keypair:")?;
+        if key.n().as_ref().bit_width_vartime() != length {
+            return Err(error!(
+                "Failed to generate keypair: the modulus is not {length} bits wide."
+            ));
+        }
 
         Ok(BIPrivateKey {
             name,
             length,
-            exponent: 65537,
-            n: bignum(&rsa.n().to_vec())?,
-            p: factor(rsa.p())?,
-            q: factor(rsa.q())?,
-            dmp1: factor(rsa.dmp1())?,
-            dmq1: factor(rsa.dmq1())?,
-            iqmp: factor(rsa.iqmp())?,
-            d: bignum(&rsa.d().to_vec())?,
+            exponent,
+            key,
         })
     }
 
@@ -416,7 +563,7 @@ impl BIPrivateKey {
             name: self.name.clone(),
             length: self.length,
             exponent: self.exponent,
-            n: bignum(&self.n.to_vec())?,
+            key: self.key.to_public_key(),
         })
     }
 
@@ -424,28 +571,33 @@ impl BIPrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if hashing or the RSA operation fails.
+    /// Returns an error if the key is below 384 bits (the `CryptoAPI` minimum), the PBO's stored SHA-1 trailer does
+    /// not match its contents (a checksum mismatch: repack the PBO first), hashing fails or the RSA operation
+    /// fails.
     pub fn sign(&self, pbo: &PBO, version: BISignVersion) -> Result<BISign, Error> {
-        let (hash1, hash2, hash3) = generate_hashes(pbo, version, self.length)?;
+        check_sign_length(self.length)?;
+        let hashes = generate_hashes(pbo, version, self.length, true)?;
+        let n = self.key.n().as_ref();
+        let precision = n.bits_precision();
 
-        let mut ctx = BigNumContext::new().map_err(sha1_err)?;
-
-        let mut sig1 = BigNum::new().map_err(sha1_err)?;
-        sig1.mod_exp(&hash1, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
-        let mut sig2 = BigNum::new().map_err(sha1_err)?;
-        sig2.mod_exp(&hash2, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
-        let mut sig3 = BigNum::new().map_err(sha1_err)?;
-        sig3.mod_exp(&hash3, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
+        // Blinding (base, exponent and CRT modulus) uses the OS RNG; it changes the computation, never the
+        // result, so signatures stay deterministic. The result is checked against the public key, which
+        // catches a faulty CRT computation before a bad signature is written.
+        let mut rng = SysRng;
+        let mut sign_one = |padded: &[u8]| -> Result<BoxedUint, Error> {
+            let m = BoxedUint::from_be_slice(padded, precision)
+                .map_err(|_| error!("The hash does not fit the key."))?;
+            rsa_decrypt_and_check(&self.key, Some(&mut rng), &m).map_err(key_err)
+        };
+        let [h1, h2, h3] = &hashes;
+        let (sig1, sig2, sig3) = (sign_one(h1)?, sign_one(h2)?, sign_one(h3)?);
 
         Ok(BISign {
             version,
             name: self.name.clone(),
             length: self.length,
             exponent: self.exponent,
-            n: bignum(&self.n.to_vec())?,
+            n: n.clone(),
             sig1,
             sig2,
             sig3,
@@ -466,13 +618,27 @@ impl BIPrivateKey {
         output.write_all(b"RSA2")?;
         output.write_u32::<LittleEndian>(self.length)?;
         output.write_u32::<LittleEndian>(self.exponent)?;
-        write_bignum(output, &self.n, (self.length / 8) as usize)?;
-        write_bignum(output, &self.p, (self.length / 16) as usize)?;
-        write_bignum(output, &self.q, (self.length / 16) as usize)?;
-        write_bignum(output, &self.dmp1, (self.length / 16) as usize)?;
-        write_bignum(output, &self.dmq1, (self.length / 16) as usize)?;
-        write_bignum(output, &self.iqmp, (self.length / 16) as usize)?;
-        write_bignum(output, &self.d, (self.length / 8) as usize)?;
+        let full = (self.length / 8) as usize;
+        let half = (self.length / 16) as usize;
+        let primes = self.key.primes();
+        let (Some(p), Some(q)) = (primes.first(), primes.get(1)) else {
+            return Err(error!("Invalid private key (missing primes)."));
+        };
+        // The CRT values are recomputed from `d`, `p` and `q`; `read` checks that the file holds the same.
+        let (Some(exp_p), Some(exp_q), Some(iqmp)) = (
+            self.key.dp(),
+            self.key.dq(),
+            self.key.crt_coefficient().map(Zeroizing::new),
+        ) else {
+            return Err(error!("Invalid private key (missing CRT values)."));
+        };
+        write_uint(output, self.key.n().as_ref(), full)?;
+        write_uint(output, p.as_ref(), half)?;
+        write_uint(output, q.as_ref(), half)?;
+        write_uint(output, exp_p, half)?;
+        write_uint(output, exp_q, half)?;
+        write_uint(output, &iqmp, half)?;
+        write_uint(output, self.key.d(), full)?;
         Ok(())
     }
 }
@@ -492,9 +658,7 @@ impl BIPublicKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPublicKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public key", "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -503,16 +667,24 @@ impl BIPublicKey {
             return Err(error!("Invalid public key file (bad length field)."));
         }
 
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let n = bignum(&buffer)?;
+        let n = read_uint(input, (length / 8) as usize)?;
+        // The modulus must be exactly `length` bits wide (a key frame bigger than its number, or a length that is
+        // no multiple of 8, is rejected). BI keys down to 288 bits are accepted, `rsa`'s default limits (1024 to
+        // 8192 bits) are widened to exactly this size.
+        let length_bits = length as usize;
+        let key = PublicKey::new_with_size_limits(
+            n,
+            BoxedUint::from(u64::from(exponent)),
+            length_bits..=length_bits,
+        )
+        .map_err(key_err)
+        .prepend_error("Invalid public key:")?;
 
         Ok(BIPublicKey {
             name,
             length,
             exponent,
-            n,
+            key,
         })
     }
 
@@ -520,50 +692,51 @@ impl BIPublicKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if hashing fails or one of the signature hashes doesn't match.
+    /// Returns an error if the signature was made with a different key, a signature value is not smaller than the
+    /// modulus, the PBO's stored SHA-1 trailer does not match its contents (a checksum mismatch), hashing fails or
+    /// one of the signature hashes doesn't match.
     pub fn verify(&self, pbo: &PBO, signature: &BISign) -> Result<(), Error> {
-        let (real_hash1, real_hash2, real_hash3) =
-            generate_hashes(pbo, signature.version, self.length)?;
-
-        let mut ctx = BigNumContext::new().map_err(sha1_err)?;
-
-        let exponent = BigNum::from_u32(self.exponent).map_err(sha1_err)?;
-
-        let mut signed_hash1 = BigNum::new().map_err(sha1_err)?;
-        signed_hash1
-            .mod_exp(&signature.sig1, &exponent, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
-        let mut signed_hash2 = BigNum::new().map_err(sha1_err)?;
-        signed_hash2
-            .mod_exp(&signature.sig2, &exponent, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
-        let mut signed_hash3 = BigNum::new().map_err(sha1_err)?;
-        signed_hash3
-            .mod_exp(&signature.sig3, &exponent, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
-
-        if real_hash1 != signed_hash1 {
-            let (s, r) = display_hashes(&signed_hash1, &real_hash1)?;
+        let n = self.key.n().as_ref();
+        // a signature carries the public key it was made with: compare before anything else, so that a wrong key
+        // is reported as such and not as a defect of the signature values
+        if signature.length != self.length || !same_value(&signature.n, n) {
             return Err(error!(
-                "Hash 1 doesn't match\nSigned hash: {}\nReal hash:   {}",
-                s, r
+                "The signature was made with a different key (signature: {}, {} bits; this key: {}, {} bits).",
+                printable(&signature.name),
+                signature.length,
+                printable(&self.name),
+                self.length
             ));
         }
+        let hashes = generate_hashes(pbo, signature.version, self.length, false)?;
+        let precision = n.bits_precision();
 
-        if real_hash2 != signed_hash2 {
-            let (s, r) = display_hashes(&signed_hash2, &real_hash2)?;
-            return Err(error!(
-                "Hash 2 doesn't match\nSigned hash: {}\nReal hash:   {}",
-                s, r
-            ));
+        let values = [&signature.sig1, &signature.sig2, &signature.sig3];
+        let mut signed = Vec::with_capacity(values.len());
+        for (i, value) in values.into_iter().enumerate() {
+            let number = i + 1;
+            // a signature value is below n; a bigger one (or one too wide for the key) is no signature
+            let value = BoxedUint::from_be_slice(&value.to_be_bytes_trimmed_vartime(), precision)
+                .ok()
+                .filter(|value| value < n)
+                .ok_or_else(|| error!("Signature {number} is not smaller than the modulus."))?;
+            signed.push(rsa_encrypt(&self.key, &value).map_err(key_err)?);
         }
 
-        if real_hash3 != signed_hash3 {
-            let (s, r) = display_hashes(&signed_hash3, &real_hash3)?;
-            return Err(error!(
-                "Hash 3 doesn't match\nSigned hash: {}\nReal hash:   {}",
-                s, r
-            ));
+        // Plain `==` on the trimmed bytes: both sides are public (the recovered block and the hashes of the
+        // PBO), so no constant-time comparison is needed.
+        for (i, (signed, real)) in signed.iter().zip(&hashes).enumerate() {
+            let signed = signed.to_be_bytes_trimmed_vartime();
+            let real = trim_zeros(real);
+            if *signed != *real {
+                let (s, r) = display_hashes(&signed, real);
+                return Err(error!(
+                    "Hash {} doesn't match\nSigned hash: {}\nReal hash:   {}",
+                    i + 1,
+                    s,
+                    r
+                ));
+            }
         }
 
         Ok(())
@@ -583,7 +756,7 @@ impl BIPublicKey {
         output.write_all(b"RSA1")?;
         output.write_u32::<LittleEndian>(self.length)?;
         output.write_u32::<LittleEndian>(self.exponent)?;
-        write_bignum(output, &self.n, (self.length / 8) as usize)?;
+        write_uint(output, self.key.n().as_ref(), (self.length / 8) as usize)?;
         Ok(())
     }
 }
@@ -607,9 +780,7 @@ impl BISign {
     pub fn read<I: Read>(input: &mut I) -> Result<BISign, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "signature", "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -618,17 +789,16 @@ impl BISign {
             return Err(error!("Invalid signature file (bad length field)."));
         }
 
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let n = bignum(&buffer)?;
+        let size = (length / 8) as usize;
+        let n = read_uint(input, size)?;
+        if n.bit_width_vartime() != length {
+            return Err(error!(
+                "Invalid signature file (the modulus is not {length} bits wide)."
+            ));
+        }
 
         input.read_u32::<LittleEndian>()?;
-
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let sig1 = bignum(&buffer)?;
+        let sig1 = read_uint(input, size)?;
 
         let version = match input.read_u32::<LittleEndian>()? {
             2 => BISignVersion::V2,
@@ -639,18 +809,10 @@ impl BISign {
         };
 
         input.read_u32::<LittleEndian>()?;
-
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let sig2 = bignum(&buffer)?;
+        let sig2 = read_uint(input, size)?;
 
         input.read_u32::<LittleEndian>()?;
-
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let sig3 = bignum(&buffer)?;
+        let sig3 = read_uint(input, size)?;
 
         Ok(BISign {
             version,
@@ -678,14 +840,132 @@ impl BISign {
         output.write_all(b"RSA1")?;
         output.write_u32::<LittleEndian>(self.length)?;
         output.write_u32::<LittleEndian>(self.exponent)?;
-        write_bignum(output, &self.n, (self.length / 8) as usize)?;
+        write_uint(output, &self.n, (self.length / 8) as usize)?;
         output.write_u32::<LittleEndian>(self.length / 8)?;
-        write_bignum(output, &self.sig1, (self.length / 8) as usize)?;
+        write_uint(output, &self.sig1, (self.length / 8) as usize)?;
         output.write_u32::<LittleEndian>(self.version.into())?;
         output.write_u32::<LittleEndian>(self.length / 8)?;
-        write_bignum(output, &self.sig2, (self.length / 8) as usize)?;
+        write_uint(output, &self.sig2, (self.length / 8) as usize)?;
         output.write_u32::<LittleEndian>(self.length / 8)?;
-        write_bignum(output, &self.sig3, (self.length / 8) as usize)?;
+        write_uint(output, &self.sig3, (self.length / 8) as usize)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Key generation is tested here because the seeded entry point `generate_with_rng` is private to the crate.
+    #![expect(
+        clippy::many_single_char_names,
+        reason = "the names of the RSA numbers: n, e, d, p, q"
+    )]
+
+    use std::fs;
+    use std::io::Cursor;
+
+    use num_bigint::BigUint;
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    use super::*;
+
+    fn seeded(seed: u64, bits: u32) -> BIPrivateKey {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        BIPrivateKey::generate_with_rng(bits, "gen".to_string(), &mut rng).unwrap()
+    }
+
+    fn bn(value: &BoxedUint) -> BigUint {
+        BigUint::from_bytes_be(&value.to_be_bytes_trimmed_vartime())
+    }
+
+    fn file(key: &BIPrivateKey) -> Vec<u8> {
+        let mut out = Vec::new();
+        key.write(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn generated_key_is_valid() {
+        for (seed, bits) in [(1u64, 384u32), (2, 1024)] {
+            let key = seeded(seed, bits);
+            assert_eq!((key.length, key.exponent), (bits, 65537));
+            let n = bn(key.key.n().as_ref());
+            assert_eq!(n.bits(), u64::from(bits));
+            let primes = key.key.primes();
+            let (p, q) = (bn(&primes[0]), bn(&primes[1]));
+            let (d, e) = (bn(key.key.d()), BigUint::from(65537u32));
+            let one = BigUint::from(1u32);
+
+            // p * q = n
+            assert_eq!(&p * &q, n);
+
+            // e * d = 1 mod phi(n); `rsa` computes d from phi (not from lambda)
+            let (p1, q1) = (&p - &one, &q - &one);
+            let phi = &p1 * &q1;
+            assert_eq!((&e * &d) % &phi, one, "e * d mod phi(n)");
+
+            // CRT values
+            assert_eq!(&d % &p1, bn(key.key.dp().unwrap()));
+            assert_eq!(&d % &q1, bn(key.key.dq().unwrap()));
+            let qinv = key.key.crt_coefficient().unwrap();
+            assert_eq!((bn(&qinv) * &q) % &p, one, "qinv * q mod p");
+
+            // the key file round-trips byte for byte
+            let bytes = file(&key);
+            let again = BIPrivateKey::read(&mut Cursor::new(&bytes)).unwrap();
+            assert_eq!(file(&again), bytes);
+            assert_eq!(again.name(), "gen");
+        }
+    }
+
+    #[test]
+    fn generated_key_signs_and_verifies() {
+        let pbo_bytes = fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/bi/sign/testsig.pbo"
+        ))
+        .unwrap();
+        let pbo = PBO::read(&mut Cursor::new(pbo_bytes)).unwrap();
+        let key = seeded(3, 1024);
+        let public = key.to_public_key().unwrap();
+        for version in [BISignVersion::V2, BISignVersion::V3] {
+            let signature = key.sign(&pbo, version).unwrap();
+            public.verify(&pbo, &signature).unwrap();
+
+            // the independent side: num-bigint's modular exponentiation recovers the padded hashes
+            let hashes = generate_hashes(&pbo, version, 1024, false).unwrap();
+            let n = bn(key.key.n().as_ref());
+            let e = BigUint::from(65537u32);
+            for (sig, hash) in [&signature.sig1, &signature.sig2, &signature.sig3]
+                .into_iter()
+                .zip(&hashes)
+            {
+                let back = bn(sig).modpow(&e, &n);
+                assert_eq!(back.to_bytes_be(), trim_zeros(hash));
+            }
+        }
+    }
+
+    #[test]
+    fn seeded_generation_is_deterministic() {
+        assert_eq!(file(&seeded(4, 512)), file(&seeded(4, 512)));
+        assert_ne!(file(&seeded(4, 512)), file(&seeded(5, 512)));
+    }
+
+    #[test]
+    fn generation_with_the_os_rng_is_not_deterministic() {
+        let a = BIPrivateKey::generate(384, "a".to_string()).unwrap();
+        let b = BIPrivateKey::generate(384, "a".to_string()).unwrap();
+        assert_ne!(file(&a), file(&b));
+    }
+
+    #[test]
+    fn unusable_lengths_are_refused() {
+        for bits in [0, 288, 368, 383, 392, 400 + 8, MAX_KEY_BITS + 16] {
+            assert!(
+                BIPrivateKey::generate(bits, "x".to_string()).is_err(),
+                "{bits}"
+            );
+        }
     }
 }
