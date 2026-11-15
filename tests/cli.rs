@@ -817,6 +817,20 @@ fn build_force_replaces_and_truncates_a_regular_file_with_a_device_name() {
 
 #[cfg(windows)]
 #[test]
+fn build_creates_a_new_target_named_like_a_device() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "aux.pbo"], dir.path());
+    // a file, or (if this Windows treats the name as a device) the device; never a NotFound error
+    assert_eq!(code, 0, "{err}");
+    let out = dir.path().join("aux.pbo");
+    if out.exists() {
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+    }
+}
+
+#[cfg(windows)]
+#[test]
 fn build_reports_a_read_only_regular_file_with_a_device_name_as_existing() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "m/a.txt", "hello");

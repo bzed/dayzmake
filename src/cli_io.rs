@@ -199,6 +199,7 @@ fn open_device(path: &Path, failure: &str) -> io::Result<Option<File>> {
     use std::os::windows::fs::OpenOptionsExt;
     let probe = match std::fs::OpenOptions::new().access_mode(0).open(path) {
         Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).prepend_error(failure),
     };
     // an unanswerable handle counts as a disk file: the worst case is an error, never an in-place overwrite
