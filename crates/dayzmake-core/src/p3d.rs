@@ -593,7 +593,7 @@ fn exists_ignore_case(root: &Path, rel: &str) -> bool {
 /// (vanilla `dz\...`, other mods) can only be checked if it is below one of `search_roots`;
 /// if it isn't, there is no way to know whether the reference is wrong, so it is not reported.
 /// Procedural textures (`#(argb,...)`) are skipped. A model that can't be read only gets a warning.
-pub fn check_dependencies<S: std::hash::BuildHasher>(
+pub(crate) fn check_dependencies<S: std::hash::BuildHasher>(
     path: &Path,
     display: &str,
     prefix: &str,
