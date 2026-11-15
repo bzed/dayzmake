@@ -92,6 +92,8 @@ impl Output {
 /// they keep the old content.
 pub struct AtomicTarget {
     path: PathBuf,
+    /// the path as the caller gave it (a symlink there stays what it is)
+    given: PathBuf,
     temp: PathBuf,
     file: Option<File>,
     done: bool,
@@ -129,13 +131,13 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
 }
 
 impl AtomicTarget {
-    /// The real target path and the temp file next to it (none for a device or FIFO).
+    /// The target as given, its resolved path and the temp file next to it (a device or FIFO: just the path).
     #[must_use]
     pub fn own_paths(&self) -> Vec<PathBuf> {
         if self.direct {
-            Vec::new()
+            vec![self.path.clone()]
         } else {
-            vec![self.path.clone(), self.temp.clone()]
+            vec![self.given.clone(), self.path.clone(), self.temp.clone()]
         }
     }
 
@@ -178,6 +180,7 @@ impl AtomicTarget {
                 .prepend_error(failure)?;
             return Ok(AtomicTarget {
                 path: path.to_path_buf(),
+                given: path.to_path_buf(),
                 temp: PathBuf::new(),
                 file: Some(file),
                 done: true,
@@ -206,6 +209,7 @@ impl AtomicTarget {
                 Ok(file) => {
                     let target = AtomicTarget {
                         path: real,
+                        given: path.to_path_buf(),
                         temp,
                         file: Some(file),
                         done: false,

@@ -1115,3 +1115,58 @@ fn pack_inside_source_folder_does_not_pack_output() {
     let modf = dir.path().join("mod");
     build_twice_is_identical(&["pack", ".", "out.pbo"], &modf, &modf.join("out.pbo"));
 }
+
+#[cfg(unix)]
+#[test]
+fn pack_through_symlinked_target_does_not_pack_it() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};"), ("dist/.keep", "")]);
+    let modf = dir.path().join("mod");
+    std::os::unix::fs::symlink("../dist/out.pbo", modf.join("out.pbo")).unwrap();
+    build_twice_is_identical(
+        &["pack", ".", "out.pbo"],
+        &modf,
+        &dir.path().join("dist/out.pbo"),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_into_fifo_inside_source_completes() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    let fifo = modf.join("f.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    // held open so the reader sees EOF and the test cannot hang even if dayzmake never opens the FIFO
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    let (code, _, err) = dayzmake(&["pack", ".", "f.fifo", "--force"], &modf);
+    drop(keep_open);
+    assert_eq!(code, 0, "{err}");
+    let data = reader.join().unwrap();
+    assert!(data.windows(10).any(|w| w == b"config.cpp"), "no PBO read");
+    assert!(!data.windows(6).any(|w| w == b"f.fifo"));
+}
+
+#[test]
+fn stale_temp_is_skipped_but_same_name_in_subfolder_is_packed() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/.out.pbo.dayzmake-tmp-999-0", "stale"),
+        ("mod/d/out.pbo", "data"),
+    ]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], &modf);
+    assert!(!out.contains("dayzmake-tmp"), "{out}");
+    assert!(out.contains("out.pbo"), "{out}");
+}

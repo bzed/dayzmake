@@ -464,6 +464,8 @@ fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
         .filter_map(|p| {
             let name = p.file_name()?.to_owned();
             let parent = p.parent().filter(|d| !d.as_os_str().is_empty());
+            // fails open: an exclude whose folder cannot be resolved matches nothing (the folder exists in practice,
+            // the temp file was created there)
             let folder = std::fs::canonicalize(parent.unwrap_or(Path::new("."))).ok()?;
             let temp_prefix = atomic_temp_prefix(&name.to_string_lossy());
             Some(Excluded {
@@ -490,6 +492,7 @@ fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
             path.parent()
                 .filter(|d| !d.as_os_str().is_empty())
                 .map_or_else(
+                    // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
                     || std::fs::canonicalize(".").ok(),
                     |d| std::fs::canonicalize(d).ok(),
                 )

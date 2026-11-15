@@ -145,7 +145,7 @@ pub fn cmd_pack<O: Write>(
 /// Returns an error if a file cannot be read, binarized or written.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one argument per CLI option; a parameter struct would only move them"
+    reason = "each argument is a separate input of the build; a parameter struct would only move them"
 )]
 pub fn cmd_build<O: Write>(
     input: &Path,
