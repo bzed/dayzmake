@@ -89,21 +89,32 @@ pub struct AtomicTarget {
 }
 
 /// Where a write to `path` really lands: `path` itself, or what a symlink there points to.
-fn resolve_link(path: &Path) -> PathBuf {
+///
+/// # Errors
+///
+/// Returns an error for a symlink loop, or a chain that ends in a link that cannot be resolved.
+fn resolve_link(path: &Path) -> io::Result<PathBuf> {
     let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
     if !is_link {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     }
     if let Ok(real) = std::fs::canonicalize(path) {
-        return real;
+        return Ok(real);
     }
     // a dangling link: its target, relative to the link's directory
-    match std::fs::read_link(path) {
-        Ok(link) => path
-            .parent()
-            .map_or_else(|| link.clone(), |p| p.join(&link)),
-        Err(_) => path.to_path_buf(),
+    let Ok(link) = std::fs::read_link(path) else {
+        return Ok(path.to_path_buf());
+    };
+    let target = path
+        .parent()
+        .map_or_else(|| link.clone(), |p| p.join(&link));
+    if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(error!(
+            "Target \"{}\" is a symlink loop or chain that cannot be resolved.",
+            dayzmake_core::error::printable(&path.display().to_string())
+        ));
     }
+    Ok(target)
 }
 
 impl AtomicTarget {
@@ -137,7 +148,7 @@ impl AtomicTarget {
         if path.is_dir() {
             return Err(error!("Target \"{}\" is a directory.", path.display()));
         }
-        let real = resolve_link(path);
+        let real = resolve_link(path)?;
         let name = real
             .file_name()
             .ok_or_else(|| error!("Invalid output file \"{}\"", path.display()))?

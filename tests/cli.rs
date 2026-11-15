@@ -809,6 +809,33 @@ fn a_directory_target_is_rejected_up_front() {
     let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
     assert_eq!(code, 1);
     assert!(err.contains("is a directory"), "{err}");
+    // nothing was built or written: no output, no temp file, no warnings
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+    assert_eq!(names(&dir.path().join("out.pbo")), Vec::<String>::new());
+    assert!(!err.contains("arning"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_target_is_rejected() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    symlink("self.pbo", dir.path().join("self.pbo")).unwrap();
+    symlink("two-b.pbo", dir.path().join("two-a.pbo")).unwrap();
+    symlink("two-a.pbo", dir.path().join("two-b.pbo")).unwrap();
+    for target in ["self.pbo", "two-a.pbo"] {
+        let (code, _, err) = dayzmake(&["build", "-f", "mod", target], dir.path());
+        assert_eq!(code, 1, "{target}: {err}");
+        assert!(
+            err.contains("is a symlink loop or chain that cannot be resolved"),
+            "{target}: {err}"
+        );
+    }
+    assert_eq!(
+        names(dir.path()),
+        ["mod", "self.pbo", "two-a.pbo", "two-b.pbo"]
+    );
 }
 
 #[test]
@@ -858,9 +885,11 @@ fn keygen_creates_the_private_key_owner_only() {
     let (code, _, err) = dayzmake(&["keygen", "k"], dir.path());
     assert_eq!(code, 0, "{err}");
     assert_eq!(mode("k.biprivatekey"), 0o600);
-    assert_ne!(
-        mode("k.bikey") & 0o044,
-        0,
+    // the public key keeps the default mode: the one a file created here gets (umask applied)
+    std::fs::write(dir.path().join("probe"), b"").unwrap();
+    assert_eq!(
+        mode("k.bikey"),
+        mode("probe"),
         "the public key keeps the default mode"
     );
     // over a wider existing key, and over a 0600 one
