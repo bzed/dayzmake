@@ -425,11 +425,12 @@ fn unpack_force_overwrites() {
     );
 }
 
-#[test]
-fn unpack_conflict_message_escapes_control_characters() {
+/// Unpacks twice into `target` and returns the conflict message of the second run.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn conflict_message_for_folder(name: &str) -> String {
     let tmp = addon();
     let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
-    let target = tmp.path().join("o\x1but");
+    let target = tmp.path().join(name);
     let options = UnpackOptions::default();
     unpack(
         &mut Cursor::new(&bytes),
@@ -438,16 +439,50 @@ fn unpack_conflict_message_escapes_control_characters() {
         &mut Warnings::new(),
     )
     .unwrap();
-    let err = unpack(
+    unpack(
         &mut Cursor::new(&bytes),
         &target,
         &options,
         &mut Warnings::new(),
     )
     .unwrap_err()
-    .to_string();
+    .to_string()
+}
+
+#[test]
+fn unpack_conflict_message_escapes_c1_control_characters() {
+    // U+009B is a control character but a valid file name character on every platform.
+    let err = conflict_message_for_folder("o\u{9b}ut");
+    assert!(err.contains("o\\u{9b}ut"), "{err}");
+    assert!(!err.contains('\u{9b}'), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unpack_conflict_message_escapes_control_characters() {
+    // NTFS rejects characters 1 to 31 in names, so this one is Unix only.
+    let err = conflict_message_for_folder("o\x1but");
     assert!(err.contains("o\\u{1b}ut"), "{err}");
     assert!(!err.contains('\x1b'), "{err}");
+}
+
+#[test]
+fn unpack_conflict_message_escapes_c1_control_characters_in_entry_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = support::raw_pbo_with_headers(&[("a\u{9b}b.txt", b"x", 0, 1)], &[]);
+    let target = tmp.path().join("out");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("a\u{9b}b.txt"), "old").unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("a\\u{9b}b.txt"), "{err}");
+    assert!(!err.contains('\u{9b}'), "{err}");
 }
 
 #[test]
