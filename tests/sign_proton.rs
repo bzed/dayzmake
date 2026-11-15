@@ -32,8 +32,8 @@ fn find_tools_and_proton() -> Option<(PathBuf, PathBuf, PathBuf)> {
 }
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
-fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
+fn dayzmake(args: &[&str], cwd: &Path, home: &Path) -> (i32, String) {
+    let out = isolated(Command::new(env!("CARGO_BIN_EXE_dayzmake")), home)
         .args(args)
         .current_dir(cwd)
         .output()
@@ -44,10 +44,39 @@ fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
     )
 }
 
+/// Points the `XDG_*` variables of `cmd` into `home`, so nothing is written to the user's folders.
+fn xdg_isolated(mut cmd: Command, home: &Path) -> Command {
+    cmd.env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache"))
+        .env("XDG_STATE_HOME", home.join(".local/state"));
+    cmd
+}
+
+/// Like `xdg_isolated`, and `HOME` too. Not for Proton: it hangs without the real `HOME`.
+fn isolated(mut cmd: Command, home: &Path) -> Command {
+    cmd.env("HOME", home);
+    xdg_isolated(cmd, home)
+}
+
 struct Wine {
     steam: PathBuf,
     proton: PathBuf,
     sandbox: PathBuf,
+}
+
+impl Drop for Wine {
+    /// Waits for the prefix's wineserver to exit, so none keeps the sandbox directory alive.
+    fn drop(&mut self) {
+        // best effort: a failure only leaves a wineserver that exits by itself a few seconds later
+        let _ = xdg_isolated(
+            Command::new(self.proton.join("files/bin/wineserver")),
+            &self.sandbox,
+        )
+        .arg("-w")
+        .env("WINEPREFIX", self.sandbox.join("pfx/pfx"))
+        .status();
+    }
 }
 
 impl Wine {
@@ -56,7 +85,7 @@ impl Wine {
         // Output goes to a file, not a pipe: wineserver outlives the command and would keep a pipe open.
         let log = self.sandbox.join("proton.log");
         let file = std::fs::File::create(&log).unwrap();
-        let status = Command::new(self.proton.join("proton"))
+        let status = xdg_isolated(Command::new(self.proton.join("proton")), &self.sandbox)
             .arg(verb)
             .args(args)
             .current_dir(&self.sandbox)
@@ -136,7 +165,7 @@ fn dayz_tools_and_dayzmake_accept_each_others_keys_and_signatures() {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&root, &z).unwrap();
 
-    let (code, err) = dayzmake(&["keygen", "gen"], &root.join("in"));
+    let (code, err) = dayzmake(&["keygen", "gen"], &root.join("in"), &root);
     assert_eq!(code, 0, "{err}");
     std::fs::copy(
         root.join("in/gen.biprivatekey"),
@@ -161,7 +190,11 @@ fn dayz_tools_and_dayzmake_accept_each_others_keys_and_signatures() {
     std::fs::copy(&bi_sig, root.join("bi/a.pbo.gen.bisign")).unwrap();
 
     // dayzmake signs the same PBO with the same key
-    let (code, err) = dayzmake(&["sign", "gen.biprivatekey", "a.pbo"], &root.join("mine"));
+    let (code, err) = dayzmake(
+        &["sign", "gen.biprivatekey", "a.pbo"],
+        &root.join("mine"),
+        &root,
+    );
     assert_eq!(code, 0, "{err}");
     let mine_sig = root.join("mine/a.pbo.gen.bisign");
     assert_eq!(
@@ -174,6 +207,7 @@ fn dayz_tools_and_dayzmake_accept_each_others_keys_and_signatures() {
     let (code, err) = dayzmake(
         &["verify", "../keys/gen.bikey", "a.pbo", "a.pbo.gen.bisign"],
         &root.join("bi"),
+        &root,
     );
     assert_eq!(code, 0, "dayzmake verify of the BI signature: {err}");
 
