@@ -326,6 +326,39 @@ fn unpack_does_not_follow_symlinks() {
     assert!(err.contains("unsafe-path"), "{err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_an_entry_behind_a_symlink() {
+    // the entry is skipped (unsafe-path), so it is not extracted as anything
+    let pbo = crafted_pbo(&[("\\link\\evil.txt", b"x")], None);
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("outside")).unwrap();
+    fs::create_dir_all(tmp.path().join("target")).unwrap();
+    std::os::unix::fs::symlink("../outside", tmp.path().join("target/link")).unwrap();
+    fs::write(tmp.path().join("in.pbo"), &pbo).unwrap();
+    let (code, err) = run_dayzmake(&["unpack", "-f", "in.pbo", "target"], tmp.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert!(!tmp.path().join("outside/evil.txt").exists());
+}
+
+#[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_an_unreadable_entry() {
+    let pbo = support::raw_pbo_with_headers(
+        &[
+            ("\\bad.c", b"\xFF", support::CPRS, 64),
+            ("ok.txt", b"y", 0, 1),
+        ],
+        &[],
+    );
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("Skipping"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert!(tmp.path().join("target/ok.txt").exists());
+}
+
 #[test]
 fn unpack_prefix_file_strips_control_chars() {
     let pbo = crafted_pbo(&[("a.txt", b"x")], Some("x\nprefix=..\\evil"));
