@@ -122,3 +122,43 @@ fn paa_tagg_name_is_escaped_in_errors() {
     let err = Paa::read(&mut Cursor::new(bytes)).unwrap_err();
     assert_escaped(&err.to_string(), "\\u{1b}GGATSFF");
 }
+
+#[test]
+fn unquoted_string_warning_is_escaped() {
+    let mut warnings = Warnings::new();
+    Config::from_string(
+        String::from("class A { x = \u{1b}[31mRED; y[] = {\u{1b}[32mGREEN}; };\n"),
+        None,
+        &[],
+        &mut warnings,
+    )
+    .unwrap();
+    let messages: Vec<String> = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.name == Some("unquoted-string"))
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_escaped(&messages[0], "\\u{1b}[31mRED");
+    assert_escaped(&messages[1], "\\u{1b}[32mGREEN");
+}
+
+#[test]
+fn p3d_tagg_name_is_escaped_in_errors() {
+    use dayzmake_core::p3d::P3D;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"MLOD");
+    bytes.extend_from_slice(&257u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes()); // one LOD
+    bytes.extend_from_slice(b"P3DM");
+    bytes.extend_from_slice(&28u32.to_le_bytes());
+    bytes.extend_from_slice(&256u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 16]); // no points, normals, faces; flags
+    bytes.extend_from_slice(b"TAGG");
+    bytes.push(1);
+    bytes.extend_from_slice(b"\x1b[31mT\0");
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    let err = P3D::read(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31mT");
+}

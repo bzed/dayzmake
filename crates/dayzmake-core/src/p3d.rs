@@ -408,7 +408,7 @@ impl LOD {
             if got != size as usize {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
-                    format!("tag \"{name}\" is truncated"),
+                    format!("tag \"{}\" is truncated", printable(&name)),
                 ));
             }
 

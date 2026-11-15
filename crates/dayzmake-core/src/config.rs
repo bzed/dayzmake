@@ -109,14 +109,14 @@ peg::parser! {
             // mismatch, which has its own warning); CfgConvert makes it "" as well.
             // `unquoted_string_entry` raises `empty-value` for it
             if !result.is_empty() {
-                warnings.push((pos, format!("String value \"{result}\" is not quoted properly."), Some("unquoted-string")));
+                warnings.push((pos, format!("String value \"{}\" is not quoted properly.", printable(&result)), Some("unquoted-string")));
             }
             result
         }
 
         rule unquoted_string_array() -> String = pos:position!() s:$( (![',' | '}' | ' ' | '\t' | '\r' | '\n'] [_]) (![',' | '}' | '\r' | '\n'] [_])* ) {
             let result = s.to_string().trim().to_string();
-            warnings.push((pos, format!("String array element \"{result}\" is not quoted properly."), Some("unquoted-string")));
+            warnings.push((pos, format!("String array element \"{}\" is not quoted properly.", printable(&result)), Some("unquoted-string")));
             result
         }
 

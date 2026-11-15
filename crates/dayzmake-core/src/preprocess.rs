@@ -368,7 +368,9 @@ impl Macro {
                     if got != expected {
                         let msg = format!(
                             "Macro \"{}\" expects {} argument(s), got {}",
-                            self.name, expected, got
+                            printable(&self.name),
+                            expected,
+                            got
                         );
                         mismatches.push(msg);
                         return Ok(if self.quoted {
