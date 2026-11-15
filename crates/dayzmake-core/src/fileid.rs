@@ -46,6 +46,18 @@ impl FileId {
     }
 }
 
+impl FileId {
+    /// The identity of the file standard output is redirected to, or `None` unless that is a regular file: a
+    /// terminal, a pipe, a device, a closed stdout or a failure to duplicate the handle all give `None`.
+    #[must_use]
+    pub fn stdout() -> Option<FileId> {
+        let handle = same_file::Handle::stdout().ok()?;
+        // the handle is a duplicate and is never read; only a regular file is wanted
+        let regular = handle.as_file().metadata().ok()?.is_file();
+        regular.then_some(FileId(handle))
+    }
+}
+
 /// Whether `a` and `b` name the same existing file. `false` when either cannot be opened.
 #[must_use]
 pub fn is_same_file(a: &Path, b: &Path) -> bool {

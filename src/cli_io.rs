@@ -69,6 +69,12 @@ impl Output {
         }
     }
 
+    /// Whether this output is the process's standard output, which can be redirected into the source folder.
+    #[must_use]
+    pub fn is_stdout(&self) -> bool {
+        matches!(self, Output::Standard(_))
+    }
+
     /// Makes a file output the real target file; stdout needs nothing. Call it only after the command succeeded:
     /// an output dropped without it leaves the target as it was.
     ///

@@ -1008,6 +1008,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
             &exclude,
             &include_folders(args)?,
             &own,
+            false, // MCP never writes a PBO to stdout
             binarizer.as_mut(),
             warnings,
         );
@@ -1019,7 +1020,9 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
     } else {
         let mut file = AtomicTarget::create(&target, force)?;
         let own = file.own_paths();
-        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, &own, warnings)?;
+        pbo::cmd_pack(
+            &source, &mut file, &headerext, &exclude, &own, false, warnings,
+        )?;
         file.commit()?;
     }
     if let Some(key) = key {

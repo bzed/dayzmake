@@ -443,6 +443,10 @@ pub struct PackOptions {
     /// Paths the folder walk skips (the output file of a build inside the source folder), compared after
     /// canonicalizing. Hidden temp files of such a target (see [`atomic_temp_prefix`]) next to it are skipped too.
     pub exclude_paths: Vec<PathBuf>,
+    /// Also skip the file this process's standard output is redirected to, when it is a regular file (`dayzmake
+    /// pack m > m/out.pbo` creates the file inside the folder before the walk). A terminal, a pipe, `/dev/null`
+    /// or a closed stdout excludes nothing.
+    pub exclude_stdout: bool,
 }
 
 /// The file-name prefix of the temp files written next to the target `name` before they are renamed into place
@@ -452,18 +456,25 @@ pub fn atomic_temp_prefix(name: &str) -> String {
     format!(".{name}.dayzmake-tmp-")
 }
 
-/// An excluded path split into its canonical folder and file name.
+/// A file the folder walk skips.
 struct Excluded {
-    folder: PathBuf,
-    name: std::ffi::OsString,
-    /// Lower-cased temp prefix: the temp file does not exist yet, so it is matched by name.
-    temp_prefix: String,
+    /// The canonical folder, name and temp prefix of an excluded path; none for standard output, which has no path.
+    by_name: Option<ExcludedName>,
     /// The identity of the excluded file when it exists, for the comparison that is independent of spelling.
     id: Option<FileId>,
 }
 
-fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
-    paths
+/// An excluded path split into its canonical folder and file name.
+struct ExcludedName {
+    folder: PathBuf,
+    name: std::ffi::OsString,
+    /// Lower-cased temp prefix: the temp file does not exist yet, so it is matched by name.
+    temp_prefix: String,
+}
+
+fn excluded_paths(options: &PackOptions) -> Vec<Excluded> {
+    let mut list: Vec<Excluded> = options
+        .exclude_paths
         .iter()
         .filter_map(|p| {
             let name = p.file_name()?.to_owned();
@@ -474,13 +485,24 @@ fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
             let temp_prefix = atomic_temp_prefix(&name.to_string_lossy()).to_lowercase();
             let id = FileId::of(&folder.join(&name));
             Some(Excluded {
-                folder,
-                name,
-                temp_prefix,
+                by_name: Some(ExcludedName {
+                    folder,
+                    name,
+                    temp_prefix,
+                }),
                 id,
             })
         })
-        .collect()
+        .collect();
+    if options.exclude_stdout
+        && let Some(id) = FileId::stdout()
+    {
+        list.push(Excluded {
+            by_name: None,
+            id: Some(id),
+        });
+    }
+    list
 }
 
 /// Whether `path` is the build's own output or a temp file of it.
@@ -498,7 +520,9 @@ fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
     let mut folder: Option<Option<PathBuf>> = None;
     let mut id: Option<Option<FileId>> = None;
     excluded.iter().any(|e| {
-        if name == e.name || name_lower.starts_with(&e.temp_prefix) {
+        if let Some(n) = &e.by_name
+            && (name == n.name || name_lower.starts_with(&n.temp_prefix))
+        {
             let folder = folder.get_or_insert_with(|| {
                 path.parent()
                     .filter(|d| !d.as_os_str().is_empty())
@@ -508,12 +532,12 @@ fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
                         |d| std::fs::canonicalize(d).ok(),
                     )
             });
-            if folder.as_deref() == Some(e.folder.as_path()) {
+            if folder.as_deref() == Some(n.folder.as_path()) {
                 return true;
             }
         }
-        // an unopenable file (gone meanwhile, no permission) is not the same file
-        // opened lazily: only when there is an identity to compare with
+        // an unopenable file (gone meanwhile, no permission) is not the same file; opened lazily: only when
+        // there is an identity to compare with
         e.id.as_ref()
             .is_some_and(|own| id.get_or_insert_with(|| FileId::of(path)).as_ref() == Some(own))
     })
@@ -875,7 +899,7 @@ impl PBO {
         let mut binarize = options.build;
         let exclude_patterns = &options.exclude;
         let includefolders = &options.include_folders;
-        let file_list = list_files(directory, &excluded_paths(&options.exclude_paths))?;
+        let file_list = list_files(directory, &excluded_paths(options))?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 

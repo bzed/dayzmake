@@ -1549,3 +1549,52 @@ fn pack_force_over_the_output_spelled_in_another_case_does_not_pack_the_old_outp
     assert!(out.contains("config.cpp"), "{out}");
     assert!(!out.to_lowercase().contains("out.pbo"), "{out}");
 }
+
+/// Runs `dayzmake <args>` in `cwd` with stdout redirected to the file `out`, like `dayzmake ... > out`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn dayzmake_to_file(args: &[&str], cwd: &Path, out: &Path) -> i32 {
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(std::fs::File::create(out).unwrap());
+    isolate(&mut cmd, home.path());
+    cmd.status().unwrap().code().unwrap_or(-1)
+}
+
+#[test]
+fn pack_and_build_leave_a_redirected_stdout_out_of_the_pbo() {
+    for cmd in ["pack", "build"] {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("m");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), "hi").unwrap();
+        let out = src.join("out.pbo");
+        assert_eq!(dayzmake_to_file(&[cmd, "m"], dir.path(), &out), 0, "{cmd}");
+        let (code, listing, err) = dayzmake(&["inspect", "m/out.pbo"], dir.path());
+        assert_eq!(code, 0, "{cmd}: {err}");
+        assert!(listing.contains("a.txt"), "{cmd}: {listing}");
+        assert!(!listing.contains("out.pbo"), "{cmd}: {listing}");
+    }
+}
+
+#[test]
+fn pack_with_stdout_to_a_pipe_or_null_packs_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("m");
+    std::fs::create_dir(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "hi").unwrap();
+    std::fs::write(src.join("b.txt"), "yo").unwrap();
+    // a pipe: dayzmake_raw captures stdout through one
+    let (code, out, err) = dayzmake_raw(&["pack", "m"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.windows(5).any(|w| w == b"a.txt") && out.windows(5).any(|w| w == b"b.txt"));
+    // /dev/null
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(["pack", "m"])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::null());
+    isolate(&mut cmd, home.path());
+    assert_eq!(cmd.status().unwrap().code(), Some(0));
+}

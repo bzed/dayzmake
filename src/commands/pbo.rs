@@ -124,9 +124,11 @@ pub fn cmd_pack<O: Write>(
     headerext: &[String],
     excludes: &[String],
     exclude_paths: &[PathBuf],
+    exclude_stdout: bool,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut options = PackOptions::pack();
+    options.exclude_stdout = exclude_stdout;
     options.exclude = excludes.to_vec();
     options.exclude_paths = exclude_paths.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
@@ -154,10 +156,12 @@ pub fn cmd_build<O: Write>(
     excludes: &[String],
     includefolders: &[PathBuf],
     exclude_paths: &[PathBuf],
+    exclude_stdout: bool,
     binarizer: Option<&mut Binarizer>,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut options = PackOptions::build();
+    options.exclude_stdout = exclude_stdout;
     options.exclude = excludes.to_vec();
     options.include_folders = includefolders.to_vec();
     options.exclude_paths = exclude_paths.to_vec();

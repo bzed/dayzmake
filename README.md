@@ -51,7 +51,8 @@ is maintained here.
   or pipe (`/dev/null`, `/dev/stdout`, and on Windows `NUL`, `CON`, ...) is written in place. A failure to create the temporary file names the
   directory (#18, #25).
 - `build` never packs its own output: the target and its temporary file are left out when they lie inside the
-  source folder (#24).
+  source folder (#24). The same holds for `pack` and `build` with stdout redirected into the source folder
+  (`dayzmake pack m > m/out.pbo`) (#38).
 - The `api` warning for a mod with an unsafe prefix shows the prefix escaped once, not twice (#31).
 - `keygen` creates the private key readable by its owner only (`0600`) (#20).
 - `build` and `pack` skip FIFOs, devices and sockets in the source folder (`unsupported-file` warning, no more hanging

@@ -256,6 +256,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             let mut output = get_output(args)?;
             let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
             let own = output.own_paths();
+            let to_stdout = output.is_stdout();
             let built = pbo::cmd_build(
                 Path::new(&args.arg_sourcefolder),
                 &mut output,
@@ -263,6 +264,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
                 &args.flag_exclude,
                 &includefolders,
                 &own,
+                to_stdout,
                 binarizer.as_mut(),
                 warnings,
             );
@@ -274,12 +276,14 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         } else {
             let mut output = get_output(args)?;
             let own = output.own_paths();
+            let to_stdout = output.is_stdout();
             pbo::cmd_pack(
                 Path::new(&args.arg_sourcefolder),
                 &mut output,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &own,
+                to_stdout,
                 warnings,
             )?;
             output.commit()?;
