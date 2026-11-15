@@ -265,3 +265,22 @@ fn missing_include_with_control_characters_is_escaped() {
     assert!(msg.contains("a\\u{1b}[31mb.hpp"), "{msg:?}");
     assert!(!msg.contains('\u{1b}'), "{msg:?}");
 }
+
+/// Preprocessor parse errors report 1-based line numbers, like config errors.
+#[test]
+fn preprocess_error_line_numbers_are_one_based() {
+    let err = |input: &str| {
+        preprocess(
+            input.to_string(),
+            Some(PathBuf::from("in.cpp")),
+            &Vec::new(),
+            &mut Warnings::new(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let first = err("#define A(\n");
+    assert!(first.contains("in.cpp:1:"), "{first}");
+    let third = err("a = 1;\nb = 2;\n#define A(\n");
+    assert!(third.contains("in.cpp:3:"), "{third}");
+}
