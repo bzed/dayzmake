@@ -99,7 +99,7 @@ pub struct LOD {
 
 /// An MLOD model.
 ///
-/// ```compile_fail
+/// ```compile_fail,E0639
 /// let _ = dayzmake_core::p3d::P3D { version: 0, lods: Vec::new() };
 /// ```
 #[derive(Debug)]
@@ -246,6 +246,16 @@ impl Face {
 }
 
 impl Tagg {
+    /// Creates a tagg; a selection when `name` does not start with `#`.
+    #[must_use]
+    pub fn new(active: u8, name: impl Into<String>, data: Vec<u8>) -> Tagg {
+        Tagg {
+            active,
+            name: name.into(),
+            data,
+        }
+    }
+
     /// For `#Property#`: the (name, value) pair, two NUL-padded 64 byte strings.
     #[must_use]
     pub fn property(&self) -> Option<(String, String)> {
@@ -293,6 +303,21 @@ pub fn lod_name(resolution: f32) -> Option<&'static str> {
 }
 
 impl LOD {
+    /// Creates an empty LOD with the format version (28.256) MLOD files normally carry.
+    #[must_use]
+    pub fn new(resolution: f32) -> LOD {
+        LOD {
+            version_major: 0x1c,
+            version_minor: 0x100,
+            flags: 0,
+            resolution,
+            points: Vec::new(),
+            face_normals: Vec::new(),
+            faces: Vec::new(),
+            taggs: Vec::new(),
+        }
+    }
+
     /// Human readable name of this LOD (e.g. "Geometry", or its resolution).
     #[must_use]
     pub fn name(&self) -> String {
@@ -450,6 +475,15 @@ impl LOD {
 }
 
 impl P3D {
+    /// Creates a model without LODs; `version` is the MLOD version (0x101 in practice).
+    #[must_use]
+    pub fn new(version: u32) -> P3D {
+        P3D {
+            version,
+            lods: Vec::new(),
+        }
+    }
+
     /// Reads an MLOD model.
     ///
     /// # Errors

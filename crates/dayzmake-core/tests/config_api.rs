@@ -1,11 +1,11 @@
 //! Read access to parsed configs.
-#![expect(clippy::unwrap_used, clippy::panic, reason = "tests fail by panicking")]
 use std::io::{Seek, SeekFrom};
 use std::path::PathBuf;
 
 use dayzmake_core::config::{Config, ConfigArrayElement, ConfigEntry};
 use dayzmake_core::warning::Warnings;
 
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
 fn golden() -> Config {
     let dir = PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -16,6 +16,7 @@ fn golden() -> Config {
     Config::from_string(input, Some(path), &[dir], &mut Warnings::new()).unwrap()
 }
 
+#[expect(clippy::panic, reason = "tests fail by panicking")]
 fn strings(elements: &[ConfigArrayElement]) -> Vec<&str> {
     elements
         .iter()
@@ -27,6 +28,7 @@ fn strings(elements: &[ConfigArrayElement]) -> Vec<&str> {
 }
 
 /// The assertions both reading paths share. Avoids `delete Obsolete;` (issue #3).
+#[expect(clippy::unwrap_used, clippy::panic, reason = "tests fail by panicking")]
 fn check(config: &Config) {
     let root = config.root();
     assert!(!root.is_external());
@@ -71,7 +73,36 @@ fn check(config: &Config) {
 
 #[test]
 fn read_values_from_a_parsed_config() {
-    check(&golden());
+    let config = golden();
+    check(&config);
+
+    // parsed path only: the rapified reader mishandles deletions (issue #3)
+    let Some(ConfigEntry::ClassEntry(golden)) = config.root().get("CfgGolden") else {
+        panic!("CfgGolden is not a class");
+    };
+    let Some(ConfigEntry::ClassEntry(child)) = golden.get("Child") else {
+        panic!("Child is not a class");
+    };
+    let Some(ConfigEntry::ClassEntry(obsolete)) = child.get("Obsolete") else {
+        panic!("Obsolete is not a class entry");
+    };
+    assert!(obsolete.is_deletion());
+}
+
+#[test]
+fn get_returns_the_first_of_duplicated_names() {
+    let config = Config::from_string(
+        String::from("a = 1;\nA = 2;\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(config.root().entries().count(), 2);
+    assert!(matches!(
+        config.root().get("a"),
+        Some(ConfigEntry::IntEntry(1))
+    ));
 }
 
 #[test]
