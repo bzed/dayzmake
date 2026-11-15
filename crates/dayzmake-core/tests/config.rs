@@ -267,12 +267,16 @@ fn parse_err(input: &str) -> String {
 fn parse_error_with_nbsp_indent_is_an_error() {
     let msg = parse_err("\u{a0}foo = 1;\n");
     assert!(msg.contains("Unexpected token"), "{msg}");
+    assert!(msg.contains("\n  ^\n"), "caret at the line start: {msg}");
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
 }
 
 #[test]
 fn parse_error_with_ideographic_space_indent_is_an_error() {
     let msg = parse_err("\u{3000}\u{3000}class A { = 1; };");
     assert!(msg.contains("Unexpected token"), "{msg}");
+    assert!(msg.contains("\n  ^\n"), "caret at the line start: {msg}");
+    assert!(msg.contains("\"\\u{3000}\""), "visible token: {msg}");
 }
 
 #[test]
@@ -292,14 +296,27 @@ fn parse_error_with_multibyte_text_before_the_error_has_the_caret_under_it() {
 }
 
 #[test]
-fn preprocess_errors_with_multibyte_indent_do_not_panic() {
-    let mut w = Warnings::default();
+fn preprocess_errors_with_multibyte_indent_have_the_caret_in_the_right_place() {
     for input in [
-        "\u{a0}#if\n",
-        "\u{3000}#include\n",
-        "\u{a0}#define\n",
-        "\u{a0}\u{a0}#\n",
+        "\u{a0}\"abc\n",
+        "  \u{a0}\"abc\n",
+        "\u{3000}\u{3000}\"abc\n",
     ] {
-        let _ = dayzmake_core::preprocess::preprocess(input.to_string(), None, &[], &mut w);
+        let mut w = Warnings::default();
+        let err = dayzmake_core::preprocess::preprocess(input.to_string(), None, &[], &mut w).err();
+        let msg = err.map_or_else(String::new, |e| e.to_string());
+        assert!(msg.contains("Unexpected token"), "{input:?}: {msg}");
+        let lines: Vec<&str> = msg.lines().collect();
+        let text = lines.iter().find(|l| l.contains("abc")).expect("text line");
+        let caret = lines
+            .iter()
+            .find(|l| l.trim_start() == "^")
+            .expect("caret line");
+        let caret_at = caret.chars().position(|c| c == '^').expect("caret");
+        let shown = text.chars().position(|c| c == '"').expect("quote");
+        assert!(
+            caret_at == shown + 4,
+            "{input:?}: caret {caret_at}, quote {shown}\n{msg}"
+        );
     }
 }

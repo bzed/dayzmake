@@ -53,6 +53,10 @@ fn config_rapified_seeds() -> io::Result<()> {
 fn config_parse_seeds() -> io::Result<()> {
     for data in seeds("config_parse")? {
         let input = String::from_utf8_lossy(&data).into_owned();
+        // Same as the fuzz target: includes read host files, so those seeds are skipped.
+        if input.contains("#include") {
+            continue;
+        }
         let mut warnings = Warnings::default();
         let _ = Config::from_string(input, None, &[], &mut warnings);
     }

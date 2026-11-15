@@ -134,17 +134,33 @@ fn format_parse_error(
     // The parser's column counts characters, so every width here is in characters too.
     let stripped = line.chars().count() - trimmed.chars().count();
     let column = column_number.saturating_sub(1);
-    let offending = line
-        .chars()
-        .nth(column)
-        .map_or_else(|| "\\n".to_string(), |c| c.to_string());
+    let offending = line.chars().nth(column).map_or_else(
+        || "\\n".to_string(),
+        |c| {
+            if c.is_whitespace() && !c.is_ascii() {
+                // An invisible token (NBSP, ideographic space) is shown escaped.
+                c.escape_unicode().to_string()
+            } else {
+                printable(&c.to_string())
+            }
+        },
+    );
+    // Control characters are escaped for display, so the caret pads by the displayed width.
+    let padding = printable(
+        &trimmed
+            .chars()
+            .take(column.saturating_sub(stripped))
+            .collect::<String>(),
+    )
+    .chars()
+    .count();
 
     error!(
         "In line {}{}:\n\n  {}\n  {}^\n\nUnexpected token \"{}\", expected: {}",
         file,
         line_number,
-        trimmed,
-        " ".repeat(column.saturating_sub(stripped)),
+        printable(trimmed),
+        " ".repeat(padding),
         offending,
         expected
     )
