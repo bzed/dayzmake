@@ -263,7 +263,10 @@ fn read_selected(
         };
         if is_config(&name) {
             out.config.push((name, bytes.to_vec()));
-        } else if safe_relative_path(&name).is_none() {
+        } else if let Some(index_name) = index_entry_name(&name) {
+            out.texts
+                .push((index_name, String::from_utf8_lossy(bytes).into_owned()));
+        } else {
             warnings.warn(
                 Warning::new(
                     Some("api-unsafe-entry"),
@@ -271,12 +274,23 @@ fn read_selected(
                 )
                 .in_file(origin.to_string()),
             );
-        } else {
-            out.texts
-                .push((name, String::from_utf8_lossy(bytes).into_owned()));
         }
     }
     Ok(out)
+}
+
+/// The name an entry gets in the index: leading, trailing and doubled separators dropped, `\` between
+/// components. The index builds no file-system path from it, so only names that could not be one
+/// (`.`/`..` components, a drive letter or other `:`, a control character, no name at all) are refused.
+fn index_entry_name(name: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for part in name.split(['\\', '/']).filter(|p| !p.is_empty()) {
+        if part == "." || part == ".." || part.chars().any(|c| c == ':' || c.is_control()) {
+            return None;
+        }
+        parts.push(part);
+    }
+    (!parts.is_empty()).then(|| parts.join("\\"))
 }
 
 /// Index `dta/scripts.pbo`: one module, prefix `scripts`.

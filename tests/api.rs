@@ -12,6 +12,9 @@ use dayzmake::api::query::{
 };
 use dayzmake::api::steam::Branch;
 
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/api")
@@ -1715,6 +1718,7 @@ fn inherited_walks_across_indexes() {
 // ---- sources from PBOs, cache and CLI ----
 
 mod from_pbo {
+    use super::support::raw_pbo;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1851,6 +1855,29 @@ mod from_pbo {
             fs::write(dir.join("meta.cpp"), "name = \"Community Framework\";\n").expect("meta");
             dir
         }
+    }
+
+    #[test]
+    fn mod_entry_with_a_leading_separator_is_indexed() {
+        let w = World::new();
+        let dir = w.home.join("@Raw");
+        fs::create_dir_all(dir.join("addons")).expect("mkdir");
+        let pbo = raw_pbo(
+            &[
+                ("\\scripts\\3_Game\\x.c", b"class LeadingSep\n{\n}\n"),
+                ("..\\y.c", b"class ParentEntry\n{\n}\n"),
+            ],
+            &[("prefix", "raw")],
+        );
+        fs::write(dir.join("addons/raw.pbo"), pbo).expect("write");
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "class", "LeadingSep", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("LeadingSep"), "{out}");
+        // only the `..` entry is reported, the leading separator is not
+        assert!(err.contains("..\\y.c") && !err.contains("x.c"), "{err}");
+        let (code, _, err) = w.run(&["api", "class", "ParentEntry", "-m", &m]);
+        assert_eq!(code, 1, "{err}");
     }
 
     #[test]

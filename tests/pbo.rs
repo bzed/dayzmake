@@ -203,6 +203,7 @@ fn unpack_rejects_absolute_entry() {
     assert!(!tmp.path().join("target/C:").exists());
     assert!(!tmp.path().join("target/x.txt").exists());
     assert!(err.contains("unsafe-path"), "{err}");
+    assert!(err.contains("Skipping \"\\abs.txt\""), "{err}");
 }
 
 #[test]

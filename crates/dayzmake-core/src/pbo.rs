@@ -539,7 +539,7 @@ impl PBO {
     /// that was read drops its stored checksum: it is signed as the PBO that would be written.
     pub fn insert_entry(&mut self, name: impl Into<String>, data: Vec<u8>) -> Result<(), Error> {
         let name = name.into().replace('/', "\\");
-        if name.split('\\').any(str::is_empty) || safe_relative_path(&name).is_none() {
+        if safe_relative_path(&name).is_none() {
             return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
         }
         self.modified(&name);
