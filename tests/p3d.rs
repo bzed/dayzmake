@@ -121,6 +121,30 @@ fn inspect_mlod() {
     assert!(out.contains("Memory"), "{}", out);
 }
 
+/// Names inside a model end up on the terminal; an escape character in them must not reach it.
+#[test]
+fn inspect_escapes_control_characters_in_names() {
+    let mut bytes = std::fs::read(fixture()).unwrap();
+    for (from, to) in [
+        (&b"body"[..], &b"bo\x1bd"[..]),
+        (b"a_co.paa", b"a_c\x1b.paa"),
+    ] {
+        assert_eq!(from.len(), to.len());
+        let at = bytes
+            .windows(from.len())
+            .position(|w| w == from)
+            .expect("name in fixture");
+        bytes[at..at + from.len()].copy_from_slice(to);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("m.p3d"), bytes).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bo\\u{1b}d"), "{out:?}");
+    assert!(out.contains("a_c\\u{1b}.paa"), "{out:?}");
+    assert!(!out.contains('\x1b'), "{out:?}");
+}
+
 #[test]
 fn inspect_odol_reports_version_for_every_version() {
     let dir = tempfile::tempdir().unwrap();

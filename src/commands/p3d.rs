@@ -50,7 +50,7 @@ pub fn cmd_inspect<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> R
             output,
             "{:3}  {:24} {:8} {:8} {:8} {:8}",
             i,
-            lod.name(),
+            printable(&lod.name()),
             lod.points.len(),
             lod.faces.len(),
             lod.face_normals.len(),
