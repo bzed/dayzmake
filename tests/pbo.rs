@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BISignVersion, cmd_sign, cmd_verify};
+use dayzmake_core::warning::Warnings;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn run_dayzmake(args: &[&str], cwd: &Path) -> (i32, String) {
@@ -99,7 +100,7 @@ fn prefix_of(content: &str) -> PBO {
     let root = dir.path().join("mod");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("$PBOPREFIX$"), content).unwrap();
-    PBO::from_directory(root, false, &[], &[]).unwrap()
+    PBO::from_directory(root, false, &[], &[], &mut Warnings::new()).unwrap()
 }
 
 #[test]
@@ -166,7 +167,14 @@ fn garbage_is_an_error_not_a_panic() {
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
     let dir = tempfile::tempdir().unwrap();
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).unwrap();
+    let mut pbo = PBO::from_directory(
+        dir.path().to_path_buf(),
+        false,
+        &[],
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
     pbo.files.clear();
     for (name, data) in entries {
         pbo.files.insert(
@@ -508,11 +516,17 @@ fn ordered_extension_folder() -> tempfile::TempDir {
 fn header_extensions_keep_file_order_and_bytes_are_stable() {
     let dir = ordered_extension_folder();
     let build = || {
-        PBO::from_directory(dir.path().to_path_buf(), false, &[], &[])
-            .unwrap()
-            .to_cursor()
-            .unwrap()
-            .into_inner()
+        PBO::from_directory(
+            dir.path().to_path_buf(),
+            false,
+            &[],
+            &[],
+            &mut Warnings::new(),
+        )
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner()
     };
     let first = build();
     for _ in 0..7 {
@@ -526,11 +540,17 @@ fn header_extensions_keep_file_order_and_bytes_are_stable() {
 #[test]
 fn unpack_writes_prefix_file_in_original_order() {
     let dir = ordered_extension_folder();
-    let bytes = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[])
-        .unwrap()
-        .to_cursor()
-        .unwrap()
-        .into_inner();
+    let bytes = PBO::from_directory(
+        dir.path().to_path_buf(),
+        false,
+        &[],
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap()
+    .to_cursor()
+    .unwrap()
+    .into_inner();
     let tmp = tempfile::tempdir().unwrap();
     fs::write(tmp.path().join("in.pbo"), bytes).unwrap();
     let (code, err) = run_dayzmake(&["unpack", "in.pbo", "out"], tmp.path());

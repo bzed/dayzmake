@@ -5,6 +5,7 @@ use std::io::Cursor;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use dayzmake_core::config::Config;
+use dayzmake_core::warning::Warnings;
 
 /// Benchmark: parsing and rapifying a mid-sized config.
 fn bench_config(c: &mut Criterion) {
@@ -33,7 +34,7 @@ class CfgPatches {
             );
             let mut cursor = Cursor::new(input);
 
-            Config::read(&mut cursor, None, &Vec::new()).unwrap();
+            Config::read(&mut cursor, None, &Vec::new(), &mut Warnings::new()).unwrap();
         });
     });
 }

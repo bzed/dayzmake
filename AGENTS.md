@@ -107,13 +107,14 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
   (file, offset, object). `main`/`run` decide whether to print and exit.
 - Don't swallow errors: `let _ = fallible()` and `.ok()` on a `Result` need a comment saying why.
 - Only the CLI layer prints (`print_stdout`/`print_stderr` are lints; the places that print carry
-  `#[expect(..., reason)]`).
+  `#[expect(..., reason)]`). The library never prints: a function that can warn takes a last parameter
+  `warnings: &mut dyn WarningSink`; the CLI sink (`src/cli_warnings.rs`) prints, the MCP server collects.
 - **Same input, same output:** builds are byte-for-byte reproducible. No `HashMap`/`HashSet` iteration order in
   output (sort first or use an ordered map), no timestamps in generated files unless a format requires them.
 
 **Concurrency**
-- No `static mut`, no new global mutable state; pass state explicitly. (The warning counters in `error.rs` are
-  the one existing exception.)
+- No `static mut`, no new global mutable state; pass state explicitly. Warnings go to a `WarningSink` passed to
+  the call (`dayzmake_core::warning`), never to a global.
 
 **Secrets**
 - Signing keys (`*.biprivatekey`) and other secrets never go into the repo, logs or error messages. The one

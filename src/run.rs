@@ -5,16 +5,18 @@ use std::path::{Path, PathBuf};
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
+use crate::cli_warnings::{PrintError, PrintWarnings};
 use dayzmake_core::binarize;
 use dayzmake_core::config;
 use dayzmake_core::error;
-use dayzmake_core::error::{ErrorExt, print_warning_summary};
+use dayzmake_core::error::ErrorExt;
 use dayzmake_core::io::{Input, Output};
 use dayzmake_core::p3d;
 use dayzmake_core::paa;
 use dayzmake_core::pbo;
 use dayzmake_core::preprocess;
 use dayzmake_core::sign;
+use dayzmake_core::warning::WarningSink;
 
 use serde::Deserialize;
 
@@ -211,24 +213,25 @@ fn get_output(args: &Args) -> Result<Output, Error> {
     clippy::too_many_lines,
     reason = "one branch per CLI command keeps the dispatch readable"
 )]
-fn run_command(args: &Args) -> Result<(), Error> {
+fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_mcp {
         crate::mcp::serve(std::io::stdin().lock(), stdout())
     } else if args.cmd_api {
-        run_api(args)
+        run_api(args, warnings)
     } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
-        binarize::cmd_binarize(source, &target, args.flag_force)
+        binarize::cmd_binarize(source, &target, args.flag_force, warnings)
     } else if args.cmd_rapify {
         config::cmd_rapify(
             &mut get_input(args)?,
             &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
+            warnings,
         )
     } else if args.cmd_derapify {
         config::cmd_derapify(&mut get_input(args)?, &mut get_output(args)?)
@@ -238,6 +241,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
             &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
             &includefolders,
+            warnings,
         )
     } else if args.cmd_build || args.cmd_pack {
         let flag_privatekey = args.flag_key.as_ref().map(PathBuf::from);
@@ -254,6 +258,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &includefolders,
+                warnings,
             )?;
         } else {
             pbo::cmd_pack(
@@ -261,6 +266,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
+                warnings,
             )?;
         }
 
@@ -295,6 +301,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
             &PathBuf::from(&args.arg_targetfolder),
             args.flag_force,
             args.flag_use_prefix,
+            warnings,
         )
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
@@ -337,7 +344,7 @@ fn run_command(args: &Args) -> Result<(), Error> {
 }
 
 /// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
-fn run_api(args: &Args) -> Result<(), Error> {
+fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let ctx = api::ApiContext {
         branch: if args.flag_experimental {
             Branch::Experimental
@@ -351,14 +358,14 @@ fn run_api(args: &Args) -> Result<(), Error> {
     #[expect(clippy::print_stdout, reason = "CLI command output")]
     {
         if args.cmd_mods {
-            let text = api::mods_text(&ctx, args.flag_json)?;
+            let text = api::mods_text(&ctx, args.flag_json, warnings)?;
             if !text.is_empty() {
                 println!("{text}");
             }
             return Ok(());
         }
         if args.cmd_update {
-            for line in api::update_lines(&ctx)? {
+            for line in api::update_lines(&ctx, warnings)? {
                 println!("{line}");
             }
             return Ok(());
@@ -368,7 +375,7 @@ fn run_api(args: &Args) -> Result<(), Error> {
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
         if args.cmd_src && args.flag_cat {
-            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json)?;
+            let text = api::src_cat(&ctx, &args.arg_name, args.flag_json, warnings)?;
             if args.flag_json {
                 println!("{text}");
             } else {
@@ -406,7 +413,14 @@ fn run_api(args: &Args) -> Result<(), Error> {
         } else {
             return Err(error!("no api command given"));
         };
-        for line in api::answer(&ctx, &query, max, args.flag_json, args.flag_verbose)? {
+        for line in api::answer(
+            &ctx,
+            &query,
+            max,
+            args.flag_json,
+            args.flag_verbose,
+            warnings,
+        )? {
             println!("{line}");
         }
     }
@@ -444,10 +458,9 @@ pub fn args(args: &mut Args) {
     }
 
     binarize::set_proton(args.flag_proton_binarize);
-    error::init_warnings(args.flag_warning.clone(), args.flag_verbose);
-    let result = run_command(args);
+    let mut warnings = PrintWarnings::new(args.flag_warning.clone(), args.flag_verbose);
+    let result = run_command(args, &mut warnings);
     binarize::cleanup(); // must happen before print_error, which exits on error
+    warnings.print_summary();
     result.print_error(true);
-
-    print_warning_summary();
 }

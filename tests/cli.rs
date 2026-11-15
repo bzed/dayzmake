@@ -236,6 +236,7 @@ fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
 fn prebinarized_build(file: &str, magic: &[u8]) {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
     std::fs::create_dir_all(&src).unwrap();
     let body = [magic, b"\x38\0\0\0 not a real model"].concat();
     std::fs::write(src.join(file), &body).unwrap();
@@ -269,6 +270,7 @@ fn build_keeps_prebinarized_rtm() {
 fn build_still_binarizes_mlod() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("m.p3d"), b"MLOD\x01\x01\0\0").unwrap();
     let (code, err) = dayzmake_no_tools(
@@ -367,6 +369,23 @@ fn build_warnings_come_in_sorted_file_order() {
         order[0].contains("a.rvmat")
             && order[1].contains("b.rvmat")
             && order[2].contains("c.rvmat"),
+        "{err}"
+    );
+}
+
+#[test]
+fn suppressed_warnings_are_summarised() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    for i in 0..12 {
+        std::fs::write(src.join(format!("c{i:02}.cpp")), b"\0raP\0\0\0\0").unwrap();
+    }
+    let (code, _, err) = dayzmake(&["build", "src", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err.matches("[prerapified-file]").count(), 10, "{err}");
+    assert!(
+        err.contains("2 warnings of type \"prerapified-file\" were suppressed to prevent spam. Use \"-w prerapified-file\" to disable these warnings entirely."),
         "{err}"
     );
 }

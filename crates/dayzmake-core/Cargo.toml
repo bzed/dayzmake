@@ -10,7 +10,6 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-colored = "2.1"
 byteorder = "1.5"
 openssl = "0.10"
 linked-hash-map = "0.5.6"

@@ -5,6 +5,8 @@
 
 /// Script API index builder and query tool.
 pub mod api;
+/// The CLI's warning sink and error printing.
+pub mod cli_warnings;
 /// Stdio MCP server exposing the API index and the file commands as tools.
 pub mod mcp;
 /// CLI definition and command dispatch.

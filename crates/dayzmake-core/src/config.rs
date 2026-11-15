@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error;
-use crate::error::{ConfigParseErrorExt, ErrorExt, warning, warning_suppressed};
+use crate::error::{ConfigParseErrorExt, ErrorExt};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::preprocess;
+use crate::warning::{Warning, WarningSink};
 
 /// State shared with the grammar for `__EVAL` / `__EXEC`.
 #[derive(Default)]
@@ -258,13 +259,14 @@ fn compressed_int_len_of(len: usize) -> usize {
 ///
 /// ```
 /// # use dayzmake_core::config::Config;
+/// # use dayzmake_core::warning::Warnings;
 /// let input = String::from("
 /// #define bar 42
 ///
 /// foo = bar;
 /// ");
 ///
-/// let config = Config::from_string(input, None, &Vec::new()).expect("Failed to parse config");
+/// let config = Config::from_string(input, None, &Vec::new(), &mut Warnings::new()).expect("Failed to parse config");
 ///
 /// assert_eq!("foo = 42;\n", config.to_string().unwrap());
 /// assert_eq!(b"\0raP", &config.to_cursor().unwrap().into_inner()[..4]);
@@ -919,6 +921,7 @@ impl Config {
         input: &mut I,
         path: Option<PathBuf>,
         includefolders: &[PathBuf],
+        warnings: &mut dyn WarningSink,
     ) -> Result<Config, Error> {
         let mut bytes = Vec::new();
         input
@@ -930,13 +933,13 @@ impl Config {
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
 
-        let (preprocessed, info) = preprocess(buffer, path, includefolders)
+        let (preprocessed, info) = preprocess(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;
 
-        let mut warnings = ConfigWarnings(Vec::new());
+        let mut found = ConfigWarnings(Vec::new());
 
         let mut ctx = EvalCtx::default();
-        let parsed = config_grammar::config(&preprocessed, &mut warnings, &mut ctx);
+        let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
         let result = match ctx.error.take() {
             // the warnings were raised by the fallback rules tried after the failed __EVAL/__EXEC
             Some(e) => return Err(e),
@@ -945,10 +948,10 @@ impl Config {
 
         // PEG backtracking runs rule actions more than once; report each warning once.
         let mut seen = std::collections::HashSet::new();
-        warnings.0.retain(|w| seen.insert((w.0, w.1.clone())));
+        found.0.retain(|w| seen.insert((w.0, w.1.clone())));
 
-        for w in warnings.0 {
-            let location = if warning_suppressed(w.2) {
+        for w in found.0 {
+            let location = if warnings.is_suppressed(w.2) {
                 (None, None)
             } else {
                 let lines_before = preprocessed[..w.0].chars().filter(|c| c == &'\n').count();
@@ -967,7 +970,14 @@ impl Config {
                 (file, Some(line))
             };
 
-            warning(w.1, w.2, location);
+            let mut warning = Warning::new(w.2, w.1);
+            if let Some(file) = location.0 {
+                warning = warning.in_file(file);
+            }
+            if let Some(line) = location.1 {
+                warning = warning.at_line(line);
+            }
+            warnings.warn(warning);
         }
 
         result
@@ -986,9 +996,10 @@ impl Config {
         input: String,
         path: Option<PathBuf>,
         includefolders: &[PathBuf],
+        warnings: &mut dyn WarningSink,
     ) -> Result<Config, Error> {
         let mut cursor = Cursor::new(input.into_bytes());
-        Self::read(&mut cursor, path, includefolders)
+        Self::read(&mut cursor, path, includefolders, warnings)
     }
 
     /// Reads the rapified config from input.
@@ -1027,6 +1038,7 @@ pub fn cmd_rapify<I: Read, O: Write>(
     output: &mut O,
     path: Option<PathBuf>,
     includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut bytes = Vec::new();
     input
@@ -1034,16 +1046,19 @@ pub fn cmd_rapify<I: Read, O: Write>(
         .prepend_error("Failed to read input file:")?;
 
     if is_rapified(&bytes) {
-        warning(
-            "Input is already rapified; passing it through unchanged.",
+        let mut warning = Warning::new(
             Some("prerapified-file"),
-            (path.as_ref().and_then(|p| p.to_str()), None),
+            "Input is already rapified; passing it through unchanged.",
         );
+        if let Some(file) = path.as_ref().and_then(|p| p.to_str()) {
+            warning = warning.in_file(file);
+        }
+        warnings.warn(warning);
         output.write_all(&bytes)?;
         return Ok(());
     }
 
-    let config = Config::read(&mut Cursor::new(bytes), path, includefolders)?;
+    let config = Config::read(&mut Cursor::new(bytes), path, includefolders, warnings)?;
 
     config
         .write_rapified(output)

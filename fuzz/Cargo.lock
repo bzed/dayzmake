@@ -157,7 +157,6 @@ name = "dayzmake-core"
 version = "0.1.0"
 dependencies = [
  "byteorder",
- "colored",
  "encoding_rs",
  "image",
  "linked-hash-map",

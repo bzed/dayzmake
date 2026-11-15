@@ -20,13 +20,14 @@ use crate::api::{self, ApiContext};
 use dayzmake_core::binarize;
 use dayzmake_core::config;
 use dayzmake_core::error;
-use dayzmake_core::error::{ErrorExt, capture_warnings};
+use dayzmake_core::error::ErrorExt;
 use dayzmake_core::io::create_target;
 use dayzmake_core::p3d;
 use dayzmake_core::paa;
 use dayzmake_core::pbo;
 use dayzmake_core::preprocess;
 use dayzmake_core::sign;
+use dayzmake_core::warning::{WarningSink, Warnings};
 
 /// Longest request line accepted; a longer one is answered with an error and skipped.
 const MAX_LINE: usize = 16 * 1024 * 1024;
@@ -221,18 +222,19 @@ fn run_tool(name: &str, args: &Args) -> Value {
         }
     };
     // A panic in a tool must not kill the server. The closure only borrows plain data and the
-    // global state it touches (warning capture, proton flag) is reset below or by its guards.
-    let outcome = catch_unwind(AssertUnwindSafe(|| {
-        capture_warnings(|| call_tool(name, args))
-    }));
+    // global state it touches (the proton flag) is reset below or by its guards. Every call has its
+    // own warnings, with their own quotas.
+    let mut sink = Warnings::new();
+    let outcome = catch_unwind(AssertUnwindSafe(|| call_tool(name, args, &mut sink)));
+    let warnings: Vec<String> = sink.warnings().iter().map(ToString::to_string).collect();
     binarize::set_proton(false);
     binarize::cleanup();
     let (text, is_error) = match outcome {
-        Ok((Ok(out), warnings)) => (
+        Ok(Ok(out)) => (
             with_warnings(&window(&out, offset, length), &warnings),
             false,
         ),
-        Ok((Err(e), warnings)) => (
+        Ok(Err(e)) => (
             with_warnings(&window(&e.to_string(), 0, MAX_OUTPUT), &warnings),
             true,
         ),
@@ -736,9 +738,9 @@ fn include_folders(args: &Args) -> Result<Vec<PathBuf>, Error> {
 // ---- tools ----
 
 /// Runs the named tool and returns its output text.
-fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
+fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
-        n if n.starts_with("api_") => api_tool_call(n, args),
+        n if n.starts_with("api_") => api_tool_call(n, args, warnings),
         "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?),
         "pbo_cat" => pbo_cat(args),
         "pbo_unpack" => {
@@ -748,6 +750,7 @@ fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
                 &target,
                 bool_arg(args, "force")?,
                 bool_arg(args, "use_prefix")?,
+                warnings,
             )?;
             Ok(format!(
                 "unpacked {} to {}",
@@ -755,13 +758,13 @@ fn call_tool(name: &str, args: &Args) -> Result<String, Error> {
                 target.display()
             ))
         }
-        "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args),
-        _ => file_tool(name, args),
+        "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args, warnings),
+        _ => file_tool(name, args, warnings),
     }
 }
 
 /// The tools for configs, textures, keys, signatures and models.
-fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
+fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
         "config_rapify" => {
             let source = path_arg(args, "source")?;
@@ -771,6 +774,7 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
                 &mut out,
                 Some(source),
                 &include_folders(args)?,
+                warnings,
             )?;
             write_target(&path_arg(args, "target")?, &out, bool_arg(args, "force")?)
         }
@@ -787,6 +791,7 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
                 &mut out,
                 Some(source),
                 &include_folders(args)?,
+                warnings,
             )?;
             text_or_target(args, &out)
         }
@@ -843,7 +848,12 @@ fn file_tool(name: &str, args: &Args) -> Result<String, Error> {
         }
         "binarize" => {
             let target = path_arg(args, "target")?;
-            binarize::cmd_binarize(path_arg(args, "source")?, &target, bool_arg(args, "force")?)?;
+            binarize::cmd_binarize(
+                path_arg(args, "source")?,
+                &target,
+                bool_arg(args, "force")?,
+                warnings,
+            )?;
             Ok(format!("wrote {}", target.display()))
         }
         _ => Err(error!("unknown tool \"{name}\"")),
@@ -883,12 +893,16 @@ fn api_context(args: &Args, refresh: bool) -> Result<ApiContext, Error> {
     })
 }
 
-fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
+fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     if name == "api_mods" {
-        return api::mods_text(&api_context(args, false)?, bool_arg(args, "json")?);
+        return api::mods_text(
+            &api_context(args, false)?,
+            bool_arg(args, "json")?,
+            warnings,
+        );
     }
     if name == "api_update" {
-        return Ok(api::update_lines(&api_context(args, true)?)?.join("\n"));
+        return Ok(api::update_lines(&api_context(args, true)?, warnings)?.join("\n"));
     }
     let ctx = api_context(args, false)?;
     let json = bool_arg(args, "json")?;
@@ -915,7 +929,7 @@ fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
         "api_source" => {
             let name = str_arg(args, "name")?;
             if bool_arg(args, "cat")? {
-                let text = api::src_cat(&ctx, &name, json)?;
+                let text = api::src_cat(&ctx, &name, json, warnings)?;
                 return match opt_path(args, "target")? {
                     Some(target) => {
                         write_target(&target, text.as_bytes(), bool_arg(args, "force")?)
@@ -930,7 +944,7 @@ fn api_tool_call(name: &str, args: &Args) -> Result<String, Error> {
         },
         _ => return Err(error!("unknown tool \"{name}\"")),
     };
-    Ok(api::answer(&ctx, &query, max_arg(args)?, json, false)?.join("\n"))
+    Ok(api::answer(&ctx, &query, max_arg(args)?, json, false, warnings)?.join("\n"))
 }
 
 fn pbo_inspect(path: &Path) -> Result<String, Error> {
@@ -963,7 +977,7 @@ fn pbo_cat(args: &Args) -> Result<String, Error> {
 }
 
 /// `pbo_pack` and `pbo_build`: like the CLI commands, including signing with `key`.
-fn pack(build: bool, args: &Args) -> Result<String, Error> {
+fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     let source = path_arg(args, "source")?;
     let target = path_arg(args, "target")?;
     let force = bool_arg(args, "force")?;
@@ -980,10 +994,11 @@ fn pack(build: bool, args: &Args) -> Result<String, Error> {
             &headerext,
             &exclude,
             &include_folders(args)?,
+            warnings,
         )?;
     } else {
         let mut file = create_target(&target, force)?;
-        pbo::cmd_pack(source, &mut file, &headerext, &exclude)?;
+        pbo::cmd_pack(source, &mut file, &headerext, &exclude, warnings)?;
     }
     if let Some(key) = key {
         sign::cmd_sign(key, target.clone(), None, sign::BISignVersion::V3, force)?;

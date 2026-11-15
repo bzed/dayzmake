@@ -3,6 +3,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use dayzmake_core::preprocess::preprocess;
+use dayzmake_core::warning::Warnings;
 
 /// Benchmark: preprocessing a mid-sized config.
 fn bench_preprocess_short(c: &mut Criterion) {
@@ -30,7 +31,7 @@ class CfgPatches {
 };",
             );
 
-            preprocess(input, None, &Vec::new()).unwrap();
+            preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
         });
     });
 }

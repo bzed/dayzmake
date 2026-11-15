@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use dayzmake_core::pbo::PBO;
+use dayzmake_core::warning::Warnings;
 use serde_json::{Value, json};
 
 struct Run {
@@ -90,7 +91,14 @@ fn is_error(reply: &Value) -> bool {
 /// A PBO with the given entries (name, bytes), built through the library.
 fn make_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).expect("pbo");
+    let mut pbo = PBO::from_directory(
+        dir.path().to_path_buf(),
+        false,
+        &[],
+        &[],
+        &mut Warnings::new(),
+    )
+    .expect("pbo");
     pbo.files.clear();
     for (name, data) in entries {
         pbo.files.insert(
@@ -315,7 +323,7 @@ fn fake_steam() -> FakeSteam {
     )
     .expect("manifest");
     let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/api/vanilla/scripts");
-    let pbo = PBO::from_directory(scripts, false, &[], &[]).expect("pbo");
+    let pbo = PBO::from_directory(scripts, false, &[], &[], &mut Warnings::new()).expect("pbo");
     pbo.write(
         &mut fs::File::create(root.join("steamapps/common/DayZ/dta/scripts.pbo")).expect("create"),
     )

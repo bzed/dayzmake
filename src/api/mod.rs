@@ -10,8 +10,9 @@ use serde::Serialize;
 
 use cache::dir_hash;
 use dayzmake_core::error;
-use dayzmake_core::error::{printable, warning};
+use dayzmake_core::error::printable;
 use dayzmake_core::pbo::{PBO, SelectedEntry, safe_relative_path};
+use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
 use source::{
@@ -50,9 +51,9 @@ fn game_dir(ctx: &ApiContext, libs: &[PathBuf]) -> Option<PathBuf> {
 
 /// Every installed mod of the context, for `dayzmake api mods`.
 #[must_use]
-pub fn list_mods(ctx: &ApiContext) -> Vec<InstalledMod> {
+pub fn list_mods(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Vec<InstalledMod> {
     let libs = libraries(&steam_roots());
-    installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref())
+    installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref(), warnings)
 }
 
 /// `dayzmake api mods`: one line per installed mod (`<id or ->  <name>  <dir>  [scripts]`), or JSON
@@ -61,8 +62,12 @@ pub fn list_mods(ctx: &ApiContext) -> Vec<InstalledMod> {
 /// # Errors
 ///
 /// Returns an error when the JSON cannot be produced.
-pub fn mods_text(ctx: &ApiContext, json: bool) -> Result<String, Error> {
-    let mods = list_mods(ctx);
+pub fn mods_text(
+    ctx: &ApiContext,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<String, Error> {
+    let mods = list_mods(ctx, warnings);
     if json {
         return serde_json::to_string(&serde_json::json!({ "mods": mods }))
             .map_err(|e| error!("cannot serialize: {e}"));
@@ -82,7 +87,7 @@ pub fn mods_text(ctx: &ApiContext, json: bool) -> Result<String, Error> {
         .join("\n"))
 }
 
-fn locate(ctx: &ApiContext) -> Result<Located, Error> {
+fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, Error> {
     let libs = libraries(&steam_roots());
     let (scripts_pbo, build) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
@@ -115,7 +120,7 @@ fn locate(ctx: &ApiContext) -> Result<Located, Error> {
             .iter()
             .any(|s| matches!(s, ModSpec::All | ModSpec::Name(_)))
         {
-            installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref())
+            installed_mods(ctx.branch, &libs, game_dir(ctx, &libs).as_deref(), warnings)
         } else {
             Vec::new()
         };
@@ -189,10 +194,18 @@ fn workers(jobs: usize) -> usize {
 }
 
 /// The cached or freshly built index of every mod, in the order of `mods`. A mod that fails is skipped with a
-/// warning; so is one whose worker thread panicked.
-fn load_mods(found: &Located, branch: Branch, refresh: bool) -> Vec<Option<(String, ApiIndex)>> {
+/// warning; so is one whose worker thread panicked. The workers collect their warnings per mod; they are
+/// passed on in the order of `mods`, so the output does not depend on thread timing.
+fn load_mods(
+    found: &Located,
+    branch: Branch,
+    refresh: bool,
+    warnings: &mut dyn WarningSink,
+) -> Vec<Option<(String, ApiIndex)>> {
     let next = AtomicUsize::new(0);
     let mut out: Vec<Option<(String, ApiIndex)>> = found.mods.iter().map(|_| None).collect();
+    let mut raised: Vec<Vec<Warning>> = found.mods.iter().map(|_| Vec::new()).collect();
+    let mut panicked = false;
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers(found.mods.len()))
             .map(|_| {
@@ -204,14 +217,24 @@ fn load_mods(found: &Located, branch: Branch, refresh: bool) -> Vec<Option<(Stri
                             break;
                         };
                         let key = mod_key(m, branch);
-                        match cache::cached(&key, &m.pbos, refresh, || build_mod(m, branch)) {
-                            Ok(index) => done.push((i, key, index)),
-                            Err(e) => warning(
-                                format!("skipping mod {}: {e}", m.name),
-                                Some("api-bad-mod"),
-                                (Some(m.dir.display().to_string()), None),
-                            ),
-                        }
+                        let mut local = Warnings::new();
+                        local.unlimited();
+                        let index = match cache::cached(&key, &m.pbos, refresh, &mut local, |w| {
+                            build_mod(m, branch, w)
+                        }) {
+                            Ok(index) => Some(index),
+                            Err(e) => {
+                                local.warn(
+                                    Warning::new(
+                                        Some("api-bad-mod"),
+                                        format!("skipping mod {}: {e}", m.name),
+                                    )
+                                    .in_file(m.dir.display().to_string()),
+                                );
+                                None
+                            }
+                        };
+                        done.push((i, key, index, local.into_warnings()));
                     }
                     done
                 })
@@ -220,35 +243,48 @@ fn load_mods(found: &Located, branch: Branch, refresh: bool) -> Vec<Option<(Stri
         for handle in handles {
             match handle.join() {
                 Ok(done) => {
-                    for (i, key, index) in done {
+                    for (i, key, index, w) in done {
                         if let Some(slot) = out.get_mut(i) {
-                            *slot = Some((key, index));
+                            *slot = index.map(|index| (key, index));
+                        }
+                        if let Some(slot) = raised.get_mut(i) {
+                            *slot = w;
                         }
                     }
                 }
-                Err(_) => warning(
-                    "an indexing thread panicked; its mods are skipped",
-                    Some("api-bad-mod"),
-                    (None, None),
-                ),
+                Err(_) => panicked = true,
             }
         }
     });
+    for warning in raised.into_iter().flatten() {
+        warnings.warn(warning);
+    }
+    if panicked {
+        warnings.warn(Warning::new(
+            Some("api-bad-mod"),
+            "an indexing thread panicked; its mods are skipped",
+        ));
+    }
     out
 }
 
 /// The indexes of vanilla and of the located mods, with their cache keys.
-fn load_located(ctx: &ApiContext, found: &Located) -> Result<Vec<(String, ApiIndex)>, Error> {
+fn load_located(
+    ctx: &ApiContext,
+    found: &Located,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<(String, ApiIndex)>, Error> {
     let key = format!("vanilla-{}", ctx.branch.name());
     let index = cache::cached(
         &key,
         std::slice::from_ref(&found.scripts_pbo),
         ctx.refresh,
-        || build_vanilla(&found.scripts_pbo, ctx.branch, &found.build),
+        warnings,
+        |w| build_vanilla(&found.scripts_pbo, ctx.branch, &found.build, w),
     )?;
     let mut out = vec![(key, index)];
     out.extend(
-        load_mods(found, ctx.branch, ctx.refresh)
+        load_mods(found, ctx.branch, ctx.refresh, warnings)
             .into_iter()
             .flatten(),
     );
@@ -262,8 +298,12 @@ fn load_located(ctx: &ApiContext, found: &Located) -> Result<Vec<(String, ApiInd
 ///
 /// Returns an error when the install or a selected mod is missing or the vanilla PBO or the cache cannot be
 /// read. A mod that cannot be indexed is skipped with a warning.
-pub fn load_keyed(ctx: &ApiContext) -> Result<Vec<(String, ApiIndex)>, Error> {
-    load_located(ctx, &locate(ctx)?)
+pub fn load_keyed(
+    ctx: &ApiContext,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<(String, ApiIndex)>, Error> {
+    let found = locate(ctx, warnings)?;
+    load_located(ctx, &found, warnings)
 }
 
 /// The indexes to query: vanilla at position 0, then the selected mods. Stale caches are rebuilt.
@@ -271,8 +311,14 @@ pub fn load_keyed(ctx: &ApiContext) -> Result<Vec<(String, ApiIndex)>, Error> {
 /// # Errors
 ///
 /// See [`load_keyed`].
-pub fn load_indexes(ctx: &ApiContext) -> Result<Vec<ApiIndex>, Error> {
-    Ok(load_keyed(ctx)?.into_iter().map(|(_, i)| i).collect())
+pub fn load_indexes(
+    ctx: &ApiContext,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<ApiIndex>, Error> {
+    Ok(load_keyed(ctx, warnings)?
+        .into_iter()
+        .map(|(_, i)| i)
+        .collect())
 }
 
 /// One source file that declares a class or enum, with its full text.
@@ -297,9 +343,13 @@ pub struct SrcContent {
 /// # Errors
 ///
 /// Returns an error when the name is unknown or a PBO cannot be read.
-pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Error> {
-    let found = locate(ctx)?;
-    let indexes: Vec<ApiIndex> = load_located(ctx, &found)?
+pub fn src_contents(
+    ctx: &ApiContext,
+    name: &str,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<SrcContent>, Error> {
+    let found = locate(ctx, warnings)?;
+    let indexes: Vec<ApiIndex> = load_located(ctx, &found, warnings)?
         .into_iter()
         .map(|(_, i)| i)
         .collect();
@@ -368,9 +418,13 @@ pub fn src_contents(ctx: &ApiContext, name: &str) -> Result<Vec<SrcContent>, Err
 /// # Errors
 ///
 /// See [`src_contents`].
-pub fn cat_sources(ctx: &ApiContext, name: &str) -> Result<String, Error> {
+pub fn cat_sources(
+    ctx: &ApiContext,
+    name: &str,
+    warnings: &mut dyn WarningSink,
+) -> Result<String, Error> {
     let mut out = String::new();
-    for f in src_contents(ctx, name)? {
+    for f in src_contents(ctx, name, warnings)? {
         if !out.is_empty() {
             out.push('\n');
         }
@@ -410,8 +464,11 @@ mod scan;
 /// # Errors
 ///
 /// See [`load_keyed`].
-pub fn update_lines(ctx: &ApiContext) -> Result<Vec<String>, Error> {
-    Ok(load_keyed(ctx)?
+pub fn update_lines(
+    ctx: &ApiContext,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<String>, Error> {
+    Ok(load_keyed(ctx, warnings)?
         .into_iter()
         .map(|(key, index)| format!("{key}: {} classes, {}", index.classes.len(), index.build))
         .collect())
@@ -429,8 +486,9 @@ pub fn answer(
     max: usize,
     json: bool,
     verbose: bool,
+    warnings: &mut dyn WarningSink,
 ) -> Result<Vec<String>, Error> {
-    let indexes = load_indexes(ctx)?;
+    let indexes = load_indexes(ctx, warnings)?;
     let result = run_query(&indexes, query)?;
     if json {
         return Ok(vec![render_json(&result, max)]);
@@ -452,12 +510,17 @@ pub fn answer(
 /// # Errors
 ///
 /// Returns an error when the name is unknown or a PBO cannot be read.
-pub fn src_cat(ctx: &ApiContext, name: &str, json: bool) -> Result<String, Error> {
+pub fn src_cat(
+    ctx: &ApiContext,
+    name: &str,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<String, Error> {
     if json {
-        let files = src_contents(ctx, name)?;
+        let files = src_contents(ctx, name, warnings)?;
         serde_json::to_string(&serde_json::json!({ "files": files }))
             .map_err(|e| error!("cannot serialize: {e}"))
     } else {
-        cat_sources(ctx, name)
+        cat_sources(ctx, name, warnings)
     }
 }

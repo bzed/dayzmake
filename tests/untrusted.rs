@@ -12,6 +12,7 @@ use dayzmake_core::p3d::{self, P3D};
 use dayzmake_core::paa::Paa;
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
+use dayzmake_core::warning::Warnings;
 
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const MUTANTS_PER_FILE: usize = 300;
@@ -306,7 +307,14 @@ fn sign_rejects_a_key_name_with_a_path_separator() {
 /// A PBO with the given entry names and header extensions, built through the library.
 fn crafted_pbo(names: &[&str], extensions: &[(&str, &str)]) -> Vec<u8> {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(dir.path().to_path_buf(), false, &[], &[]).expect("pbo");
+    let mut pbo = PBO::from_directory(
+        dir.path().to_path_buf(),
+        false,
+        &[],
+        &[],
+        &mut Warnings::new(),
+    )
+    .expect("pbo");
     pbo.files.clear();
     for name in names {
         pbo.files.insert(

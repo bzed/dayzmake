@@ -9,7 +9,8 @@ use std::io::{Error, Read, Write};
 use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{ErrorExt, PreprocessParseErrorExt, warning};
+use crate::error::{ErrorExt, PreprocessParseErrorExt};
+use crate::warning::{Warning, WarningSink};
 
 peg::parser! {
     /// PEG grammar for the preprocessor: directives, macros, comments and tokens.
@@ -633,16 +634,15 @@ fn include_not_found(include_path: &str, origin: Option<&Path>, line: u32) -> Er
     }
 }
 
-fn warn_include_case(include_path: &str, found: &Path) {
-    warning(
+fn warn_include_case(include_path: &str, found: &Path, warnings: &mut dyn WarningSink) {
+    warnings.warn(Warning::new(
+        Some("include-case"),
         format!(
             "Include \"{}\" only matched \"{}\" ignoring case.",
             include_path,
             found.display()
         ),
-        Some("include-case"),
-        (None, None),
-    );
+    ));
 }
 
 fn find_include_file(
@@ -650,6 +650,7 @@ fn find_include_file(
     origin: Option<&Path>,
     search_paths: &[PathBuf],
     line: u32,
+    warnings: &mut dyn WarningSink,
 ) -> Result<PathBuf, Error> {
     if include_path.starts_with('\\') {
         let mut roots: Vec<PathBuf> = Vec::new();
@@ -667,7 +668,7 @@ fn find_include_file(
             for root in &roots {
                 if let Some(file_path) = search_directory(include_path, root, ci) {
                     if ci {
-                        warn_include_case(include_path, &file_path);
+                        warn_include_case(include_path, &file_path, warnings);
                     }
                     return Ok(file_path);
                 }
@@ -708,7 +709,7 @@ fn find_include_file(
             if let Some(found) = resolve_case_insensitive(&root, &relative)
                 && differs_in_case(&absolute, &found)
             {
-                warn_include_case(include_path, &found);
+                warn_include_case(include_path, &found, warnings);
             }
             return Ok(absolute);
         }
@@ -716,7 +717,7 @@ fn find_include_file(
         // case-insensitive fallback for case-sensitive filesystems
         match resolve_case_insensitive(&root, &relative) {
             Some(found) if found.is_file() => {
-                warn_include_case(include_path, &found);
+                warn_include_case(include_path, &found, warnings);
                 Ok(found)
             }
             _ => Err(include_not_found(include_path, origin, line)),
@@ -734,6 +735,7 @@ fn preprocess_rec(
     definition_map: &mut HashMap<String, Definition>,
     info: &mut PreprocessInfo,
     includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
@@ -761,8 +763,13 @@ fn preprocess_rec(
                         //    // @todo: complain
                         //}
 
-                        let file_path =
-                            find_include_file(&path, origin, includefolders, original_lineno)?;
+                        let file_path = find_include_file(
+                            &path,
+                            origin,
+                            includefolders,
+                            original_lineno,
+                            warnings,
+                        )?;
 
                         info.import_stack.push(file_path.clone());
 
@@ -774,6 +781,7 @@ fn preprocess_rec(
                             definition_map,
                             info,
                             includefolders,
+                            warnings,
                         )
                         .prepend_error(format!("Failed to preprocess include \"{path}\":"))?;
 
@@ -854,11 +862,12 @@ fn preprocess_rec(
 
                 let file = origin.map(|p| p.display().to_string());
                 for msg in mismatches {
-                    warning(
-                        msg,
-                        Some("macro-arg-count"),
-                        (file.clone(), Some(original_lineno)),
-                    );
+                    let mut warning =
+                        Warning::new(Some("macro-arg-count"), msg).at_line(original_lineno);
+                    if let Some(file) = &file {
+                        warning = warning.in_file(file.clone());
+                    }
+                    warnings.warn(warning);
                 }
 
                 output += &result;
@@ -896,6 +905,7 @@ fn preprocess_rec(
 ///
 /// ```
 /// # use dayzmake_core::preprocess::preprocess;
+/// # use dayzmake_core::warning::Warnings;
 /// let input = String::from("
 /// #define QUOTE(x) #x
 /// #define DOUBLES(x,y) x##_##y
@@ -903,7 +913,7 @@ fn preprocess_rec(
 /// foo = QUOTE(DOUBLES(abc, xyz));
 /// ");
 ///
-/// let (output, _) = preprocess(input, None, &Vec::new()).expect("Failed to preprocess");
+/// let (output, _) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).expect("Failed to preprocess");
 ///
 /// assert_eq!("foo = \"abc_xyz\";", output.trim());
 /// ```
@@ -915,6 +925,7 @@ pub fn preprocess(
     mut input: String,
     origin: Option<PathBuf>,
     includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) -> Result<(String, PreprocessInfo), Error> {
     if input.as_bytes().starts_with(&[0xef, 0xbb, 0xbf]) {
         input = input[3..].to_string();
@@ -946,6 +957,7 @@ pub fn preprocess(
         &mut def_map,
         &mut info,
         includefolders,
+        warnings,
     ) {
         Ok(result) => Ok((result, info)),
         Err(e) => Err(e),
@@ -966,13 +978,14 @@ pub fn cmd_preprocess<I: Read, O: Write>(
     output: &mut O,
     path: Option<PathBuf>,
     includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut buffer = String::new();
     input
         .read_to_string(&mut buffer)
         .prepend_error("Failed to read input file")?;
 
-    let (result, _) = preprocess(buffer, path, includefolders)?;
+    let (result, _) = preprocess(buffer, path, includefolders, warnings)?;
 
     output
         .write_all(result.as_bytes())

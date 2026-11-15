@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use dayzmake_core::preprocess::*;
+use dayzmake_core::warning::Warnings;
 
 #[test]
 fn test_preprocess_macros() {
@@ -30,7 +31,7 @@ class CfgPatches {
 };",
     );
 
-    let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
+    let (output, _) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
 
     assert_eq!(
         "\
@@ -68,7 +69,7 @@ fn test_preprocess_ifdef() {
 ",
     );
 
-    let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
+    let (output, _) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
 
     assert_eq!("abc = 1234;", output.trim());
 }
@@ -109,7 +110,13 @@ bar_foo\n",
     let includepath = addondir.join("include.h").canonicalize().unwrap();
 
     let includefolders = vec![PathBuf::from(includedir.path())];
-    let (output, info) = preprocess(input, Some(PathBuf::from("myfile")), &includefolders).unwrap();
+    let (output, info) = preprocess(
+        input,
+        Some(PathBuf::from("myfile")),
+        &includefolders,
+        &mut Warnings::new(),
+    )
+    .unwrap();
 
     assert_eq!("bar_foo\n\nfoo_bar", output.trim());
     assert_eq!((2, Some(includepath)), info.line_origins[0]);
@@ -119,7 +126,7 @@ bar_foo\n",
 #[test]
 fn test_proprocess_bom() {
     let input = String::from_utf8(vec![0xef, 0xbb, 0xbf]).unwrap() + "blub";
-    let (output, _) = preprocess(input, None, &Vec::new()).unwrap();
+    let (output, _) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
 
     assert_eq!("blub", output.trim());
 }
@@ -140,7 +147,7 @@ class test\\
 };\n",
     );
 
-    let (_, info) = preprocess(input, None, &Vec::new()).unwrap();
+    let (_, info) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
     assert_eq!(5, info.line_origins.len());
     assert_eq!(8, info.line_origins[2].0);
 }
@@ -166,6 +173,7 @@ y=Y;
         input,
         Some(dir.path().join("f.cpp")),
         &[dir.path().to_path_buf()],
+        &mut Warnings::new(),
     )
     .unwrap();
     assert!(output.contains("inc"), "{output:?}");
@@ -182,7 +190,13 @@ fn include_case_insensitive_absolute() {
         .write_all(b"found\n")
         .unwrap();
     let input = String::from("#include \"\\z\\mod\\Foo.hpp\"\n");
-    let (output, _) = preprocess(input, None, &[dir.path().to_path_buf()]).unwrap();
+    let (output, _) = preprocess(
+        input,
+        None,
+        &[dir.path().to_path_buf()],
+        &mut Warnings::new(),
+    )
+    .unwrap();
     assert!(output.contains("found"), "{output:?}");
 }
 
@@ -203,6 +217,7 @@ fn include_exact_case_wins() {
         input,
         Some(dir.path().join("f.cpp")),
         &[dir.path().to_path_buf()],
+        &mut Warnings::new(),
     )
     .unwrap();
     assert!(output.contains("a=2;"), "{output:?}");
@@ -218,12 +233,20 @@ fn truncated_input_does_not_panic() {
         let Some(prefix) = input.get(..len) else {
             continue;
         };
-        let _ = preprocess(prefix.to_string(), None, &Vec::new());
+        let _ = preprocess(prefix.to_string(), None, &Vec::new(), &mut Warnings::new());
     }
 }
 
 /// An `#endif` without a matching `#ifdef`/`#ifndef` is an error, not a panic.
 #[test]
 fn endif_without_ifdef_is_an_error() {
-    assert!(preprocess(String::from("#endif\n"), None, &Vec::new()).is_err());
+    assert!(
+        preprocess(
+            String::from("#endif\n"),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
 }

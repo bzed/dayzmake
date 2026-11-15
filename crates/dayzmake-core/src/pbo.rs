@@ -17,9 +17,10 @@ static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap()
 
 use crate::binarize;
 use crate::config::{Config, is_rapified};
-use crate::error::{ErrorExt, printable, warning};
+use crate::error::{ErrorExt, printable};
 use crate::io::WriteExt;
 use crate::p3d;
+use crate::warning::{Warning, WarningSink};
 
 struct PBOHeader {
     filename: String,
@@ -69,16 +70,15 @@ fn decode_name(bytes: Vec<u8>) -> (String, Option<Vec<u8>>) {
 }
 
 /// Normalizes a PBO prefix: forward slashes become backslashes, leading and trailing separators are removed.
-fn normalize_prefix(prefix: &str, warn: bool) -> String {
+fn normalize_prefix(prefix: &str, warn: bool, warnings: &mut dyn WarningSink) -> String {
     let trimmed = prefix.trim();
     let normalized = trimmed.replace('/', "\\");
     let stripped = normalized.trim_matches('\\');
     if warn && stripped.len() != normalized.len() {
-        warning(
-            format!("Removed leading/trailing slashes from prefix {trimmed:?}."),
+        warnings.warn(Warning::new(
             Some("prefix-slash"),
-            (None, None),
-        );
+            format!("Removed leading/trailing slashes from prefix {trimmed:?}."),
+        ));
     }
     stripped.to_string()
 }
@@ -99,6 +99,7 @@ fn parse_prefix_file(
     content: &str,
     header_extensions: &mut LinkedHashMap<String, String>,
     warn: bool,
+    warnings: &mut dyn WarningSink,
 ) {
     for l in content.lines() {
         if l.is_empty() {
@@ -107,10 +108,18 @@ fn parse_prefix_file(
 
         match l.split_once('=') {
             None => {
-                set_extension(header_extensions, "prefix", normalize_prefix(l, warn));
+                set_extension(
+                    header_extensions,
+                    "prefix",
+                    normalize_prefix(l, warn, warnings),
+                );
             }
             Some((key, value)) if key == "prefix" => {
-                set_extension(header_extensions, key, normalize_prefix(value, warn));
+                set_extension(
+                    header_extensions,
+                    key,
+                    normalize_prefix(value, warn, warnings),
+                );
             }
             Some((key, value)) => {
                 set_extension(header_extensions, key, value.to_string());
@@ -126,7 +135,8 @@ fn parse_prefix_file(
 /// ```
 /// # use std::path::PathBuf;
 /// # use dayzmake_core::pbo::PBO;
-/// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new()).expect("Failed to create PBO");
+/// # use dayzmake_core::warning::Warnings;
+/// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new(), &mut Warnings::new()).expect("Failed to create PBO");
 ///
 /// assert!(pbo.files.iter().any(|(name, _data)| name == "lib.rs"));
 ///
@@ -519,6 +529,7 @@ impl PBO {
         mut binarize: bool,
         exclude_patterns: &[String],
         includefolders: &[PathBuf],
+        warnings: &mut dyn WarningSink,
     ) -> Result<PBO, Error> {
         let file_list = list_files(&directory)?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
@@ -532,7 +543,7 @@ impl PBO {
         let mut pre_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
         for prefix_file in &["$PBOPREFIX$", "$PREFIX$"] {
             if let Ok(content) = std::fs::read_to_string(directory.join(prefix_file)) {
-                parse_prefix_file(&content, &mut pre_extensions, false);
+                parse_prefix_file(&content, &mut pre_extensions, false, warnings);
             }
         }
         let prefix: String = pre_extensions.get("prefix").cloned().unwrap_or_else(|| {
@@ -574,10 +585,12 @@ impl PBO {
             };
             let prebinarized = prebinarized_as.is_some();
             if let Some(description) = prebinarized_as {
-                warning(
-                    format!("File is already binarized ({description}); copying it as-is."),
-                    Some("prebinarized-file"),
-                    (Some(relative.to_string_lossy().into_owned()), None),
+                warnings.warn(
+                    Warning::new(
+                        Some("prebinarized-file"),
+                        format!("File is already binarized ({description}); copying it as-is."),
+                    )
+                    .in_file(relative.to_string_lossy()),
                 );
             } else if binarize
                 && is_binarizable
@@ -591,13 +604,14 @@ impl PBO {
                     &prefix,
                     &addon_files,
                     includefolders,
+                    warnings,
                 );
             }
 
             if name == "$PBOPREFIX$" || name == "$PREFIX$" {
                 let mut content = String::new();
                 file.read_to_string(&mut content)?;
-                parse_prefix_file(&content, &mut header_extensions, true);
+                parse_prefix_file(&content, &mut header_extensions, true, warnings);
             } else if binarize
                 && ["cpp", "rvmat"]
                     .contains(&path.extension().and_then(|e| e.to_str()).unwrap_or(""))
@@ -606,29 +620,37 @@ impl PBO {
                 file.read_to_end(&mut buffer)?;
 
                 if is_rapified(&buffer) {
-                    warning(
-                        "File is already rapified; copying it as-is.",
-                        Some("prerapified-file"),
-                        (Some(relative.to_string_lossy().as_ref()), None),
+                    warnings.warn(
+                        Warning::new(
+                            Some("prerapified-file"),
+                            "File is already rapified; copying it as-is.",
+                        )
+                        .in_file(relative.to_string_lossy()),
                     );
                     files.insert(name, Cursor::new(buffer.into_boxed_slice()));
                 } else {
-                    let config =
-                        Config::read(&mut Cursor::new(buffer), Some(path.clone()), includefolders)
-                            .prepend_error("Failed to parse config:")?;
+                    let config = Config::read(
+                        &mut Cursor::new(buffer),
+                        Some(path.clone()),
+                        includefolders,
+                        warnings,
+                    )
+                    .prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
                 }
             } else if binarize::available() && binarize && is_binarizable && !prebinarized {
-                let cursor = binarize::binarize(&path, &directory, &prefix)
+                let cursor = binarize::binarize(&path, &directory, &prefix, warnings)
                     .prepend_error(format!("Failed to binarize {}:", relative.display()))?;
 
                 files.insert(name, cursor);
             } else {
                 if is_binarizable && !prebinarized && !binarize::available() {
-                    warning(
-                        "On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is.",
-                        Some("non-windows-binarization"),
-                        (Some(relative.to_string_lossy().as_ref()), None),
+                    warnings.warn(
+                        Warning::new(
+                            Some("non-windows-binarization"),
+                            "On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is.",
+                        )
+                        .in_file(relative.to_string_lossy()),
                     );
                 }
 
@@ -931,14 +953,14 @@ fn write_prefix_file(
     extensions: &LinkedHashMap<String, String>,
     base: &Path,
     force: bool,
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let prefix_path = base.join("$PBOPREFIX$");
     if crosses_symlink(base, Path::new("$PBOPREFIX$")) {
-        warning(
-            "Not writing $PBOPREFIX$: it is a symlink.",
+        warnings.warn(Warning::new(
             Some("unsafe-path"),
-            (None, None),
-        );
+            "Not writing $PBOPREFIX$: it is a symlink.",
+        ));
         return Ok(());
     }
     if !force && prefix_path.exists() {
@@ -954,13 +976,9 @@ fn write_prefix_file(
         let clean_key = sanitize_header(key);
         let clean_value = sanitize_header(value);
         if clean_key != *key || clean_value != *value {
-            warning(
-                format!(
+            warnings.warn(Warning::new(Some("unsafe-header"), format!(
                     "Header extension {key:?} contains control characters; replaced them with spaces."
-                ),
-                Some("unsafe-header"),
-                (None, None),
-            );
+                )));
         }
         prefix_file
             .write_all(format!("{clean_key}={clean_value}\n").as_bytes())
@@ -1007,6 +1025,7 @@ pub fn cmd_unpack<I: Read>(
     output: &Path,
     force: bool,
     use_prefix: bool,
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
@@ -1015,60 +1034,55 @@ pub fn cmd_unpack<I: Read>(
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
 
     if !pbo.header_extensions.is_empty() {
-        write_prefix_file(&pbo.header_extensions, &base, force)?;
+        write_prefix_file(&pbo.header_extensions, &base, force, warnings)?;
     }
 
     let mut written: HashSet<String> = HashSet::new();
     for file_name in pbo.files.keys() {
         if pbo.raw_names.contains_key(file_name) {
-            warning(
+            warnings.warn(Warning::new(
+                Some("non-utf8-filename"),
                 format!(
                     "Entry name {file_name:?} is not valid UTF-8; extracting it as windows-1252."
                 ),
-                Some("non-utf8-filename"),
-                (None, None),
-            );
+            ));
         }
         let Some(relative) = safe_relative_path(file_name) else {
-            warning(
-                format!("Skipping \"{}\": unsafe path.", printable(file_name)),
+            warnings.warn(Warning::new(
                 Some("unsafe-path"),
-                (None, None),
-            );
+                format!("Skipping \"{}\": unsafe path.", printable(file_name)),
+            ));
             continue;
         };
         let key = relative.to_string_lossy().to_lowercase();
         if written.contains(&key) {
-            warning(
+            warnings.warn(Warning::new(
+                Some("duplicate-entry"),
                 format!(
                     "Skipping \"{}\": an entry with the same path was already extracted.",
                     printable(file_name)
                 ),
-                Some("duplicate-entry"),
-                (None, None),
-            );
+            ));
             continue;
         }
         if crosses_symlink(&base, &relative) {
-            warning(
+            warnings.warn(Warning::new(
+                Some("unsafe-path"),
                 format!(
                     "Skipping \"{}\": the target path goes through a symlink.",
                     printable(file_name)
                 ),
-                Some("unsafe-path"),
-                (None, None),
-            );
+            ));
             continue;
         }
         let data = match pbo.file_data(file_name) {
             Ok(Some(data)) => data,
             Ok(None) => continue,
             Err(e) => {
-                warning(
-                    format!("Skipping \"{}\": {e}", printable(file_name)),
+                warnings.warn(Warning::new(
                     None,
-                    (None, None),
-                );
+                    format!("Skipping \"{}\": {e}", printable(file_name)),
+                ));
                 continue;
             }
         };
@@ -1088,11 +1102,10 @@ pub fn cmd_unpack<I: Read>(
                     .prepend_error("Failed to write output file:")
             });
         if let Err(e) = written_ok {
-            warning(
-                format!("Skipping \"{}\": {e}", printable(file_name)),
+            warnings.warn(Warning::new(
                 None,
-                (None, None),
-            );
+                format!("Skipping \"{}\": {e}", printable(file_name)),
+            ));
         }
     }
 
@@ -1109,8 +1122,9 @@ pub fn cmd_pack<O: Write>(
     output: &mut O,
     headerext: &[String],
     excludes: &[String],
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new())?;
+    let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new(), warnings)?;
 
     for h in headerext {
         let Some((key, value)) = h.split_once('=') else {
@@ -1137,8 +1151,9 @@ pub fn cmd_build<O: Write>(
     headerext: &[String],
     excludes: &[String],
     includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, true, excludes, includefolders)?;
+    let mut pbo = PBO::from_directory(input, true, excludes, includefolders, warnings)?;
 
     for h in headerext {
         let Some((key, value)) = h.split_once('=') else {

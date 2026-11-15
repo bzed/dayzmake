@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::error::{ErrorExt, printable, warning};
+use crate::error::{ErrorExt, printable};
 use crate::io::{ReadExt, WriteExt};
+use crate::warning::{Warning, WarningSink};
 
 fn invalid<S: Into<String>>(msg: S) -> Error {
     Error::new(ErrorKind::InvalidData, msg.into())
@@ -550,17 +551,20 @@ pub fn check_dependencies<S: std::hash::BuildHasher>(
     prefix: &str,
     addon_files: &HashSet<String, S>,
     search_roots: &[PathBuf],
+    warnings: &mut dyn WarningSink,
 ) {
     let p3d = match File::open(path).and_then(|f| P3D::read(&mut BufReader::new(f))) {
         Ok(p) => p,
         Err(e) => {
-            warning(
-                format!(
-                    "Cannot check textures and materials: {}",
-                    printable(&e.to_string().replace('\n', " "))
-                ),
-                Some("model-unreadable"),
-                (Some(display.to_string()), None),
+            warnings.warn(
+                Warning::new(
+                    Some("model-unreadable"),
+                    format!(
+                        "Cannot check textures and materials: {}",
+                        printable(&e.to_string().replace('\n', " "))
+                    ),
+                )
+                .in_file(display),
             );
             return;
         }
@@ -590,13 +594,15 @@ pub fn check_dependencies<S: std::hash::BuildHasher>(
                 None
             };
             if exists == Some(false) {
-                warning(
-                    format!(
-                        "Model references {kind} \"{}\", which is not in the addon.",
-                        printable(name)
-                    ),
-                    Some(*warning_name),
-                    (Some(display.to_string()), None),
+                warnings.warn(
+                    Warning::new(
+                        Some(*warning_name),
+                        format!(
+                            "Model references {kind} \"{}\", which is not in the addon.",
+                            printable(name)
+                        ),
+                    )
+                    .in_file(display),
                 );
             }
         }

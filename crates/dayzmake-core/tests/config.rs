@@ -2,6 +2,7 @@
 use std::io::{Cursor, Seek, SeekFrom};
 
 use dayzmake_core::config::*;
+use dayzmake_core::warning::Warnings;
 
 #[test]
 fn config_read() {
@@ -27,7 +28,7 @@ class CfgPatches {
     );
     let mut cursor = Cursor::new(input);
 
-    let mut config = Config::read(&mut cursor, None, &Vec::new()).unwrap();
+    let mut config = Config::read(&mut cursor, None, &Vec::new(), &mut Warnings::new()).unwrap();
 
     let mut rapified = config.to_cursor().unwrap();
     rapified.seek(SeekFrom::Start(0)).unwrap();
@@ -55,8 +56,13 @@ class CfgPatches {
 
 #[test]
 fn eval_unsupported_errors() {
-    let err = Config::from_string(String::from("x = __EVAL(floor 2.7);\n"), None, &Vec::new())
-        .unwrap_err();
+    let err = Config::from_string(
+        String::from("x = __EVAL(floor 2.7);\n"),
+        None,
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("not supported"), "{}", err);
 }
 
@@ -67,6 +73,7 @@ fn garbage_is_an_error_not_a_panic() {
         String::from("class A { x = 1; arr[] = {1, 2.5, \"s\"}; };"),
         None,
         &Vec::new(),
+        &mut Warnings::new(),
     )
     .unwrap();
     let rapified = config.to_cursor().unwrap().into_inner();
@@ -85,7 +92,12 @@ fn garbage_is_an_error_not_a_panic() {
 /// Integer literals that do not fit an i32 are an error, not a panic.
 #[test]
 fn integer_overflow_is_an_error() {
-    let result = Config::from_string(String::from("x = 0x1FFFFFFFF;\n"), None, &Vec::new());
+    let result = Config::from_string(
+        String::from("x = 0x1FFFFFFFF;\n"),
+        None,
+        &Vec::new(),
+        &mut Warnings::new(),
+    );
     assert!(result.is_err());
 }
 

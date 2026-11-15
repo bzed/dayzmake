@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 
 use dayzmake_core::config::Config;
+use dayzmake_core::warning::Warnings;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn golden(name: &str) {
@@ -12,7 +13,13 @@ fn golden(name: &str) {
     let expected = std::fs::read_to_string(dir.join(format!("{name}.expected.cpp"))).unwrap();
 
     let mut input = File::open(&src).unwrap();
-    let config = Config::read(&mut input, Some(src.clone()), std::slice::from_ref(&dir)).unwrap();
+    let config = Config::read(
+        &mut input,
+        Some(src.clone()),
+        std::slice::from_ref(&dir),
+        &mut Warnings::new(),
+    )
+    .unwrap();
     let rapified = config.to_cursor().unwrap();
     let mut cursor = Cursor::new(rapified.into_inner());
     let decoded = Config::read_rapified(&mut cursor).unwrap();

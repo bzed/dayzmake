@@ -18,7 +18,8 @@ use winreg::RegKey;
 use winreg::enums::*;
 
 use crate::error;
-use crate::error::{ErrorExt, warning};
+use crate::error::ErrorExt;
+use crate::warning::{Warning, WarningSink};
 
 #[cfg(windows)]
 fn find_binarize_exe() -> Result<PathBuf, Error> {
@@ -77,14 +78,19 @@ fn create_temp_directory(name: &str) -> Result<PathBuf, Error> {
 ///
 /// Returns an error if Proton or binarize.exe fails.
 #[cfg(unix)]
-pub fn binarize(input: &Path, addon_root: &Path, prefix: &str) -> Result<Cursor<Box<[u8]>>, Error> {
+pub fn binarize(
+    input: &Path,
+    addon_root: &Path,
+    prefix: &str,
+    warnings: &mut dyn WarningSink,
+) -> Result<Cursor<Box<[u8]>>, Error> {
     if !PROTON_ENABLED.load(Ordering::SeqCst) {
         return Err(error!(
             "binarize.exe is only available on Windows, or on Linux through Proton. Use --proton-binarize (see README) or rapify to binarize configs."
         ));
     }
 
-    proton::binarize(input, addon_root, prefix)
+    proton::binarize(input, addon_root, prefix, warnings)
 }
 
 /// Binarizes the given path with BI's binarize.exe (Windows, or Linux with `--proton-binarize`).
@@ -93,6 +99,7 @@ pub fn binarize(
     input: &PathBuf,
     _addon_root: &Path,
     _prefix: &str,
+    _warnings: &mut dyn WarningSink,
 ) -> Result<Cursor<Box<[u8]>>, Error> {
     let binarize_exe = find_binarize_exe().prepend_error("Failed to find BI's binarize.exe:")?;
     if !binarize_exe.exists() {
@@ -221,7 +228,12 @@ pub fn binarized_description(path: &Path) -> Result<Option<String>, Error> {
 /// # Errors
 ///
 /// Returns an error if the input cannot be binarized or the output exists without `force`.
-pub fn cmd_binarize(input: PathBuf, output: &Path, force: bool) -> Result<(), Error> {
+pub fn cmd_binarize(
+    input: PathBuf,
+    output: &Path,
+    force: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
     if !force && output.exists() {
         return Err(error!(
             "Target file \"{}\" already exists. Use --force to overwrite.",
@@ -230,10 +242,12 @@ pub fn cmd_binarize(input: PathBuf, output: &Path, force: bool) -> Result<(), Er
     }
 
     if let Some(description) = binarized_description(&input)? {
-        warning(
-            format!("File is already binarized ({description}); copying it as-is."),
-            Some("prebinarized-file"),
-            (Some(input.to_string_lossy().into_owned()), None),
+        warnings.warn(
+            Warning::new(
+                Some("prebinarized-file"),
+                format!("File is already binarized ({description}); copying it as-is."),
+            )
+            .in_file(input.to_string_lossy()),
         );
         std::fs::copy(&input, output).prepend_error("Failed to write result to file:")?;
         return Ok(());
@@ -247,7 +261,7 @@ pub fn cmd_binarize(input: PathBuf, output: &Path, force: bool) -> Result<(), Er
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    let cursor = binarize(&input, &addon_root, &prefix)?;
+    let cursor = binarize(&input, &addon_root, &prefix, warnings)?;
     let mut file = File::create(output).prepend_error("Failed to open output:")?;
     file.write_all(cursor.get_ref())
         .prepend_error("Failed to write result to file:")?;
@@ -267,7 +281,8 @@ mod proton {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use crate::error;
-    use crate::error::{ErrorExt, printable, warning};
+    use crate::error::{ErrorExt, printable};
+    use crate::warning::{Warning, WarningSink};
 
     const APP_ID: &str = "830640";
     const PREFIX_TIMEOUT: Duration = Duration::from_secs(300);
@@ -403,7 +418,7 @@ mod proton {
     }
 
     /// Textures outside the addon (e.g. vanilla `dz\\...`) can't be resolved; their alpha flags stay unset.
-    fn warn_missing_textures(log: &Path, model: &str) {
+    fn warn_missing_textures(log: &Path, model: &str, warnings: &mut dyn WarningSink) {
         let text = read_to_string(log).unwrap_or_default();
         for line in text.lines() {
             let lower = line.to_ascii_lowercase();
@@ -413,11 +428,10 @@ mod proton {
                     || lower.contains("not found")
                     || lower.contains("failed"))
             {
-                warning(
-                    format!("{}: {}", printable(model), printable(line.trim())),
+                warnings.warn(Warning::new(
                     Some("binarize-missing-texture"),
-                    (None, None),
-                );
+                    format!("{}: {}", printable(model), printable(line.trim())),
+                ));
             }
         }
     }
@@ -649,6 +663,7 @@ mod proton {
         input: &Path,
         addon_root: &Path,
         prefix: &str,
+        warnings: &mut dyn WarningSink,
     ) -> Result<Cursor<Box<[u8]>>, Error> {
         let mut guard = SANDBOX
             .lock()
@@ -704,7 +719,7 @@ mod proton {
         )
         .prepend_error("binarize.exe failed:")?;
 
-        warn_missing_textures(&log, &name);
+        warn_missing_textures(&log, &name, warnings);
 
         let mut buffer: Vec<u8> = Vec::new();
         if let Ok(mut f) = File::open(out_dir.join(&name)) {

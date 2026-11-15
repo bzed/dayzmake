@@ -12,3 +12,4 @@ In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapifi
 In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
 In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
 In file cNN.cpp: warning: File is already rapified; copying it as-is. [prerapified-file]
+warning: 2 warnings of type "prerapified-file" were suppressed to prevent spam. Use "-w prerapified-file" to disable these warnings entirely.

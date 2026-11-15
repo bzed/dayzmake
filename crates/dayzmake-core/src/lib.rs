@@ -5,7 +5,7 @@
 pub mod binarize;
 /// Config parsing and rapification/derapification.
 pub mod config;
-/// Error types, the `error!` macro and warning bookkeeping.
+/// Error types and the `error!` macro.
 pub mod error;
 /// Evaluator for config `__EVAL` / `__EXEC` expressions.
 pub mod eval;
@@ -21,3 +21,5 @@ pub mod pbo;
 pub mod preprocess;
 /// BI signature (`.bisign`) creation and verification.
 pub mod sign;
+/// Warnings raised by library calls and the sinks that receive them.
+pub mod warning;
