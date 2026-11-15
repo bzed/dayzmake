@@ -86,7 +86,7 @@ pub struct AtomicTarget {
     temp: PathBuf,
     file: Option<File>,
     done: bool,
-    /// a device, FIFO or pipe: written in place, no temp file, no rename
+    /// a device, FIFO, pipe or socket: written in place, no temp file, no rename
     direct: bool,
 }
 
@@ -206,7 +206,7 @@ impl AtomicTarget {
         ))
     }
 
-    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO or pipe target was written
+    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO, pipe or socket target was written
     /// in place and is only flushed.
     ///
     /// # Errors
@@ -214,7 +214,7 @@ impl AtomicTarget {
     /// Returns an error if syncing or renaming fails; the temp file is removed then.
     pub fn commit(mut self) -> io::Result<()> {
         if self.direct {
-            // devices and pipes cannot be synced; flushing is all there is
+            // devices, pipes and sockets cannot be synced; flushing is all there is
             return self
                 .file
                 .take()

@@ -1014,9 +1014,12 @@ fn build_writes_into_a_fifo_and_keeps_it() {
         let fifo = fifo.clone();
         std::thread::spawn(move || std::fs::read(fifo).unwrap())
     };
+    // our own write end, held until dayzmake is done: the reader sees EOF even if dayzmake never opens the FIFO
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
     let (code, _, err) = dayzmake(&["build", "-f", "mod", "f.pbo"], dir.path());
-    assert_eq!(code, 0, "{err}");
+    drop(keep_open);
     let bytes = reader.join().unwrap();
+    assert_eq!(code, 0, "{err}");
     assert!(bytes.windows(5).any(|w| w == b"hello"));
     assert!(
         std::fs::symlink_metadata(&fifo)
@@ -1025,4 +1028,44 @@ fn build_writes_into_a_fifo_and_keeps_it() {
             .is_fifo()
     );
     assert_eq!(names(dir.path()), ["f.pbo", "mod"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_symlink_to_a_fifo() {
+    use std::os::unix::fs::FileTypeExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let fifo = dir.path().join("f.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::os::unix::fs::symlink("f.fifo", dir.path().join("link.pbo")).unwrap();
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "link.pbo"], dir.path());
+    drop(keep_open);
+    let bytes = reader.join().unwrap();
+    assert_eq!(code, 0, "{err}");
+    assert!(bytes.windows(5).any(|w| w == b"hello"));
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("link.pbo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(names(dir.path()), ["f.fifo", "link.pbo", "mod"]);
 }
