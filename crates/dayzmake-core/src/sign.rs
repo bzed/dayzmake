@@ -1,6 +1,6 @@
 //! Functions for creating and working with BI keys and signatures
 
-use std::io::{Cursor, Error, Read, Write};
+use std::io::{Error, Read, Write};
 use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -63,7 +63,7 @@ fn write_bignum<O: Write>(output: &mut O, bn: &BigNum, size: usize) -> Result<()
 }
 
 /// A PBO entry's lowercased raw name bytes paired with its contents.
-type NameFilePair<'a> = (Vec<u8>, &'a Cursor<Box<[u8]>>);
+type NameFilePair<'a> = (Vec<u8>, &'a [u8]);
 
 /// Creates a SHA-1 hasher.
 ///
@@ -104,7 +104,7 @@ fn check_key_length(length: u32) -> Result<(), Error> {
 ///
 /// Returns an error if the key name is empty or contains a path separator, `:` or a control
 /// character.
-pub fn default_signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error> {
+pub fn signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error> {
     if key_name.is_empty()
         || key_name
             .chars()
@@ -130,8 +130,7 @@ fn bignum(bytes: &[u8]) -> Result<BigNum, Error> {
 
 fn namehash(pbo: &PBO) -> Result<DigestBytes, Error> {
     let mut files_sorted: Vec<NameFilePair<'_>> = pbo
-        .files
-        .iter()
+        .entries()
         .map(|(a, b)| (pbo.name_bytes(a).to_ascii_lowercase(), b))
         .collect();
     files_sorted.sort_by(|a, b| a.0.cmp(&b.0));
@@ -139,7 +138,7 @@ fn namehash(pbo: &PBO) -> Result<DigestBytes, Error> {
     let mut h = sha1()?;
 
     for (name, data) in &files_sorted {
-        if data.get_ref().is_empty() {
+        if data.is_empty() {
             continue;
         }
 
@@ -153,7 +152,7 @@ fn filehash(pbo: &PBO, version: BISignVersion) -> Result<DigestBytes, Error> {
     let mut h = sha1()?;
     let mut nothing = true;
 
-    for (name, cursor) in &pbo.files {
+    for (name, data) in pbo.entries() {
         // file names are never empty, so there is always at least one (possibly empty) part
         let ext = name.split('.').next_back().unwrap_or("");
 
@@ -196,7 +195,7 @@ fn filehash(pbo: &PBO, version: BISignVersion) -> Result<DigestBytes, Error> {
             }
         }
 
-        h.update(cursor.get_ref()).map_err(sha1_err)?;
+        h.update(data).map_err(sha1_err)?;
         nothing = false;
     }
 
@@ -221,15 +220,15 @@ fn generate_hashes(
     version: BISignVersion,
     length: u32,
 ) -> Result<(BigNum, BigNum, BigNum), Error> {
-    let checksum = pbo.checksum.as_ref().ok_or_else(|| {
-        error!("PBO has no checksum; it must be read from a file or written first.")
-    })?;
+    // a PBO that was read keeps its stored trailer (a foreign one may differ from what we would
+    // write); one that was not read gets the trailer `PBO::write` would produce
+    let checksum = pbo.trailer_checksum()?;
     let hash1 = checksum.as_slice();
 
     let mut h = sha1()?;
     h.update(hash1).map_err(sha1_err)?;
     h.update(&namehash(pbo)?).map_err(sha1_err)?;
-    if let Some(prefix) = pbo.header_extensions.get("prefix") {
+    if let Some(prefix) = pbo.prefix() {
         h.update(&pbo.extension_bytes(prefix)).map_err(sha1_err)?;
         if !prefix.ends_with('\\') {
             h.update(b"\\").map_err(sha1_err)?;
@@ -240,7 +239,7 @@ fn generate_hashes(
     let mut h = sha1()?;
     h.update(&filehash(pbo, version)?).map_err(sha1_err)?;
     h.update(&namehash(pbo)?).map_err(sha1_err)?;
-    if let Some(prefix) = pbo.header_extensions.get("prefix") {
+    if let Some(prefix) = pbo.prefix() {
         h.update(&pbo.extension_bytes(prefix)).map_err(sha1_err)?;
         if !prefix.ends_with('\\') {
             h.update(b"\\").map_err(sha1_err)?;

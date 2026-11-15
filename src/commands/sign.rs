@@ -7,9 +7,7 @@ use std::path::PathBuf;
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::pbo::PBO;
-use dayzmake_core::sign::{
-    BIPrivateKey, BIPublicKey, BISign, BISignVersion, default_signature_path,
-};
+use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign, BISignVersion};
 
 /// Generates a key pair with the given name.
 ///
@@ -91,7 +89,7 @@ pub fn cmd_sign(
     let sig_path = if let Some(path) = signature_path {
         path
     } else {
-        default_signature_path(&pbo_path, privatekey.name())?
+        dayzmake_core::sign::signature_path(&pbo_path, privatekey.name())?
     };
 
     if !force && sig_path.exists() {
@@ -133,7 +131,7 @@ pub fn cmd_verify(
     let sig_path = if let Some(path) = signature_path {
         path
     } else {
-        default_signature_path(&pbo_path, publickey.name())?
+        dayzmake_core::sign::signature_path(&pbo_path, publickey.name())?
     };
 
     let sig = BISign::read(&mut File::open(&sig_path).prepend_error("Failed to open signature:")?)

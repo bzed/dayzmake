@@ -1,4 +1,6 @@
 //! PBO packing, unpacking, signing and verification tests.
+mod support;
+
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -70,9 +72,9 @@ fn verify_bi_signature_non_utf8() {
 fn read_non_utf8_name() {
     let pbo = PBO::read(&mut File::open(sign_dir().join("nonutf8.pbo")).unwrap()).unwrap();
     assert!(
-        pbo.files.contains_key("data\\a\u{2014}b.txt"),
+        pbo.entry_names().any(|n| n == "data\\a\u{2014}b.txt"),
         "{:?}",
-        pbo.files.keys().collect::<Vec<_>>()
+        pbo.entry_names().collect::<Vec<_>>()
     );
 }
 
@@ -106,25 +108,19 @@ fn prefix_of(content: &str) -> PBO {
 
 #[test]
 fn prefix_trailing_slash_stripped() {
-    assert_eq!(
-        prefix_of("my\\mod\\").header_extensions["prefix"],
-        "my\\mod"
-    );
+    assert_eq!(prefix_of("my\\mod\\").prefix().unwrap(), "my\\mod");
 }
 
 #[test]
 fn prefix_normalized_crlf_and_leading_slash() {
-    assert_eq!(
-        prefix_of("\\my\\mod\\\\\r\n").header_extensions["prefix"],
-        "my\\mod"
-    );
+    assert_eq!(prefix_of("\\my\\mod\\\\\r\n").prefix().unwrap(), "my\\mod");
 }
 
 #[test]
 fn prefix_key_value_form() {
     let pbo = prefix_of("prefix=my\\mod\\\nversion=a=b\n");
-    assert_eq!(pbo.header_extensions["prefix"], "my\\mod");
-    assert_eq!(pbo.header_extensions["version"], "a=b");
+    assert_eq!(pbo.prefix(), Some("my\\mod"));
+    assert_eq!(pbo.header_extension("version"), Some("a=b"));
 }
 
 #[test]
@@ -134,7 +130,7 @@ fn roundtrip_non_utf8_prefix() {
     let at = original.windows(5).position(|w| w == b"mymod").unwrap();
     original[at..at + 5].copy_from_slice(b"my\x97od");
     let pbo = PBO::read(&mut &original[..]).unwrap();
-    assert_eq!(pbo.header_extensions["prefix"], "my\u{2014}od\\testsig");
+    assert_eq!(pbo.prefix(), Some("my\u{2014}od\\testsig"));
     let mut out = Vec::new();
     pbo.write(&mut out).unwrap();
     // everything but the SHA-1 trailer, which the edit made stale
@@ -165,23 +161,9 @@ fn garbage_is_an_error_not_a_panic() {
 }
 
 /// Builds a PBO holding exactly `entries`, with an optional prefix header extension.
-#[expect(clippy::unwrap_used, reason = "test helper")]
 fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
-    let dir = tempfile::tempdir().unwrap();
-    let mut pbo =
-        PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new()).unwrap();
-    pbo.files.clear();
-    for (name, data) in entries {
-        pbo.files.insert(
-            (*name).to_string(),
-            std::io::Cursor::new(data.to_vec().into_boxed_slice()),
-        );
-    }
-    if let Some(prefix) = prefix {
-        pbo.header_extensions
-            .insert("prefix".to_string(), prefix.to_string());
-    }
-    pbo.to_cursor().unwrap().into_inner()
+    let extensions: Vec<(&str, &str)> = prefix.map(|p| ("prefix", p)).into_iter().collect();
+    support::raw_pbo(entries, &extensions)
 }
 
 /// Unpacks `pbo` into `<tmp>/target`; returns (tmp, exit code, stderr).
@@ -344,7 +326,7 @@ fn compressed_entry_size_bomb_is_an_error() {
 fn file_data_does_not_trust_the_original_size() {
     let data = include_bytes!("fixtures/fuzz/pbo_huge_original_size.pbo");
     if let Ok(pbo) = PBO::read(&mut &data[..]) {
-        for name in pbo.files.keys() {
+        for name in pbo.entry_names() {
             let _ = pbo.file_data(name);
         }
     }
@@ -456,22 +438,20 @@ fn read_entries_equals_read_for_stored_and_compressed() {
             || n == "a.txt"
     })
     .unwrap();
-    assert_eq!(sel.names, ["a.txt", "b.c"]);
-    assert_eq!(
-        sel.header_extensions.get("prefix").map(String::as_str),
-        Some("pre")
-    );
-    assert_eq!(sel.entries.len(), 2);
-    for (name, data) in sel.entries {
+    assert_eq!(sel.names(), ["a.txt", "b.c"]);
+    assert_eq!(sel.header_extension("prefix"), Some("pre"));
+    assert_eq!(sel.entries().len(), 2);
+    for entry in sel.entries() {
+        let name = entry.name();
         assert_eq!(
-            data.unwrap(),
-            full.file_data(&name).unwrap().unwrap(),
+            entry.data().unwrap(),
+            full.file_data(name).unwrap().unwrap(),
             "{name}"
         );
     }
     // entries that are not wanted are not returned
     let sel = PBO::read_entries(&mut std::io::Cursor::new(&bytes), |n| n == "b.c").unwrap();
-    assert_eq!(sel.entries.len(), 1);
+    assert_eq!(sel.entries().len(), 1);
 }
 
 #[test]
@@ -522,7 +502,7 @@ fn header_extensions_keep_file_order_and_bytes_are_stable() {
         assert_eq!(build(), first, "PBO bytes differ between builds");
     }
     let pbo = PBO::read(&mut &first[..]).unwrap();
-    let keys: Vec<&str> = pbo.header_extensions.keys().map(String::as_str).collect();
+    let keys: Vec<&str> = pbo.header_extensions().map(|(k, _)| k).collect();
     assert_eq!(keys, ["prefix", "b", "a", "c", "z", "y"]);
 }
 

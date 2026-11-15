@@ -235,12 +235,13 @@ fn read_selected(
     let sel = PBO::read_entries(&mut file, |n| is_script(n) || (with_config && is_config(n)))
         .map_err(|e| error!("{}: {e}", path.display()))?;
     let mut out = Selected {
-        prefix_ext: sel.header_extensions.get("prefix").cloned(),
+        prefix_ext: sel.header_extension("prefix").map(str::to_string),
         config: Vec::new(),
         texts: Vec::new(),
     };
-    for (name, data) in sel.entries {
-        let bytes = match data {
+    for entry in sel.entries() {
+        let name = entry.name().to_string();
+        let bytes = match entry.data() {
             Ok(b) => b,
             Err(e) => {
                 warnings.warn(
@@ -254,7 +255,7 @@ fn read_selected(
             }
         };
         if is_config(&name) {
-            out.config.push((name, bytes));
+            out.config.push((name, bytes.to_vec()));
         } else if safe_relative_path(&name).is_none() {
             warnings.warn(
                 Warning::new(
@@ -265,7 +266,7 @@ fn read_selected(
             );
         } else {
             out.texts
-                .push((name, String::from_utf8_lossy(&bytes).into_owned()));
+                .push((name, String::from_utf8_lossy(bytes).into_owned()));
         }
     }
     Ok(out)

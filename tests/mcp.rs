@@ -1,6 +1,8 @@
 //! The stdio MCP server: spawns `dayzmake mcp` and talks JSON-RPC over its pipes.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
 #![expect(clippy::indexing_slicing, reason = "a failing index is a failing test")]
+mod support;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -96,17 +98,7 @@ fn is_error(reply: &Value) -> bool {
 
 /// A PBO with the given entries (name, bytes), built through the library.
 fn make_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
-        .expect("pbo");
-    pbo.files.clear();
-    for (name, data) in entries {
-        pbo.files.insert(
-            (*name).to_string(),
-            std::io::Cursor::new(data.to_vec().into_boxed_slice()),
-        );
-    }
-    pbo.to_cursor().expect("cursor").into_inner()
+    support::raw_pbo(entries, &[])
 }
 
 fn s(p: &Path) -> &str {

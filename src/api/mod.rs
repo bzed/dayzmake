@@ -11,7 +11,7 @@ use serde::Serialize;
 use cache::dir_hash;
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
-use dayzmake_core::pbo::{PBO, SelectedEntry, safe_relative_path};
+use dayzmake_core::pbo::{PBO, PboSelection, safe_relative_path};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
@@ -374,7 +374,7 @@ pub fn src_contents(
             m.dir.join(rel)
         });
     }
-    let mut read: BTreeMap<PathBuf, Vec<SelectedEntry>> = BTreeMap::new();
+    let mut read: BTreeMap<PathBuf, PboSelection> = BTreeMap::new();
     for path in &paths {
         if read.contains_key(path) {
             continue;
@@ -388,16 +388,18 @@ pub fn src_contents(
         let mut file = std::fs::File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
         let sel = PBO::read_entries(&mut file, |n| wanted.contains(n))
             .map_err(|e| error!("{}: {e}", path.display()))?;
-        read.insert(path.clone(), sel.entries);
+        read.insert(path.clone(), sel);
     }
     let mut out = Vec::new();
     for (f, path) in files.into_iter().zip(&paths) {
         let data = match read
-            .get_mut(path)
-            .and_then(|entries| entries.iter_mut().find(|(n, _)| *n == f.path))
+            .get(path)
+            .and_then(|sel| sel.entries().iter().find(|e| e.name() == f.path))
         {
-            Some((_, Ok(data))) => data.clone(),
-            Some((_, Err(e))) => return Err(error!("{}: {e}", f.path)),
+            Some(entry) => match entry.data() {
+                Ok(data) => data.to_vec(),
+                Err(e) => return Err(error!("{}: {e}", f.path)),
+            },
             None => return Err(error!("{} not found in {}", f.path, path.display())),
         };
         out.push(SrcContent {

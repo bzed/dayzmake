@@ -17,15 +17,15 @@ use dayzmake_core::warning::WarningSink;
 pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
-    if !pbo.header_extensions.is_empty() {
+    if pbo.header_extensions().next().is_some() {
         writeln!(output, "Header extensions:")?;
-        for (key, value) in &pbo.header_extensions {
+        for (key, value) in pbo.header_extensions() {
             writeln!(output, "- {}={}", printable(key), printable(value))?;
         }
         writeln!(output)?;
     }
 
-    writeln!(output, "# Files: {}\n", pbo.files.len())?;
+    writeln!(output, "# Files: {}\n", pbo.entry_names().count())?;
 
     writeln!(
         output,

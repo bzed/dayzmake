@@ -152,27 +152,27 @@ fn parse_prefix_file(
 /// # use dayzmake_core::warning::Warnings;
 /// let pbo = PBO::from_directory(Path::new("src"), &PackOptions::pack(), None, &mut Warnings::new()).expect("Failed to create PBO");
 ///
-/// assert!(pbo.files.iter().any(|(name, _data)| name == "lib.rs"));
+/// assert!(pbo.entry_names().any(|name| name == "lib.rs"));
 ///
 /// let mut cursor = pbo.to_cursor().unwrap();
 /// let reread = PBO::read(&mut cursor).unwrap();
 ///
-/// assert!(reread.checksum.is_some());
+/// assert!(reread.checksum().is_some());
 /// ```
 pub struct PBO {
     /// The PBO's files in header order, keyed by name.
-    pub files: LinkedHashMap<String, Cursor<Box<[u8]>>>,
+    files: LinkedHashMap<String, Cursor<Box<[u8]>>>,
     /// Header extensions (`key=value`), including the prefix under the key `prefix`.
-    pub header_extensions: LinkedHashMap<String, String>,
+    header_extensions: LinkedHashMap<String, String>,
     /// Original bytes of entry names that are not valid UTF-8, keyed by their windows-1252 decoding
     /// (the key used in `files`).
-    pub raw_names: HashMap<String, Vec<u8>>,
+    raw_names: HashMap<String, Vec<u8>>,
     /// Same as `raw_names`, for header extension keys and values.
     raw_extensions: HashMap<String, Vec<u8>>,
     headers: Vec<PBOHeader>,
     /// only defined when reading existing PBOs, for created PBOs this is calculated during writing
     /// and included in the output
-    pub checksum: Option<Vec<u8>>,
+    checksum: Option<Vec<u8>>,
 }
 
 impl PBOHeader {
@@ -262,17 +262,61 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
 }
 
 /// An entry name with its decompressed data, or the reason it cannot be read.
-pub type SelectedEntry = (String, Result<Vec<u8>, Error>);
+pub struct SelectedEntry {
+    name: String,
+    data: Result<Vec<u8>, Error>,
+}
+
+impl SelectedEntry {
+    /// The entry name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The decompressed data of the entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that kept the entry from being decompressed.
+    pub fn data(&self) -> Result<&[u8], &Error> {
+        self.data.as_ref().map(Vec::as_slice)
+    }
+}
 
 /// The entries of a PBO that [`PBO::read_entries`] selected.
 pub struct PboSelection {
-    /// Header extensions (`key=value`), including the prefix under the key `prefix`.
-    pub header_extensions: LinkedHashMap<String, String>,
+    header_extensions: LinkedHashMap<String, String>,
+    names: Vec<String>,
+    entries: Vec<SelectedEntry>,
+}
+
+impl PboSelection {
     /// All entry names in file order.
-    pub names: Vec<String>,
+    #[must_use]
+    pub fn names(&self) -> &[String] {
+        &self.names
+    }
+
     /// The selected entries in file order with their decompressed data; an entry that cannot be
     /// decompressed is an error of its own.
-    pub entries: Vec<SelectedEntry>,
+    #[must_use]
+    pub fn entries(&self) -> &[SelectedEntry] {
+        &self.entries
+    }
+
+    /// The value of a header extension (the prefix is the key `prefix`).
+    #[must_use]
+    pub fn header_extension(&self, key: &str) -> Option<&str> {
+        self.header_extensions.get(key).map(String::as_str)
+    }
+
+    /// The header extensions (`key=value`) in file order.
+    pub fn header_extensions(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.header_extensions
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
 }
 
 /// Packing method of entries compressed with Bohemia's LZSS variant ("Cprs").
@@ -409,7 +453,111 @@ impl PackOptions {
     }
 }
 
+impl Default for PBO {
+    fn default() -> PBO {
+        PBO::new()
+    }
+}
+
 impl PBO {
+    /// An empty PBO without entries and header extensions.
+    #[must_use]
+    pub fn new() -> PBO {
+        PBO {
+            files: LinkedHashMap::new(),
+            header_extensions: LinkedHashMap::new(),
+            raw_names: HashMap::new(),
+            raw_extensions: HashMap::new(),
+            headers: Vec::new(),
+            checksum: None,
+        }
+    }
+
+    /// The entries in the order the PBO has them: header order for a PBO that was read, the
+    /// order [`PBO::write`] uses (sorted by name) for one that was not. Data is as stored, so
+    /// compressed entries stay compressed; see [`PBO::file_data`].
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.ordered_files()
+            .into_iter()
+            .map(|(name, cursor)| (name, cursor.get_ref().as_ref()))
+    }
+
+    /// The entry names, in the order of [`PBO::entries`].
+    pub fn entry_names(&self) -> impl Iterator<Item = &str> {
+        self.entries().map(|(name, _)| name)
+    }
+
+    /// Adds an entry, or replaces the data of the entry with the same name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the name starts with a separator or is one [`safe_relative_path`]
+    /// rejects (empty, drive letter, `..` component and so on).
+    pub fn insert_entry(&mut self, name: impl Into<String>, data: Vec<u8>) -> Result<(), Error> {
+        let name = name.into();
+        if name.starts_with(['\\', '/']) || safe_relative_path(&name).is_none() {
+            return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
+        }
+        self.files
+            .insert(name, Cursor::new(data.into_boxed_slice()));
+        Ok(())
+    }
+
+    /// Removes an entry and returns its stored data.
+    pub fn remove_entry(&mut self, name: &str) -> Option<Vec<u8>> {
+        self.raw_names.remove(name);
+        self.files.remove(name).map(|c| c.into_inner().into_vec())
+    }
+
+    /// The header extensions (`key=value`) in file order, including the prefix.
+    pub fn header_extensions(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.header_extensions
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    /// The value of a header extension.
+    #[must_use]
+    pub fn header_extension(&self, key: &str) -> Option<&str> {
+        self.header_extensions.get(key).map(String::as_str)
+    }
+
+    /// Sets a header extension; a repeated key keeps its position and takes the new value.
+    pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        set_extension(&mut self.header_extensions, &key.into(), value.into());
+    }
+
+    /// The PBO prefix (the header extension `prefix`).
+    #[must_use]
+    pub fn prefix(&self) -> Option<&str> {
+        self.header_extension("prefix")
+    }
+
+    /// The SHA-1 trailer of a PBO that was read; `None` for one that was not.
+    #[must_use]
+    pub fn checksum(&self) -> Option<&[u8]> {
+        self.checksum.as_deref()
+    }
+
+    /// The entries in header order (read PBO) or write order (unwritten PBO).
+    fn ordered_files(&self) -> Vec<(&str, &Cursor<Box<[u8]>>)> {
+        let mut files: Vec<(&str, &Cursor<Box<[u8]>>)> =
+            self.files.iter().map(|(a, b)| (a.as_str(), b)).collect();
+        if self.checksum.is_none() {
+            files.sort_by_cached_key(|f| self.name_bytes(f.0).to_ascii_lowercase());
+        }
+        files
+    }
+
+    /// The SHA-1 the PBO has as its trailer: the stored one for a PBO that was read, the one
+    /// [`PBO::write`] would produce otherwise (nothing is kept in memory or on disk for it).
+    pub(crate) fn trailer_checksum(&self) -> Result<Vec<u8>, Error> {
+        match &self.checksum {
+            Some(checksum) => Ok(checksum.clone()),
+            None => self.write_with_checksum(&mut std::io::sink()),
+        }
+    }
+
     /// The entry headers of a PBO that was read, in header order (empty for one made by
     /// [`PBO::from_directory`]).
     #[must_use]
@@ -556,7 +704,10 @@ impl PBO {
                 } else {
                     Ok(data)
                 };
-                entries.push((h.filename.clone(), data));
+                entries.push(SelectedEntry {
+                    name: h.filename.clone(),
+                    data,
+                });
             }
             offset = end;
         }
@@ -755,6 +906,11 @@ impl PBO {
     ///
     /// Returns an error on I/O failure or if an entry is too large.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
+        self.write_with_checksum(output).map(|_| ())
+    }
+
+    /// Writes the PBO and returns the SHA-1 it ends with.
+    fn write_with_checksum<O: Write>(&self, output: &mut O) -> Result<Vec<u8>, Error> {
         let mut headers: Cursor<Vec<u8>> = Cursor::new(Vec::new());
 
         let ext_header = PBOHeader {
@@ -783,16 +939,16 @@ impl PBO {
         }
         headers.write_cstring(String::new())?;
 
-        let mut files_sorted: Vec<(String, &Cursor<Box<[u8]>>)> =
-            self.files.iter().map(|(a, b)| (a.clone(), b)).collect();
-        files_sorted.sort_by_cached_key(|f| self.name_bytes(&f.0).to_ascii_lowercase());
+        let mut files_sorted: Vec<(&str, &Cursor<Box<[u8]>>)> =
+            self.files.iter().map(|(a, b)| (a.as_str(), b)).collect();
+        files_sorted.sort_by_cached_key(|f| self.name_bytes(f.0).to_ascii_lowercase());
 
         for (name, cursor) in &files_sorted {
             let size = u32::try_from(cursor.get_ref().len())
                 .map_err(|_| error!("PBO entry \"{name}\" is too large."))?;
             let header = PBOHeader {
-                filename: name.clone(),
-                raw_filename: self.raw_names.get(name).cloned(),
+                filename: (*name).to_string(),
+                raw_filename: self.raw_names.get(*name).cloned(),
                 packing_method: 0,
                 original_size: size,
                 reserved: 0,
@@ -825,7 +981,7 @@ impl PBO {
         let checksum = h.finish().map_err(|e| error!("SHA-1: {e}"))?;
         output.write_all(&checksum)?;
 
-        Ok(())
+        Ok(checksum.to_vec())
     }
 
     /// Returns the contents of a file, decompressing it if the PBO stores it compressed.

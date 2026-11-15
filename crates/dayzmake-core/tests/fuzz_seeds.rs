@@ -31,7 +31,7 @@ fn pbo_read_seeds() -> io::Result<()> {
         let _ = PBO::read_headers(&mut headers);
         let mut input = &data[..];
         if let Ok(pbo) = PBO::read(&mut input) {
-            for name in pbo.files.keys() {
+            for name in pbo.entry_names() {
                 let _ = pbo.file_data(name);
             }
         }

@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::path::Path;
 
 use dayzmake_core::pbo::{PBO, PackOptions, UnpackOptions, unpack};
+use dayzmake_core::sign::{BIPrivateKey, BISignVersion};
 use dayzmake_core::warning::Warnings;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
@@ -17,6 +18,31 @@ fn pack_to_bytes(dir: &Path, options: &PackOptions) -> Vec<u8> {
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn read(bytes: &[u8]) -> PBO {
     PBO::read(&mut Cursor::new(bytes)).unwrap()
+}
+
+/// PBO bytes built by hand (stored entries, zero trailer) for names `insert_entry` refuses.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn raw_pbo(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    fn header(out: &mut Vec<u8>, name: &str, method: u32, size: u32) {
+        out.extend_from_slice(name.as_bytes());
+        out.push(0);
+        for value in [method, size, 0, 0, size] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let mut out = Vec::new();
+    header(&mut out, "", 0x5665_7273, 0);
+    out.push(0);
+    for (name, data) in entries {
+        header(&mut out, name, 0, u32::try_from(data.len()).unwrap());
+    }
+    header(&mut out, "", 0, 0);
+    for (_, data) in entries {
+        out.extend_from_slice(data);
+    }
+    out.push(0);
+    out.extend_from_slice(&[0; 20]);
+    out
 }
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
@@ -40,11 +66,7 @@ fn pack_options_header_extensions_override_the_prefix_file() {
         ("version".to_string(), "1".to_string()),
     ];
     let pbo = read(&pack_to_bytes(&root, &options));
-    let got: Vec<(&str, &str)> = pbo
-        .header_extensions
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
+    let got: Vec<(&str, &str)> = pbo.header_extensions().collect();
     assert_eq!(got, [("prefix", "a"), ("product", "y"), ("version", "1")]);
 }
 
@@ -54,8 +76,8 @@ fn pack_options_exclude_skips_files() {
     let mut options = PackOptions::pack();
     options.exclude = vec!["*.txt".to_string()];
     let pbo = read(&pack_to_bytes(&tmp.path().join("addon"), &options));
-    assert!(!pbo.files.contains_key("a.txt"));
-    assert!(pbo.files.contains_key("b.c"));
+    assert!(!pbo.entry_names().any(|n| n == "a.txt"));
+    assert!(pbo.entry_names().any(|n| n == "b.c"));
 }
 
 #[test]
@@ -64,12 +86,15 @@ fn build_option_rapifies_config_cpp() {
     let root = tmp.path().join("addon");
     fs::write(root.join("config.cpp"), "class CfgPatches {};\n").unwrap();
     let pbo = read(&pack_to_bytes(&root, &PackOptions::build()));
-    let config = pbo.files.get("config.bin").expect("config.bin entry");
-    assert!(config.get_ref().starts_with(b"\0raP"));
-    assert!(!pbo.files.contains_key("config.cpp"));
+    let (_, config) = pbo
+        .entries()
+        .find(|(n, _)| *n == "config.bin")
+        .expect("config.bin entry");
+    assert!(config.starts_with(b"\0raP"));
+    assert!(!pbo.entry_names().any(|n| n == "config.cpp"));
 
     let packed = read(&pack_to_bytes(&root, &PackOptions::pack()));
-    assert!(packed.files.contains_key("config.cpp"));
+    assert!(packed.entry_names().any(|n| n == "config.cpp"));
 }
 
 #[test]
@@ -108,19 +133,9 @@ fn unpack_refuses_existing_files_without_force() {
 #[test]
 fn unpack_rejects_unsafe_entry_names() {
     let tmp = addon();
-    let mut pbo = PBO::from_directory(
-        &tmp.path().join("addon"),
-        &PackOptions::pack(),
-        None,
-        &mut Warnings::new(),
-    )
-    .unwrap();
-    pbo.files.insert(
-        "..\\evil.txt".to_string(),
-        Cursor::new(b"evil".to_vec().into_boxed_slice()),
-    );
-    let mut bytes = Vec::new();
-    pbo.write(&mut bytes).unwrap();
+    let bytes = raw_pbo(&[("a.txt", b"a"), ("..\\evil.txt", b"evil")]);
+    // the hand-built PBO really holds the hostile entry
+    assert!(read(&bytes).entry_names().any(|n| n == "..\\evil.txt"));
 
     let target = tmp.path().join("out").join("inner");
     let mut warnings = Warnings::new();
@@ -134,6 +149,12 @@ fn unpack_rejects_unsafe_entry_names() {
     assert!(!tmp.path().join("out").join("evil.txt").exists());
     assert!(!target.join("evil.txt").exists());
     assert!(target.join("a.txt").exists());
+    let named: Vec<_> = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.message.contains("evil.txt"))
+        .collect();
+    assert_eq!(named.len(), 1, "{:?}", warnings.warnings());
 }
 
 #[test]
@@ -154,4 +175,127 @@ fn packing_a_model_without_binarizer_warns_only_outside_windows() {
         .any(|w| w.name == Some("non-windows-binarization"));
     // Windows has a native binarize.exe, so "non-Windows systems" must not be mentioned there.
     assert_eq!(warned, !cfg!(windows));
+}
+
+fn sign_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/sign")
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn armk() -> BIPrivateKey {
+    BIPrivateKey::read(&mut fs::File::open(sign_dir().join("armk.biprivatekey")).unwrap()).unwrap()
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn sign_bytes(key: &BIPrivateKey, pbo: &PBO) -> Vec<u8> {
+    let mut out = Vec::new();
+    key.sign(pbo, BISignVersion::V3)
+        .unwrap()
+        .write(&mut out)
+        .unwrap();
+    out
+}
+
+#[test]
+fn signing_a_fresh_pbo_matches_signing_it_after_a_roundtrip() {
+    let tmp = addon();
+    let root = tmp.path().join("addon");
+    fs::write(root.join("$PBOPREFIX$"), "my\\mod\n").unwrap();
+    fs::create_dir_all(root.join("sub")).unwrap();
+    fs::write(root.join("sub").join("Z.c"), "class Z {};\n").unwrap();
+    fs::write(root.join("B.hpp"), "x").unwrap();
+    let pbo = PBO::from_directory(&root, &PackOptions::pack(), None, &mut Warnings::new()).unwrap();
+    assert!(pbo.checksum().is_none());
+    let key = armk();
+    let reread = PBO::read(&mut pbo.to_cursor().unwrap()).unwrap();
+    let fresh = sign_bytes(&key, &pbo);
+    assert_eq!(fresh, sign_bytes(&key, &reread));
+
+    let signature = key.sign(&pbo, BISignVersion::V3).unwrap();
+    let public = key.to_public_key().unwrap();
+    public.verify(&reread, &signature).unwrap();
+    public.verify(&pbo, &signature).unwrap();
+}
+
+#[test]
+fn signing_a_read_pbo_uses_its_stored_checksum() {
+    let dir = sign_dir();
+    let pbo = PBO::read(&mut fs::File::open(dir.join("testsig.pbo")).unwrap()).unwrap();
+    assert!(pbo.checksum().is_some());
+    assert_eq!(
+        sign_bytes(&armk(), &pbo),
+        fs::read(dir.join("testsig.pbo.armk.bisign")).unwrap()
+    );
+}
+
+#[test]
+fn accessors_expose_entries_and_extensions_in_order() {
+    let mut pbo = PBO::new();
+    pbo.insert_entry("b.txt", b"bee".to_vec()).unwrap();
+    pbo.insert_entry("a\\c.txt", b"sea".to_vec()).unwrap();
+    pbo.set_header_extension("prefix", "p");
+    pbo.set_header_extension("x", "1");
+    pbo.set_header_extension("prefix", "q");
+    assert!(pbo.checksum().is_none());
+    // an unwritten PBO lists its entries in the order write() stores them
+    assert_eq!(pbo.entry_names().collect::<Vec<_>>(), ["a\\c.txt", "b.txt"]);
+
+    let read = read(&pack_bytes(&pbo));
+    assert_eq!(
+        read.entry_names().collect::<Vec<_>>(),
+        ["a\\c.txt", "b.txt"]
+    );
+    assert_eq!(
+        read.entries().collect::<Vec<_>>(),
+        [
+            ("a\\c.txt", b"sea".as_slice()),
+            ("b.txt", b"bee".as_slice())
+        ]
+    );
+    assert_eq!(
+        read.header_extensions().collect::<Vec<_>>(),
+        [("prefix", "q"), ("x", "1")]
+    );
+    assert_eq!(read.header_extension("x"), Some("1"));
+    assert_eq!(read.prefix(), Some("q"));
+    assert!(read.checksum().is_some());
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn pack_bytes(pbo: &PBO) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    pbo.write(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+fn insert_entry_rejects_unsafe_names() {
+    for bad in ["", "..\\x", "/abs", "C:\\x", "a\\..\\..\\x"] {
+        assert!(PBO::new().insert_entry(bad, vec![]).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn remove_entry_returns_the_data() {
+    let mut pbo = PBO::new();
+    pbo.insert_entry("a.txt", b"a".to_vec()).unwrap();
+    assert_eq!(pbo.remove_entry("a.txt"), Some(b"a".to_vec()));
+    assert_eq!(pbo.remove_entry("a.txt"), None);
+    assert_eq!(pbo.entry_names().count(), 0);
+}
+
+#[test]
+fn selection_gives_requested_entries() {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let sel = PBO::read_entries(&mut Cursor::new(&bytes), |n| n == "a.txt").unwrap();
+    assert_eq!(sel.names(), ["a.txt", "b.c"]);
+    assert_eq!(sel.entries().len(), 1);
+    assert_eq!(sel.entries()[0].name(), "a.txt");
+    assert_eq!(sel.entries()[0].data().unwrap(), b"a");
+    assert_eq!(sel.header_extension("prefix"), Some("addon"));
+    assert_eq!(
+        sel.header_extensions().collect::<Vec<_>>(),
+        [("prefix", "addon")]
+    );
 }
