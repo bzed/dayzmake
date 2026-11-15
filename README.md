@@ -24,19 +24,19 @@ is maintained here.
 
 ## Changes
 
-- Key generation no longer uses OpenSSL: `dayzmake keygen` generates the RSA key pair with the pure-Rust `rsa` crate and the
-  operating system's random number generator. Key files keep their layout. Key components read from a key file are
-  wiped from memory when dropped.
 - OpenSSL is gone from the dependency tree, tests included (they use `num-bigint` as the independent check): building
   and testing need no system libraries, and the CI and the Dockerfile no longer install `libssl-dev` or `pkg-config`.
+  `dayzmake keygen` generates the RSA key pair with the pure-Rust `rsa` crate and the operating system's random number
+  generator, and signing and verification run on `rsa` too (blinded, constant-time private-key operation; the result is
+  checked against the public key before it is written). Key files and `.bisign` output are byte-identical to before. A
+  signature value that is not smaller than the key's modulus is a verification error. Our copies of key components
+  read from a key file are wiped from memory when dropped (best effort: the `rsa` crate makes internal copies it does
+  not wipe).
 - Two misleading errors are fixed: a `.bisign` with a bad header says "Invalid signature file" (not "public key"), and
   verifying with a key other than the one that made the signature says "The signature was made with a different key"
   (names and lengths only) instead of a complaint about the modulus (#56).
 - `sign` and key generation refuse keys below 384 bits, the `CryptoAPI` minimum BI's tools and the game need (smaller
   keys could only sign with broken padding). Reading such keys and verifying their signatures still works (#55).
-- Signing and verification no longer use OpenSSL: they run on the pure-Rust `rsa` crate (blinded, constant-time private-key
-  operation; the result is checked against the public key before it is written). `.bisign` output is byte-identical. A
-  signature value that is not smaller than the key's modulus is a verification error.
 - A `.bisign` file is read with the same checks as a public key: its embedded key must carry the `RSA1` blob header and a
   modulus exactly as wide as the header length says; anything else is a read error (#52).
 - Macro expansion has a depth limit on every path (64 levels); a config that nests deeper, or expands a macro into
@@ -49,8 +49,9 @@ is maintained here.
   multiple of 16, is rejected when read (#48).
 - `verify` and `sign` recompute the SHA-1 of the PBO instead of trusting its stored trailer: a PBO whose bytes
   changed (`config.bin`, files a signature version leaves out, the header) no longer verifies, and a PBO with a
-  wrong trailer is not signed. Both fail with a "checksum mismatch" error (#46). `inspect` and `unpack` still read
-  such files.
+  wrong trailer is not signed. Both fail with a "checksum mismatch" error (#46); repack the PBO
+  (`dayzmake pack`/`build`) before signing. BI's `DSCheckSignatures` trusts the stored trailer, `dayzmake verify` does
+  not. `inspect` and `unpack` still read such files.
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
 - `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
