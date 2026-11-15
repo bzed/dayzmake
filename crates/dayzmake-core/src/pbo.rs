@@ -1007,11 +1007,17 @@ impl PBO {
         for (name, cursor) in &files_sorted {
             let size = u32::try_from(cursor.get_ref().len())
                 .map_err(|_| error!("PBO entry \"{name}\" is too large."))?;
+            // an entry that was read and not replaced since keeps its compression: `files`
+            // holds its stored bytes, so the header must still say how to decode them
+            let kept = self
+                .headers
+                .iter()
+                .rfind(|h| h.filename == *name && h.packing_method == PACKING_COMPRESSED);
             let header = PBOHeader {
                 filename: (*name).to_string(),
                 raw_filename: self.raw_names.get(*name).cloned(),
-                packing_method: 0,
-                original_size: size,
+                packing_method: kept.map_or(0, |h| h.packing_method),
+                original_size: kept.map_or(size, |h| h.original_size),
                 reserved: 0,
                 timestamp: 0,
                 data_size: size,
@@ -1054,7 +1060,8 @@ impl PBO {
             return Ok(None);
         };
 
-        match self.headers.iter().find(|h| h.filename == name) {
+        // duplicate names: `files` kept the last value, so use the last header
+        match self.headers.iter().rfind(|h| h.filename == name) {
             Some(h) if h.packing_method == PACKING_COMPRESSED => {
                 lzss_decompress(cursor.get_ref(), h.original_size as usize)
                     .prepend_error(format!("Failed to decompress \"{}\":", printable(name)))

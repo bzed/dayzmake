@@ -502,3 +502,97 @@ fn unpack_into_a_non_empty_folder_without_conflicts_works() {
     assert!(target.join("unrelated.txt").exists());
     assert!(target.join("a.txt").exists());
 }
+
+const SECOND: &[u8] = b"compressed content, long enough for two groups";
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn with_compressed_entry() -> Vec<u8> {
+    let stored = support::lzss_literals(SECOND);
+    support::raw_pbo_with_headers(
+        &[
+            ("a.txt", b"plain", 0, 5),
+            (
+                "b.txt",
+                &stored,
+                support::CPRS,
+                u32::try_from(SECOND.len()).unwrap(),
+            ),
+        ],
+        &[],
+    )
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn rewritten(pbo: &PBO) -> Vec<u8> {
+    let mut out = Vec::new();
+    pbo.write(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn writing_a_read_pbo_keeps_compressed_entries() {
+    let pbo = read(&with_compressed_entry());
+    assert_eq!(pbo.file_data("b.txt").unwrap().unwrap(), SECOND);
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), SECOND);
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"plain");
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.txt")
+        .unwrap();
+    assert_eq!(header.packing_method, support::CPRS);
+    assert_eq!(header.original_size as usize, SECOND.len());
+}
+
+#[test]
+fn modifying_a_read_pbo_keeps_untouched_compressed_entries() {
+    let mut pbo = read(&with_compressed_entry());
+    pbo.insert_entry("c.txt", b"new".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), SECOND);
+    assert_eq!(back.file_data("c.txt").unwrap().unwrap(), b"new");
+}
+
+#[test]
+fn replacing_a_compressed_entry_stores_it_uncompressed() {
+    let mut pbo = read(&with_compressed_entry());
+    pbo.insert_entry("b.txt", b"replaced".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), b"replaced");
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.txt")
+        .unwrap();
+    assert_eq!(header.packing_method, 0);
+}
+
+#[cfg(feature = "sign")]
+#[test]
+fn signature_of_a_rewritten_read_pbo_verifies() {
+    let key = armk();
+    let written = read(&rewritten(&read(&with_compressed_entry())));
+    let signature = key.sign(&written, BISignVersion::V3).unwrap();
+    key.to_public_key()
+        .unwrap()
+        .verify(&read(&rewritten(&written)), &signature)
+        .unwrap();
+}
+
+#[test]
+fn duplicate_entry_names_use_the_header_of_the_kept_value() {
+    let second = b"second!!";
+    let stored = support::lzss_literals(second);
+    let bytes = support::raw_pbo_with_headers(
+        &[
+            ("a.txt", b"first", 0, 5),
+            ("a.txt", &stored, support::CPRS, 8),
+        ],
+        &[],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(pbo.file_data("a.txt").unwrap().unwrap(), second);
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), second);
+}
