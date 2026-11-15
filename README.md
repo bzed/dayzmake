@@ -163,6 +163,22 @@ Options:
 
 See `dayzmake --help` for more.
 
+## Using dayzmake-core as a library
+
+The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
+(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures, with no CLI dependencies. It never
+prints; warnings go to a `WarningSink` you provide, so it is safe to use from many threads.
+
+```
+cargo add dayzmake-core
+```
+
+Features: `sign` (BI keys and signatures, needs OpenSSL) and `image` (PAA from and to images), both on by
+default; `default-features = false` builds without them. The
+[API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
+The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
+independently of the CLI.
+
 ## Script API index
 
 `dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a

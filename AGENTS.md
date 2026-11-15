@@ -135,6 +135,20 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
 - `cargo deny` checks licences, RustSec advisories, duplicates and sources; run `make deny` after any
   `Cargo.toml` change.
 
+## Library rules (`dayzmake-core`)
+
+`crates/dayzmake-core` is a public library other tools (for example Náves, AGPL-3.0) link.
+
+- It never prints, never calls `process::exit` and never reads the environment for settings. Warnings go to a
+  `WarningSink` passed by the caller; there is no global warning state, and each caller thread uses its own sink.
+- New parameters of a public function go into an options struct (like `PackOptions`), not into more arguments.
+- Public data types and enums are `#[non_exhaustive]` and built through constructors or builders.
+- No `HashMap`, `HashSet` or `LinkedHashMap` in the public API (iteration order, third-party types): return
+  slices, iterators or ordered `Vec`s.
+- `dayzmake-core` has its own semver, independent of the CLI. A removed or changed public item is a breaking
+  change; the CLI depends on a compatible `dayzmake-core` version.
+- Features `sign` and `image` stay additive: the crate builds, tests and documents without them.
+
 ## Documentation
 
 - Public items have rustdoc comments (`missing_docs` is on); `make doc` builds them with warnings as errors.
