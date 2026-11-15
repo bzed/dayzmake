@@ -707,7 +707,7 @@ impl PBO {
                     Err(error!(
                         "PBO checksum mismatch: the stored SHA-1 trailer does not match the SHA-1 of the PBO's contents (the PBO is corrupt or was modified){}.",
                         if signing {
-                            "; repack it (dayzmake pack/build) before signing"
+                            "; repack it before signing"
                         } else {
                             ""
                         }

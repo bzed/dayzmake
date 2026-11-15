@@ -36,7 +36,7 @@ Stricter checks, so code that relied on the old leniency can now get errors:
 
 - `BIPrivateKey::generate` refuses key lengths that are not a multiple of 16, below 384 bits or above 16384 bits, and
   `sign` refuses keys below 384 bits.
-- Reading a key or a `.bisign` rejects a wrong `RSA1` header or a modulus that is not exactly as wide as the header
+- Reading a key or a `.bisign` rejects a wrong key blob header (`RSA1`/`RSA2`) or a modulus that is not exactly as wide as the header
   length says (a private key's length must also be a multiple of 16).
 - `sign` and `verify` recompute the SHA-1 of the PBO and fail with a checksum-mismatch error when its stored trailer
   differs; `verify` also rejects a signature value that is not smaller than the modulus.
