@@ -1273,3 +1273,27 @@ fn pack_skips_a_fifo_named_like_the_prefix_file() {
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("unsupported-file"), "{err}");
 }
+
+#[cfg(unix)]
+#[test]
+fn build_excluded_special_and_unsafe_files_are_silent() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    write(&modf, "bad\x1bname.txt", "x");
+    let (code, _, err) = dayzmake(
+        &["build", "-x", "pipe", "-x", "bad*", "mod", "out.pbo"],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !err.contains("unsupported-file") && !err.contains("unsafe-path"),
+        "{err}"
+    );
+}

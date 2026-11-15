@@ -896,6 +896,15 @@ impl PBO {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
             };
+            if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
+                relative = relative.with_file_name("config.bin");
+            }
+
+            let mut name: String = relative.to_string_lossy().replace('/', "\\");
+            // excluded files are silent, whatever they are
+            if !file_allowed(&name, exclude_patterns) {
+                continue;
+            }
             // only regular files (or links to them): a FIFO would block the build, a device never
             // ends. A path that cannot be inspected falls through to the open error below.
             if std::fs::metadata(&path).is_ok_and(|m| !m.file_type().is_file()) {
@@ -908,11 +917,6 @@ impl PBO {
                 );
                 continue;
             }
-            if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
-                relative = relative.with_file_name("config.bin");
-            }
-
-            let mut name: String = relative.to_string_lossy().replace('/', "\\");
             if safe_relative_path(&name).is_none() {
                 warnings.warn(Warning::new(
                     Some("unsafe-path"),
@@ -921,10 +925,6 @@ impl PBO {
                 continue;
             }
             let is_binarizable = BINARIZABLE_RE.is_match(&name);
-
-            if !file_allowed(&name, exclude_patterns) {
-                continue;
-            }
 
             let mut file = File::open(&path)?;
 
