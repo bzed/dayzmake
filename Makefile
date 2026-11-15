@@ -61,7 +61,7 @@ features:
 # docs.rs builds with nightly, `--cfg docsrs` and all features.
 docsrs:
 	@if $(CARGO) +nightly --version >/dev/null 2>&1; then \
-	  RUSTDOCFLAGS="--cfg docsrs" $(CARGO) +nightly doc -p dayzmake-core --all-features --no-deps $(LOCKED); \
+	  RUSTDOCFLAGS="--cfg docsrs -D warnings" $(CARGO) +nightly doc -p dayzmake-core --all-features --no-deps $(LOCKED); \
 	else \
 	  echo "skipping docsrs: nightly missing"; \
 	fi
