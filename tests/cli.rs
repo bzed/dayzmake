@@ -540,3 +540,54 @@ fn pack_rejects_a_header_extension_without_equals() {
         "{err}"
     );
 }
+
+#[test]
+fn build_warning_path_is_relative_to_the_addon() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "class A {\n x = foo;\n};\n");
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("In file config.cpp:2: "), "{err}");
+    assert!(
+        !err.contains("./config.cpp") && !err.contains("mod/config.cpp"),
+        "{err}"
+    );
+
+    // "." has no folder name to derive a prefix from
+    write(dir.path(), "mod/$PBOPREFIX$", "mod\n");
+    let (code, _, err) = dayzmake(&["build", ".", "../out2.pbo"], &dir.path().join("mod"));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("In file config.cpp:2: "), "{err}");
+    assert!(!err.contains("./config.cpp"), "{err}");
+}
+
+#[test]
+fn build_warning_in_an_included_file_is_relative_to_the_addon() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "#include \"inc\\a.hpp\"\n");
+    write(dir.path(), "mod/inc/a.hpp", "class A { x = foo; };\n");
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let expected = format!("In file {}:1: ", Path::new("inc").join("a.hpp").display());
+    assert!(err.contains(&expected), "{err}");
+    let root = dir.path().to_string_lossy().into_owned();
+    assert!(!err.contains(&root), "{err}");
+}
+
+#[test]
+fn build_warning_in_an_include_outside_the_addon_keeps_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "#include \"\\a.hpp\"\n");
+    write(dir.path(), "shared/a.hpp", "class A { x = foo; };\n");
+    let (code, _, err) = dayzmake(&["build", "-i", "shared", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    // recorded on the unfixed code: the canonical absolute path
+    let shared = dir
+        .path()
+        .join("shared")
+        .canonicalize()
+        .unwrap()
+        .join("a.hpp");
+    let expected = format!("In file {}:1: ", shared.display());
+    assert!(err.contains(&expected), "{err}");
+}

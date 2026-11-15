@@ -464,6 +464,45 @@ impl Default for PBO {
     }
 }
 
+/// Rewrites `Warning.file` to the path relative to the addon folder when it lies inside it.
+struct AddonRelative<'a> {
+    /// The addon folder as given and canonicalised (includes are reported canonicalised).
+    roots: [PathBuf; 2],
+    inner: &'a mut dyn WarningSink,
+}
+
+impl<'a> AddonRelative<'a> {
+    fn new(directory: &Path, inner: &'a mut dyn WarningSink) -> Self {
+        let canonical = directory
+            .canonicalize()
+            .unwrap_or_else(|_| directory.to_path_buf());
+        AddonRelative {
+            roots: [directory.to_path_buf(), canonical],
+            inner,
+        }
+    }
+}
+
+impl WarningSink for AddonRelative<'_> {
+    fn warn(&mut self, mut warning: Warning) {
+        if let Some(file) = &warning.file {
+            let file = Path::new(file);
+            if let Some(relative) = self
+                .roots
+                .iter()
+                .find_map(|root| file.strip_prefix(root).ok())
+            {
+                warning.file = Some(relative.to_string_lossy().into_owned());
+            }
+        }
+        self.inner.warn(warning);
+    }
+
+    fn is_suppressed(&self, name: Option<&str>) -> bool {
+        self.inner.is_suppressed(name)
+    }
+}
+
 impl PBO {
     /// An empty PBO without entries and header extensions.
     #[must_use]
@@ -858,11 +897,12 @@ impl PBO {
                     );
                     files.insert(name, Cursor::new(buffer.into_boxed_slice()));
                 } else {
+                    let mut addon_warnings = AddonRelative::new(directory, warnings);
                     let config = Config::read(
                         &mut Cursor::new(buffer),
                         Some(path.clone()),
                         includefolders,
-                        warnings,
+                        &mut addon_warnings,
                     )
                     .prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
