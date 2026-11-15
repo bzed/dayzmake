@@ -513,9 +513,10 @@ impl PBO {
 
     /// Removes an entry and returns its stored data.
     pub fn remove_entry(&mut self, name: &str) -> Option<Vec<u8>> {
+        let removed = self.files.remove(name)?;
         self.raw_names.remove(name);
         self.modified(name);
-        self.files.remove(name).map(|c| c.into_inner().into_vec())
+        Some(removed.into_inner().into_vec())
     }
 
     /// The header extensions (`key=value`) in file order, including the prefix.

@@ -317,3 +317,15 @@ fn insert_entry_normalises_separators_and_rejects_empty_components() {
         assert!(PBO::new().insert_entry(bad, vec![]).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn removing_a_missing_entry_changes_nothing() {
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("testsig.pbo")).unwrap()).unwrap();
+    let before: Vec<String> = pbo.entry_names().map(str::to_owned).collect();
+    assert!(pbo.remove_entry("nope").is_none());
+    assert!(pbo.checksum().is_some());
+    assert_eq!(
+        pbo.entry_names().map(str::to_owned).collect::<Vec<_>>(),
+        before
+    );
+}
