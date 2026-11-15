@@ -67,7 +67,15 @@ docsrs:
 	fi
 
 # Packages both crates (the CLI against the packaged core). CI runs it without --allow-dirty.
+#
+# cargo verifies the CLI against a temporary local registry: it unpacks the packaged dayzmake-core into
+# $CARGO_HOME/registry/src/-<hash>/ and builds it in the dev profile of the target dir. Registry crates are
+# never rebuilt for the same version, so both the unpacked copy and its build go stale when the core changes
+# and the CLI would be checked against an old core (#29). Remove both first: only the local-registry copies
+# (directory names starting with "-", never the crates.io sources) and only the dev-profile core artifacts.
 package-check:
+	cargo_home="$${CARGO_HOME:-$${HOME:?}/.cargo}"; rm -rf "$$cargo_home"/registry/src/-*/dayzmake-core-*
+	$(CARGO) clean -p dayzmake-core --profile dev
 	$(CARGO) package --workspace $(LOCKED) --allow-dirty
 
 check: fmt-check lint doc deny test features docsrs package-check fuzz coverage-check
