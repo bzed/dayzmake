@@ -1133,7 +1133,7 @@ fn is_device_name(component: &str) -> bool {
 ///
 /// The name is split on `\` and `/` and empty components are dropped, so a leading separator does
 /// not make the path absolute. Returns `None` if any component is `.` or `..`, consists only of
-/// dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or an ASCII control character, or if no
+/// dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or any control character (C0, DEL and C1, `char::is_control`), or if no
 /// component remains.
 #[must_use]
 pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
@@ -1141,7 +1141,7 @@ pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
     for component in name.split(['\\', '/']).filter(|c| !c.is_empty()) {
         if is_device_name(component)
             || component.chars().all(|c| c == '.' || c == ' ')
-            || component.chars().any(|c| c == ':' || c.is_ascii_control())
+            || component.chars().any(|c| c == ':' || c.is_control())
         {
             return None;
         }
@@ -1428,7 +1428,17 @@ mod tests {
 
     #[test]
     fn safe_path_rejects_colon_nul_and_control() {
-        for bad in ["C:\\x.txt", "a:b", "a\0b", "a\nb", "a\tb", "a\x7fb"] {
+        for bad in [
+            "C:\\x.txt",
+            "a:b",
+            "a\0b",
+            "a\nb",
+            "a\tb",
+            "a\x7fb",
+            "a\u{80}b",
+            "a\u{9b}b",
+            "a\u{9f}",
+        ] {
             assert_eq!(p(bad), None, "{bad:?}");
         }
     }

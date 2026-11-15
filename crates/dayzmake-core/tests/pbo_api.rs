@@ -467,22 +467,35 @@ fn unpack_conflict_message_escapes_control_characters() {
 }
 
 #[test]
-fn unpack_conflict_message_escapes_c1_control_characters_in_entry_names() {
+fn unpack_skips_entry_names_with_c1_control_characters() {
     let tmp = tempfile::tempdir().unwrap();
-    let bytes = support::raw_pbo_with_headers(&[("a\u{9b}b.txt", b"x", 0, 1)], &[]);
+    let bytes = support::raw_pbo(&[("a\u{9b}b.txt", b"x"), ("ok.txt", b"y")], &[]);
     let target = tmp.path().join("out");
-    fs::create_dir_all(&target).unwrap();
-    fs::write(target.join("a\u{9b}b.txt"), "old").unwrap();
-    let err = unpack(
+    let mut warnings = Warnings::new();
+    unpack(
         &mut Cursor::new(&bytes),
         &target,
         &UnpackOptions::default(),
-        &mut Warnings::new(),
+        &mut warnings,
     )
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("a\\u{9b}b.txt"), "{err}");
-    assert!(!err.contains('\u{9b}'), "{err}");
+    .unwrap();
+    assert!(target.join("ok.txt").exists());
+    let on_disk: Vec<_> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(on_disk.len(), 1, "{on_disk:?}");
+    let skipped: Vec<_> = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.message.contains("a\\u{9b}b.txt"))
+        .collect();
+    assert_eq!(skipped.len(), 1, "{:?}", warnings.warnings());
+    assert!(
+        !skipped[0].message.contains('\u{9b}'),
+        "{}",
+        skipped[0].message
+    );
 }
 
 #[test]
