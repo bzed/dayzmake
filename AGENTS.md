@@ -139,7 +139,8 @@ The lints are configured once, in `[lints]` in `Cargo.toml`; `clippy.toml` holds
 
 `crates/dayzmake-core` is a public library other tools (for example Náves, AGPL-3.0) link.
 
-- It never prints, never calls `process::exit` and never reads the environment for settings. Warnings go to a
+- It never prints, never calls `process::exit`, and reads no environment variables except to locate external tools in
+  `binarize` (`BIOUTPUT`, `STEAM_ROOT`, `HOME`, `DAYZ_TOOLS`, `PROTON`); new settings go into options structs. Warnings go to a
   `WarningSink` passed by the caller; there is no global warning state, and each caller thread uses its own sink.
 - New parameters of a public function go into an options struct (like `PackOptions`), not into more arguments.
 - Public data types and enums are `#[non_exhaustive]` and built through constructors or builders.
