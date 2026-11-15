@@ -7,6 +7,8 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::hash::{DigestBytes, Hasher, MessageDigest};
 use openssl::rsa::Rsa;
+use rsa::traits::{PrivateKeyParts, PublicKeyParts};
+use rsa::{BoxedUint, PrivateKey, PublicKey};
 
 use crate::error::ErrorExt;
 use crate::io::{ReadExt, WriteExt};
@@ -17,13 +19,8 @@ pub struct BIPrivateKey {
     name: String,
     length: u32,
     exponent: u32,
-    n: BigNum,
-    p: BigNum,
-    q: BigNum,
-    dmp1: BigNum,
-    dmq1: BigNum,
-    iqmp: BigNum,
-    d: BigNum,
+    /// The validated key: `n`, `e`, `d`, `p`, `q` and the CRT values, checked against each other on creation.
+    key: PrivateKey,
 }
 
 /// BI public key (.bikey)
@@ -32,7 +29,7 @@ pub struct BIPublicKey {
     name: String,
     length: u32,
     exponent: u32,
-    n: BigNum,
+    key: PublicKey,
 }
 
 /// BI signature version
@@ -68,12 +65,73 @@ impl std::fmt::Debug for BIPrivateKey {
     }
 }
 
+/// Writes a signature value or modulus little-endian, zero-padded to `size` bytes.
 fn write_bignum<O: Write>(output: &mut O, bn: &BigNum, size: usize) -> Result<(), Error> {
     let mut vec: Vec<u8> = bn.to_vec();
     vec = vec.iter().rev().copied().collect();
     vec.resize(size, 0);
 
     output.write_all(&vec)
+}
+
+/// Writes `value` little-endian, zero-padded to `size` bytes.
+///
+/// # Errors
+///
+/// Returns an error if the value does not fit into `size` bytes, or on I/O failure.
+fn write_uint<O: Write>(output: &mut O, value: &BoxedUint, size: usize) -> Result<(), Error> {
+    let mut vec = value.to_be_bytes_trimmed_vartime().into_vec();
+    vec.reverse();
+    if vec.len() > size {
+        return Err(error!("Key component does not fit into {size} bytes."));
+    }
+    vec.resize(size, 0);
+
+    output.write_all(&vec)
+}
+
+/// Converts an `rsa` integer into an `OpenSSL` `BigNum` (until signing moves to `rsa` as well).
+fn to_bignum(value: &BoxedUint) -> Result<BigNum, Error> {
+    bignum(&value.to_be_bytes_trimmed_vartime())
+}
+
+/// Reads a key component of `size` little-endian bytes.
+fn read_uint<I: Read>(input: &mut I, size: usize) -> Result<BoxedUint, Error> {
+    let mut buffer = vec![0; size];
+    input.read_exact(&mut buffer)?;
+    uint_from_le(&buffer)
+}
+
+/// Converts little-endian bytes into an integer wide enough for them.
+fn uint_from_le(bytes: &[u8]) -> Result<BoxedUint, Error> {
+    let bits = u32::try_from(bytes.len())
+        .ok()
+        .and_then(|len| len.checked_mul(8))
+        .ok_or_else(|| error!("Key component is too large."))?;
+    BoxedUint::from_le_slice(bytes, bits).map_err(|_| error!("Invalid key data."))
+}
+
+/// Whether two integers have the same value, whatever their storage widths.
+///
+/// Variable time: used only to check a key file against itself, where the file's owner knows every value.
+fn same_value(a: &BoxedUint, b: &BoxedUint) -> bool {
+    a.to_be_bytes_trimmed_vartime() == b.to_be_bytes_trimmed_vartime()
+}
+
+/// Whether `value` is zero or one: no key component can be.
+fn is_trivial(value: &BoxedUint) -> bool {
+    value.bit_width_vartime() <= 1
+}
+
+/// Maps an `rsa` error onto a message that carries no key material.
+///
+/// `rsa` errors name the kind of defect only; they never contain a value.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "used as a map_err closure; the error is formatted, not stored"
+)]
+fn key_err(err: rsa::Error) -> Error {
+    error!("Invalid key: {err}.")
 }
 
 /// A PBO entry's lowercased raw name bytes paired with its contents.
@@ -97,13 +155,18 @@ fn sha1_err(err: openssl::error::ErrorStack) -> Error {
     error!("OpenSSL operation failed: {err}")
 }
 
+/// Largest key length accepted, in bits.
+const MAX_KEY_BITS_U32: u32 = 1 << 20;
+/// Largest key length accepted, in bits, as a size.
+const MAX_KEY_BITS: usize = MAX_KEY_BITS_U32 as usize;
+
 /// Validates a key length read from a key or signature file.
 ///
 /// # Errors
 ///
 /// Returns an error if the length is not a sane RSA key length.
 fn check_key_length(length: u32) -> Result<(), Error> {
-    if !(288..=(1 << 20)).contains(&length) {
+    if !(288..=MAX_KEY_BITS_U32).contains(&length) {
         return Err(error!("Invalid key length: {length}."));
     }
     Ok(())
@@ -329,52 +392,46 @@ impl BIPrivateKey {
             return Err(error!("Invalid private key file (bad length field)."));
         }
 
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let n = bignum(&buffer)?;
+        let full = (length / 8) as usize;
+        let half = (length / 16) as usize;
+        let n = read_uint(input, full)?;
+        let p = read_uint(input, half)?;
+        let q = read_uint(input, half)?;
+        let exp_p = read_uint(input, half)?;
+        let exp_q = read_uint(input, half)?;
+        let iqmp = read_uint(input, half)?;
+        let d = read_uint(input, full)?;
 
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let p = bignum(&buffer)?;
+        // `rsa` would reject most of these, but some values would reach its arithmetic first (a modulus of
+        // one, a prime of zero), so every component is checked here.
+        for value in [&n, &p, &q, &exp_p, &exp_q, &iqmp, &d] {
+            if is_trivial(value) {
+                return Err(error!("Invalid private key (a component is zero or one)."));
+            }
+        }
+        let key =
+            PrivateKey::from_components(n, BoxedUint::from(u64::from(exponent)), d, vec![p, q])
+                .map_err(key_err)
+                .prepend_error("Invalid private key:")?;
 
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let q = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let exponent1 = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let exponent2 = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 16) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let q_inv = bignum(&buffer)?;
-
-        buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let d = bignum(&buffer)?;
+        // `rsa` recomputes the CRT values from `d`, `p` and `q`; the file's copies must agree.
+        let consistent = match (key.dp(), key.dq(), key.crt_coefficient()) {
+            (Some(dp), Some(dq), Some(qinv)) => {
+                same_value(dp, &exp_p) && same_value(dq, &exp_q) && same_value(&qinv, &iqmp)
+            }
+            _ => false,
+        };
+        if !consistent {
+            return Err(error!(
+                "Invalid private key (CRT values do not match the primes)."
+            ));
+        }
 
         Ok(BIPrivateKey {
             name,
             length,
             exponent,
-            n,
-            p,
-            q,
-            dmp1: exponent1,
-            dmq1: exponent2,
-            iqmp: q_inv,
-            d,
+            key,
         })
     }
 
@@ -389,20 +446,23 @@ impl BIPrivateKey {
         let rsa = Rsa::generate(length).map_err(|e| error!("Failed to generate keypair: {e}"))?;
         let factor = |v: Option<&BigNumRef>| {
             let v = v.ok_or_else(|| error!("Generated keypair is missing a factor."))?;
-            bignum(&v.to_vec())
+            Ok::<_, Error>(BoxedUint::from_be_slice_vartime(&v.to_vec()))
         };
+        let exponent = 65537;
+        let key = PrivateKey::from_components(
+            BoxedUint::from_be_slice_vartime(&rsa.n().to_vec()),
+            BoxedUint::from(u64::from(exponent)),
+            BoxedUint::from_be_slice_vartime(&rsa.d().to_vec()),
+            vec![factor(rsa.p())?, factor(rsa.q())?],
+        )
+        .map_err(key_err)
+        .prepend_error("Generated keypair:")?;
 
         Ok(BIPrivateKey {
             name,
             length,
-            exponent: 65537,
-            n: bignum(&rsa.n().to_vec())?,
-            p: factor(rsa.p())?,
-            q: factor(rsa.q())?,
-            dmp1: factor(rsa.dmp1())?,
-            dmq1: factor(rsa.dmq1())?,
-            iqmp: factor(rsa.iqmp())?,
-            d: bignum(&rsa.d().to_vec())?,
+            exponent,
+            key,
         })
     }
 
@@ -416,7 +476,7 @@ impl BIPrivateKey {
             name: self.name.clone(),
             length: self.length,
             exponent: self.exponent,
-            n: bignum(&self.n.to_vec())?,
+            key: self.key.to_public_key(),
         })
     }
 
@@ -429,23 +489,22 @@ impl BIPrivateKey {
         let (hash1, hash2, hash3) = generate_hashes(pbo, version, self.length)?;
 
         let mut ctx = BigNumContext::new().map_err(sha1_err)?;
+        let n = to_bignum(self.key.n().as_ref())?;
+        let d = to_bignum(self.key.d())?;
 
         let mut sig1 = BigNum::new().map_err(sha1_err)?;
-        sig1.mod_exp(&hash1, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
+        sig1.mod_exp(&hash1, &d, &n, &mut ctx).map_err(sha1_err)?;
         let mut sig2 = BigNum::new().map_err(sha1_err)?;
-        sig2.mod_exp(&hash2, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
+        sig2.mod_exp(&hash2, &d, &n, &mut ctx).map_err(sha1_err)?;
         let mut sig3 = BigNum::new().map_err(sha1_err)?;
-        sig3.mod_exp(&hash3, &self.d, &self.n, &mut ctx)
-            .map_err(sha1_err)?;
+        sig3.mod_exp(&hash3, &d, &n, &mut ctx).map_err(sha1_err)?;
 
         Ok(BISign {
             version,
             name: self.name.clone(),
             length: self.length,
             exponent: self.exponent,
-            n: bignum(&self.n.to_vec())?,
+            n,
             sig1,
             sig2,
             sig3,
@@ -466,13 +525,25 @@ impl BIPrivateKey {
         output.write_all(b"RSA2")?;
         output.write_u32::<LittleEndian>(self.length)?;
         output.write_u32::<LittleEndian>(self.exponent)?;
-        write_bignum(output, &self.n, (self.length / 8) as usize)?;
-        write_bignum(output, &self.p, (self.length / 16) as usize)?;
-        write_bignum(output, &self.q, (self.length / 16) as usize)?;
-        write_bignum(output, &self.dmp1, (self.length / 16) as usize)?;
-        write_bignum(output, &self.dmq1, (self.length / 16) as usize)?;
-        write_bignum(output, &self.iqmp, (self.length / 16) as usize)?;
-        write_bignum(output, &self.d, (self.length / 8) as usize)?;
+        let full = (self.length / 8) as usize;
+        let half = (self.length / 16) as usize;
+        let primes = self.key.primes();
+        let (Some(p), Some(q)) = (primes.first(), primes.get(1)) else {
+            return Err(error!("Invalid private key (missing primes)."));
+        };
+        // The CRT values are recomputed from `d`, `p` and `q`; `read` checks that the file holds the same.
+        let (Some(exp_p), Some(exp_q), Some(iqmp)) =
+            (self.key.dp(), self.key.dq(), self.key.crt_coefficient())
+        else {
+            return Err(error!("Invalid private key (missing CRT values)."));
+        };
+        write_uint(output, self.key.n().as_ref(), full)?;
+        write_uint(output, p.as_ref(), half)?;
+        write_uint(output, q.as_ref(), half)?;
+        write_uint(output, exp_p, half)?;
+        write_uint(output, exp_q, half)?;
+        write_uint(output, &iqmp, half)?;
+        write_uint(output, self.key.d(), full)?;
         Ok(())
     }
 }
@@ -503,16 +574,21 @@ impl BIPublicKey {
             return Err(error!("Invalid public key file (bad length field)."));
         }
 
-        let mut buffer = vec![0; (length / 8) as usize];
-        input.read_exact(&mut buffer)?;
-        buffer = buffer.iter().rev().copied().collect();
-        let n = bignum(&buffer)?;
+        let n = read_uint(input, (length / 8) as usize)?;
+        // Sizes: BI keys down to 288 bits are accepted, `rsa`'s default limits (1024 to 8192 bits) are widened.
+        let key = PublicKey::new_with_size_limits(
+            n,
+            BoxedUint::from(u64::from(exponent)),
+            2..=MAX_KEY_BITS,
+        )
+        .map_err(key_err)
+        .prepend_error("Invalid public key:")?;
 
         Ok(BIPublicKey {
             name,
             length,
             exponent,
-            n,
+            key,
         })
     }
 
@@ -528,18 +604,19 @@ impl BIPublicKey {
         let mut ctx = BigNumContext::new().map_err(sha1_err)?;
 
         let exponent = BigNum::from_u32(self.exponent).map_err(sha1_err)?;
+        let n = to_bignum(self.key.n().as_ref())?;
 
         let mut signed_hash1 = BigNum::new().map_err(sha1_err)?;
         signed_hash1
-            .mod_exp(&signature.sig1, &exponent, &self.n, &mut ctx)
+            .mod_exp(&signature.sig1, &exponent, &n, &mut ctx)
             .map_err(sha1_err)?;
         let mut signed_hash2 = BigNum::new().map_err(sha1_err)?;
         signed_hash2
-            .mod_exp(&signature.sig2, &exponent, &self.n, &mut ctx)
+            .mod_exp(&signature.sig2, &exponent, &n, &mut ctx)
             .map_err(sha1_err)?;
         let mut signed_hash3 = BigNum::new().map_err(sha1_err)?;
         signed_hash3
-            .mod_exp(&signature.sig3, &exponent, &self.n, &mut ctx)
+            .mod_exp(&signature.sig3, &exponent, &n, &mut ctx)
             .map_err(sha1_err)?;
 
         if real_hash1 != signed_hash1 {
@@ -583,7 +660,7 @@ impl BIPublicKey {
         output.write_all(b"RSA1")?;
         output.write_u32::<LittleEndian>(self.length)?;
         output.write_u32::<LittleEndian>(self.exponent)?;
-        write_bignum(output, &self.n, (self.length / 8) as usize)?;
+        write_uint(output, self.key.n().as_ref(), (self.length / 8) as usize)?;
         Ok(())
     }
 }

@@ -340,10 +340,10 @@ fn verify_accepts_and_rejects() {
         flip(&mut bad_header, 30);
         assert!(rejected(&bad_header), "{pbo_name} header");
 
-        // one flipped bit in the key's n (first byte after name and 24 header bytes)
+        // one flipped bit in the key's n (not the lowest one: an even n is no longer a readable key)
         let key_name_len = public_bytes.iter().position(|&b| b == 0).unwrap() + 1;
         let mut bad_key = public_bytes.clone();
-        flip(&mut bad_key, key_name_len + 24);
+        flip(&mut bad_key, key_name_len + 24 + 5);
         let bad_public = BIPublicKey::read(&mut Cursor::new(&bad_key)).unwrap();
         assert!(
             verify(&pbo_bytes, &sig_bytes, &bad_public).is_err(),

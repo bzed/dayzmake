@@ -18,14 +18,16 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["sign", "image"]
-# BI signatures and keys (`sign` module); needs OpenSSL for RSA.
-sign = ["dep:openssl"]
+# BI signatures and keys (`sign` module). Keys are `rsa` (pure Rust) types; signing, verification and key
+# generation still use OpenSSL until they move to `rsa` as well.
+sign = ["dep:openssl", "dep:rsa"]
 # PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
 image = ["dep:image"]
 
 [dependencies]
 byteorder = "1.5"
 openssl = { version = "0.10", optional = true }
+rsa = { version = "0.10.0", optional = true, default-features = false, features = ["std", "getrandom", "hazmat"] }
 linked-hash-map = "0.5.6"
 regex = "1.10"
 peg = "0.8"
@@ -41,7 +43,6 @@ winreg = "0.52"
 [dev-dependencies]
 tempfile = "3.10"
 criterion = "0.5.1"
-rsa = { version = "0.10.0", default-features = false, features = ["std", "hazmat"] }
 rand_chacha = "0.10.0"
 rand_core = "0.10.1"
 
