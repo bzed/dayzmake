@@ -24,6 +24,9 @@ is maintained here.
 
 ## Changes
 
+- Two misleading errors are fixed: a `.bisign` with a bad header says "Invalid signature file" (not "public key"), and
+  verifying with a key other than the one that made the signature says "The signature was made with a different key"
+  (names and lengths only) instead of a complaint about the modulus (#56).
 - `sign` and key generation refuse keys below 384 bits, the `CryptoAPI` minimum BI's tools and the game need (smaller
   keys could only sign with broken padding). Reading such keys and verifying their signatures still works (#55).
 - Signing and verification no longer use OpenSSL: they run on the pure-Rust `rsa` crate (blinded, constant-time private-key

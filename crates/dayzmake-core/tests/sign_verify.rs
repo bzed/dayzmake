@@ -149,3 +149,31 @@ fn sign_refuses_keys_below_384_bits() {
         }
     }
 }
+
+#[test]
+fn a_signature_from_another_key_says_so() {
+    let (pbo, sig, _) = testsig();
+    let signature = BISign::read(&mut Cursor::new(&sig)).unwrap();
+    // a shorter key, and another key of the same length
+    for (seed, bits) in [(21u64, 512u32), (22, 1024)] {
+        let other = BIPrivateKey::read(&mut Cursor::new(key_bytes(seed, bits)))
+            .unwrap()
+            .to_public_key()
+            .unwrap();
+        let err = other.verify(&pbo, &signature).unwrap_err().to_string();
+        assert!(err.contains("made with a different key"), "{bits}: {err}");
+        assert!(err.contains("armk") && err.contains("small"), "{err}");
+        assert!(!err.contains("modulus"), "{err}");
+    }
+}
+
+#[test]
+fn a_bad_bisign_header_names_the_signature_file() {
+    let (_, mut sig, _) = testsig();
+    let name_len = sig.iter().position(|&b| b == 0).unwrap() + 1;
+    sig[name_len + 12] = b'X';
+    let err = BISign::read(&mut Cursor::new(&sig))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Invalid signature file"), "{err}");
+}

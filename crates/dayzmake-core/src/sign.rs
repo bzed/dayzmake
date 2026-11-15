@@ -14,7 +14,7 @@ use rsa::{BoxedUint, PrivateKey, PublicKey};
 use sha1::{Digest, Sha1};
 use zeroize::Zeroizing;
 
-use crate::error::ErrorExt;
+use crate::error::{ErrorExt, printable};
 use crate::io::{ReadExt, WriteExt};
 use crate::pbo::PBO;
 
@@ -160,11 +160,13 @@ const PUBLIC_MAGIC: [u8; 4] = *b"RSA1";
 ///
 /// # Errors
 ///
-/// Returns an error on I/O failure or if the header is not the one of a `kind` key.
+/// Returns an error on I/O failure or if the header is not the one of a `kind` key. `file` names the kind of file
+/// ("private key", "public key", "signature") in the message.
 fn check_blob_header<I: Read>(
     input: &mut I,
     blob: u32,
     magic: [u8; 4],
+    file: &str,
     kind: &str,
 ) -> Result<(), Error> {
     let found_blob = input.read_u32::<LittleEndian>()?;
@@ -173,7 +175,7 @@ fn check_blob_header<I: Read>(
     input.read_exact(&mut found_magic)?;
     if found_blob != blob || found_alg != KEY_ALG || found_magic != magic {
         return Err(error!(
-            "Invalid {kind} key file (bad header: not a {kind} key blob)."
+            "Invalid {file} file (bad header: not a {kind} key blob)."
         ));
     }
     Ok(())
@@ -427,7 +429,7 @@ impl BIPrivateKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPrivateKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        check_blob_header(input, PRIVATE_BLOB, PRIVATE_MAGIC, "private")?;
+        check_blob_header(input, PRIVATE_BLOB, PRIVATE_MAGIC, "private key", "private")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -625,7 +627,7 @@ impl BIPublicKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPublicKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public")?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public key", "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -661,8 +663,19 @@ impl BIPublicKey {
     ///
     /// Returns an error if hashing fails or one of the signature hashes doesn't match.
     pub fn verify(&self, pbo: &PBO, signature: &BISign) -> Result<(), Error> {
-        let hashes = generate_hashes(pbo, signature.version, self.length)?;
         let n = self.key.n().as_ref();
+        // a signature carries the public key it was made with: compare before anything else, so that a wrong key
+        // is reported as such and not as a defect of the signature values
+        if signature.length != self.length || !same_value(&signature.n, n) {
+            return Err(error!(
+                "The signature was made with a different key (signature: {}, {} bits; this key: {}, {} bits).",
+                printable(&signature.name),
+                signature.length,
+                printable(&self.name),
+                self.length
+            ));
+        }
+        let hashes = generate_hashes(pbo, signature.version, self.length)?;
         let precision = n.bits_precision();
 
         let values = [&signature.sig1, &signature.sig2, &signature.sig3];
@@ -734,7 +747,7 @@ impl BISign {
     pub fn read<I: Read>(input: &mut I) -> Result<BISign, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public")?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "signature", "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
