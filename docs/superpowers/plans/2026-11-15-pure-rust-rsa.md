@@ -133,6 +133,23 @@ Yes, with conditions:
 - [ ] **Step 2:** Run → PASS on the OpenSSL code. Commit `test: pin BI signature results before the RSA switch`.
   No key material is committed; only the existing throwaway `armk` key stays in the repo.
 
+### Task 1b: Verify recomputes the PBO's SHA-1 (#46)
+
+**Files:** `crates/dayzmake-core/src/pbo.rs` (`PBO::read`, `trailer_checksum`), `crates/dayzmake-core/src/sign.rs`
+(`generate_hashes`, `sign`, `verify`), tests, fuzz seed, README `## Changes`.
+
+Hash 1 of a BI signature is the SHA-1 of the whole PBO, but `PBO::read` keeps the stored trailer and never checks it, so
+`verify` accepts PBOs whose config.bin, V2-excluded files or header were changed (issue #46 has the repro). Fix:
+`PBO::read` hashes the bytes as it reads them (header and data, everything before the trailer) and keeps the computed
+digest next to the stored one; `generate_hashes` uses the computed digest; `sign` and `verify` fail with a clear error
+(naming the checksum mismatch, no key material) when the stored trailer differs from the computed one. Other readers
+(`inspect`, `unpack`, the API index) keep working on such files; `inspect` may show the mismatch. Public API additive.
+Tests first: each tampering case of #46 (config.bin byte, `.txt`, `.rvmat`, a header extension; V3 fixture signature,
+and a V2 signature for the `.rvmat`) → verify fails; unmodified fixtures still verify; sign of a PBO with a wrong
+trailer fails. Update `verify_accepts_and_rejects` (Task 1) to flip bits in config.bin and the header too, and drop the
+comment that calls the stored-trailer behaviour intended. Fuzz seed: a PBO with a wrong trailer. Commit
+`fix: verify recomputes the PBO checksum instead of trusting the trailer (#46)`.
+
 ### Task 2: Private and public keys on `rsa` types
 
 **Files:** `crates/dayzmake-core/src/sign.rs`, `Cargo.toml`.
@@ -151,7 +168,8 @@ length. `BIPublicKey` holds `rsa::RsaPublicKey` (or `n`/`e` as `BoxedUint` where
   today (`write_bignum`).
 - [ ] **Step 3:** Run Task 1 + new tests → PASS. Commit `refactor: BI keys on pure-Rust RSA types` (body: crate review
   of `rsa`, `crypto-bigint`, `crypto-primes`, `rand_core`, `getrandom`, `zeroize` and the rest of the new tree —
-  source read, `unsafe` count, advisories, maintenance, licences, MSRV).
+  source read, `unsafe` count, advisories, maintenance, licences, MSRV). Mention that `Cargo.lock` lists `rsa`'s optional
+  `pkcs1`/`pkcs8`/`der`/`spki`/`pem-rfc7468`/`serdect`, which are not built (`cargo tree -i pkcs1` is empty).
 
 ### Task 3: Signing and verification
 
@@ -159,7 +177,8 @@ length. `BIPublicKey` holds `rsa::RsaPublicKey` (or `n`/`e` as `BoxedUint` where
 
 - [ ] **Step 1:** Tests: `signature_value_not_below_n_is_an_error` (Review Focus 3), `small_key_signatures_verify`
   (a 512-bit throwaway key fixture signed with today's code, Review Focus 2) or a documented error if `rsa` cannot
-  represent it.
+  represent it. In `verify_accepts_and_rejects`, the flipped-`n` case must treat a key that `BIPublicKey::read`
+  rejects as a pass (an even `n` may be refused at read time by `rsa`), not `unwrap` the read.
 - [ ] **Step 2:** `sign`: `rsa::hazmat::rsa_decrypt(Some(&mut OsRng), &key, &padded_hash)` for each of the three
   hashes (blinding on). `verify`: `rsa::hazmat::rsa_encrypt(&public_key, &sig)` and constant-time comparison with the
   padded hash (`subtle::ConstantTimeEq` or `BoxedUint` equality — public values, plain `==` is acceptable; say which).
