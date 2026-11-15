@@ -197,19 +197,28 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
 #[cfg(windows)]
 fn open_device(path: &Path, failure: &str) -> io::Result<Option<File>> {
     use std::os::windows::fs::OpenOptionsExt;
-    let probe = match std::fs::OpenOptions::new().access_mode(0).open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).prepend_error(failure),
-    };
     // an unanswerable handle counts as a disk file: the worst case is an error, never an in-place overwrite
-    if winapi_util::file::typ(&probe).is_ok_and(|t| !t.is_disk()) {
-        drop(probe);
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .open(path)
-            .prepend_error(failure)?;
-        return Ok(Some(file));
+    let is_device = |file: &File| winapi_util::file::typ(file).is_ok_and(|t| !t.is_disk());
+    match std::fs::OpenOptions::new().access_mode(0).open(path) {
+        Ok(probe) => {
+            if is_device(&probe) {
+                drop(probe);
+                let file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .prepend_error(failure)?;
+                return Ok(Some(file));
+            }
+        }
+        // `CON` opens as `CONIN$` or `CONOUT$` depending on the requested access, so a probe without access can
+        // fail for a device: ask again with write access (no create, no truncate) before giving up
+        Err(_) => {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(path)
+                && is_device(&file)
+            {
+                return Ok(Some(file));
+            }
+        }
     }
     Ok(None)
 }

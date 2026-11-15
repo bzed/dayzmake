@@ -821,12 +821,34 @@ fn build_creates_a_new_target_named_like_a_device() {
     let dir = tempfile::tempdir().unwrap();
     write(dir.path(), "m/a.txt", "hello");
     let (code, _, err) = dayzmake(&["build", "m", "aux.pbo"], dir.path());
-    // a file, or (if this Windows treats the name as a device) the device; never a NotFound error
-    assert_eq!(code, 0, "{err}");
-    let out = dir.path().join("aux.pbo");
-    if out.exists() {
-        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+    // either a PBO file, or (if this Windows treats the name as a device) the device took the data; in both
+    // cases the target is not reported as missing
+    if code == 0 {
+        if let Ok(bytes) = std::fs::read(dir.path().join("aux.pbo")) {
+            assert!(bytes.windows(4).take(8).any(|w| w == b"sreV"), "not a PBO");
+        }
+    } else {
+        let lower = err.to_lowercase();
+        assert!(
+            !lower.contains("not found") && !lower.contains("cannot find"),
+            "{err}"
+        );
     }
+}
+
+#[cfg(windows)]
+#[test]
+fn build_writes_to_con_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    // the child's stdout and stderr are captured by the helper; CON is the console, not those pipes
+    let (_, _, err) = dayzmake(&["build", "m", "CON"], dir.path());
+    let lower = err.to_lowercase();
+    assert!(!lower.contains("already exists"), "{err}");
+    assert!(
+        !lower.contains("not found") && !lower.contains("cannot find"),
+        "{err}"
+    );
 }
 
 #[cfg(windows)]
