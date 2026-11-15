@@ -190,17 +190,37 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
     Ok(target)
 }
 
-/// Whether an open file is a file on a disk. On Windows `Metadata::is_file` is also true for `NUL` and `CON`,
-/// so the handle's type (`GetFileType`) decides.
+/// Opens `path` for writing when it is a device (`NUL`, `CON`, ...), else `None`: a disk file, a missing target or a
+/// handle whose type cannot be read take the checked path. On Windows `Metadata::is_file` is also true for devices,
+/// so the type of a probe handle (`GetFileType`) decides; the probe has no data access, so a read-only or locked
+/// regular file is still reported as existing, not as "access denied".
 #[cfg(windows)]
-fn is_disk_file(file: &File) -> bool {
-    // an unanswerable handle is treated as a device: it is written in place, as before
-    winapi_util::file::typ(file).is_ok_and(|t| t.is_disk())
+fn open_device(path: &Path, failure: &str) -> io::Result<Option<File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let probe = match std::fs::OpenOptions::new().access_mode(0).open(path) {
+        Ok(f) => f,
+        Err(e) => return Err(e).prepend_error(failure),
+    };
+    // an unanswerable handle counts as a disk file: the worst case is an error, never an in-place overwrite
+    if winapi_util::file::typ(&probe).is_ok_and(|t| !t.is_disk()) {
+        drop(probe);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .prepend_error(failure)?;
+        return Ok(Some(file));
+    }
+    Ok(None)
 }
 
+/// Only Windows has device names that look like files.
 #[cfg(not(windows))]
-fn is_disk_file(file: &File) -> bool {
-    file.metadata().is_ok_and(|m| m.is_file())
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "same signature as the Windows version, which can fail"
+)]
+fn open_device(_path: &Path, _failure: &str) -> io::Result<Option<File>> {
+    Ok(None)
 }
 
 impl AtomicTarget {
@@ -246,14 +266,8 @@ impl AtomicTarget {
                 .is_some_and(dayzmake_core::pbo::is_device_name)
             && !path.is_dir()
         {
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .prepend_error(failure)?;
-            if !is_disk_file(&file) {
-                device = Some(file);
-            }
-            // a disk file: the handle is dropped unwritten and the normal path below applies
+            // a disk file or a missing target: nothing was written, the normal path below applies
+            device = open_device(path, failure)?;
         }
         if !force && device.is_none() && path.exists() {
             return Err(error!(

@@ -178,6 +178,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "winapi-util",
  "winreg",
 ]
 

@@ -815,6 +815,24 @@ fn build_force_replaces_and_truncates_a_regular_file_with_a_device_name() {
     assert!(written.len() < 100_000, "the old tail is gone");
 }
 
+#[cfg(windows)]
+#[test]
+fn build_reports_a_read_only_regular_file_with_a_device_name_as_existing() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&target, permissions).unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", &target], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("already exists"), "{err}");
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "test cleanup")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&target, permissions).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn build_force_replaces_a_read_only_target_and_keeps_it_read_only() {
