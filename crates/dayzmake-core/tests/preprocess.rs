@@ -284,3 +284,23 @@ fn preprocess_error_line_numbers_are_one_based() {
     let third = err("a = 1;\nb = 2;\n#define A(\n");
     assert!(third.contains("in.cpp:3:"), "{third}");
 }
+
+/// A parse error inside an included file names that file and its own line.
+#[test]
+fn parse_error_inside_an_included_file_names_it() {
+    let dir = tempdir().unwrap();
+    File::create(dir.path().join("inc.hpp"))
+        .unwrap()
+        .write_all(b"a = 1;\nb = \"open;\n")
+        .unwrap();
+    File::create(dir.path().join("in.cpp")).unwrap();
+    let msg = dayzmake_core::config::Config::from_string(
+        "#include \"inc.hpp\"\n".to_string(),
+        Some(dir.path().join("in.cpp")),
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(msg.contains("inc.hpp:2:"), "{msg}");
+}

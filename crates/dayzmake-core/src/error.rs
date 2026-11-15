@@ -91,9 +91,9 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {
-                // line_origins is never empty: preprocess() always seeds it with the
-                // top-level file, and its length is an upper bound for the parser's
-                // 1-based line numbers.
+                // line_origins holds one entry per preprocessed line and is empty for an
+                // input without lines, so the lookup can fail (handled below); otherwise its
+                // length is an upper bound for the parser's 1-based line numbers.
                 let idx = min(pe.location.line, info.line_origins.len()).saturating_sub(1);
                 let Some((line_origin, file)) = info.line_origins.get(idx) else {
                     return Err(error!(
