@@ -164,7 +164,11 @@ peg::parser! {
             (n, ce)
         }
 
-        rule unquoted_string_entry() -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? s:unquoted_string() {
+        rule unquoted_string_entry() -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? pos:position!() s:unquoted_string() {
+            if s.is_empty() {
+                // `x = ;`, or a macro that expanded to nothing; kept as "" so existing mods still build
+                warnings.push((pos, format!("Entry \"{}\" has no value; it is stored as an empty string.", printable(&n)), Some("empty-value")));
+            }
             (n, ConfigEntry::StringEntry(s))
         }
 

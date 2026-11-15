@@ -355,3 +355,18 @@ fn parse_error_shows_tabs_in_the_line_unescaped() {
     assert!(msg.contains("x\t= 1; ?"), "real tab in the line: {msg}");
     assert!(!msg.contains("\\t"), "no escaped tab: {msg}");
 }
+
+#[test]
+fn empty_value_raises_a_warning() {
+    let mut w = Warnings::default();
+    let config = Config::from_string("class A { x = ; };".to_string(), None, &[], &mut w).unwrap();
+    let warnings = w.warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let shown = warnings[0].to_string();
+    assert!(shown.contains("empty-value"), "{shown}");
+    assert!(shown.contains("\"x\""), "{shown}");
+    assert!(shown.contains("empty string"), "{shown}");
+    assert_eq!(warnings[0].line, Some(1));
+    assert_eq!(warnings[0].name, Some("empty-value"));
+    drop(config);
+}

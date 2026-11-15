@@ -2,4 +2,4 @@
 source: tests/golden_cli.rs
 expression: r.err()
 ---
-
+In file bad.cpp:1: warning: Entry "x" has no value; it is stored as an empty string. [empty-value]

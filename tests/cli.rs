@@ -946,3 +946,21 @@ fn build_through_a_symlink_keeps_the_link_name_as_prefix() {
         Some("mylink")
     );
 }
+
+#[test]
+fn empty_value_warns_and_can_be_muted() {
+    let (code, err) = rapify_str("class A { x = ; };\n");
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("config.cpp:1") && err.contains("empty-value"),
+        "{err}"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "config.cpp", "class A { x = ; };\n");
+    let (code, _, err) = dayzmake(
+        &["-w", "empty-value", "rapify", "config.cpp", "c.bin"],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("empty-value"), "{err}");
+}
