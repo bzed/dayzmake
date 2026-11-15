@@ -9,7 +9,7 @@ use std::io::{Error, Read};
 use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
-use crate::error::{ErrorExt, PreprocessParseErrorExt};
+use crate::error::{ErrorExt, PreprocessParseErrorExt, printable};
 use crate::warning::{Warning, WarningSink};
 
 peg::parser! {
@@ -642,13 +642,14 @@ fn include_not_found(include_path: &str, origin: Option<&Path>, line: u32) -> Er
     match origin {
         Some(origin_path) => error!(
             "File \"{}\" included from \"{}:{}\" not found.",
-            include_path,
-            origin_path.display(),
+            printable(include_path),
+            printable(&origin_path.display().to_string()),
             line
         ),
         None => error!(
             "Included file \"{}\" (line {}) not found.",
-            include_path, line
+            printable(include_path),
+            line
         ),
     }
 }
@@ -658,8 +659,8 @@ fn warn_include_case(include_path: &str, found: &Path, warnings: &mut dyn Warnin
         Some("include-case"),
         format!(
             "Include \"{}\" only matched \"{}\" ignoring case.",
-            include_path,
-            found.display()
+            printable(include_path),
+            printable(&found.display().to_string())
         ),
     ));
 }

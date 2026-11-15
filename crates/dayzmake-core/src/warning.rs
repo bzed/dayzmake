@@ -4,6 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use crate::error::printable;
+
 /// Per-name quota of kept warnings in [`Warnings::new`].
 const DEFAULT_QUOTA: u32 = 10;
 
@@ -74,10 +76,10 @@ impl Warning {
         self
     }
 
-    /// The location prefix: `In file f:l: `, `In file f: `, `In line l: ` or nothing.
+    /// The location prefix (the file name is escaped with [`printable`]): `In file f:l: `, `In file f: `, `In line l: ` or nothing.
     #[must_use]
     pub fn location(&self) -> String {
-        match (&self.file, self.line) {
+        match (self.file.as_deref().map(printable), self.line) {
             (Some(file), Some(line)) => format!("In file {file}:{line}: "),
             (Some(file), None) => format!("In file {file}: "),
             (None, Some(line)) => format!("In line {line}: "),

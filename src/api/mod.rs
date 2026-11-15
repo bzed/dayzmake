@@ -227,7 +227,7 @@ fn load_mods(
                                 local.warn(
                                     Warning::new(
                                         Some("api-bad-mod"),
-                                        format!("skipping mod {}: {e}", m.name),
+                                        format!("skipping mod {}: {e}", printable(&m.name)),
                                     )
                                     .in_file(m.dir.display().to_string()),
                                 );

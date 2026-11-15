@@ -250,3 +250,18 @@ fn endif_without_ifdef_is_an_error() {
         .is_err()
     );
 }
+
+/// An include path from the file is untrusted: the error must not carry raw control characters.
+#[test]
+fn missing_include_with_control_characters_is_escaped() {
+    let err = preprocess(
+        String::from("#include \"a\u{1b}[31mb.hpp\"\n"),
+        None,
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("a\\u{1b}[31mb.hpp"), "{msg:?}");
+    assert!(!msg.contains('\u{1b}'), "{msg:?}");
+}
