@@ -1012,7 +1012,8 @@ impl PBO {
             let kept = self
                 .headers
                 .iter()
-                .rfind(|h| h.filename == *name && h.packing_method == PACKING_COMPRESSED);
+                .rfind(|h| h.filename == *name)
+                .filter(|h| h.packing_method == PACKING_COMPRESSED);
             let header = PBOHeader {
                 filename: (*name).to_string(),
                 raw_filename: self.raw_names.get(*name).cloned(),

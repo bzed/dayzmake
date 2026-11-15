@@ -596,3 +596,19 @@ fn duplicate_entry_names_use_the_header_of_the_kept_value() {
     let back = read(&rewritten(&pbo));
     assert_eq!(back.file_data("a.txt").unwrap().unwrap(), second);
 }
+
+#[test]
+fn duplicate_names_compressed_first_stored_last_survive_a_rewrite() {
+    let stored = support::lzss_literals(b"first!!!");
+    let bytes = support::raw_pbo_with_headers(
+        &[
+            ("a.txt", &stored, support::CPRS, 8),
+            ("a.txt", b"second", 0, 6),
+        ],
+        &[],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(pbo.file_data("a.txt").unwrap().unwrap(), b"second");
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"second");
+}

@@ -14,12 +14,18 @@ pub fn raw_pbo(entries: &[(&str, &[u8])], extensions: &[(&str, &str)]) -> Vec<u8
 }
 
 /// Packing method of LZSS-compressed ("Cprs") entries.
-#[allow(dead_code, reason = "not every test crate uses it")]
+#[allow(
+    dead_code,
+    reason = "shared by several test crates; not all of them use it"
+)]
 pub const CPRS: u32 = 0x4370_7273;
 
 /// A literal-only LZSS stream the reader decodes to `data`: flag byte `0xFF` (eight literals),
 /// then those literals, repeated. No trailing checksum (the reader ignores it).
-#[allow(dead_code, reason = "not every test crate uses it")]
+#[allow(
+    dead_code,
+    reason = "shared by several test crates; not all of them use it"
+)]
 pub fn lzss_literals(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for group in data.chunks(8) {
