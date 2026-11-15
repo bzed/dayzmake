@@ -2,6 +2,15 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Points `HOME` and the XDG directories of `cmd` at `home`, so a test never reads or writes the
+/// user's configuration or caches.
+fn isolate(cmd: &mut Command, home: &Path) {
+    cmd.env("HOME", home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env("XDG_DATA_HOME", home.join("data"));
+}
+
 /// Runs dayzmake in `cwd`; returns (exit code, stdout, stderr). A panic shows up as 101.
 ///
 /// # Panics
@@ -21,11 +30,11 @@ pub fn dayzmake(args: &[&str], cwd: &Path) -> (i32, String, String) {
 #[must_use]
 #[expect(clippy::expect_used, reason = "test helper")]
 pub fn dayzmake_raw(args: &[&str], cwd: &Path) -> (i32, Vec<u8>, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("failed to run dayzmake");
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args).current_dir(cwd);
+    isolate(&mut cmd, home.path());
+    let out = cmd.output().expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
         out.stdout,
@@ -220,12 +229,13 @@ fn tempdir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 #[must_use]
 #[expect(clippy::expect_used, reason = "test helper")]
 fn dayzmake_no_tools(args: &[&str], cwd: &Path) -> (i32, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_dayzmake"))
-        .args(args)
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
         .current_dir(cwd)
-        .env("DAYZ_TOOLS", "/nonexistent/dayz-tools")
-        .output()
-        .expect("failed to run dayzmake");
+        .env("DAYZ_TOOLS", "/nonexistent/dayz-tools");
+    isolate(&mut cmd, home.path());
+    let out = cmd.output().expect("failed to run dayzmake");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stderr).into_owned(),

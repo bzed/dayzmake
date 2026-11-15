@@ -51,6 +51,8 @@ fn session(reqs: &[Value], cwd: &Path) -> Run {
         .env("NO_COLOR", "1")
         .env_remove("STEAM_ROOT")
         .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env_remove("BIOUTPUT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

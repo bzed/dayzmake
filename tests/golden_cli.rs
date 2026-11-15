@@ -52,6 +52,9 @@ fn dayzmake_env(args: &[&str], cwd: &Path, stdin: Option<&[u8]>, env: &[(&str, &
         .env("XDG_DATA_HOME", h.join("data"))
         .env("NO_COLOR", "1")
         .env_remove("STEAM_ROOT")
+        .env_remove("DAYZ_TOOLS")
+        .env_remove("PROTON")
+        .env_remove("BIOUTPUT")
         .stdin(if stdin.is_some() {
             Stdio::piped()
         } else {
