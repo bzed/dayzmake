@@ -1,0 +1,71 @@
+//! Text taken from untrusted files never reaches an error or warning as a raw control character
+//! (issues #15 and #22).
+
+#[cfg(unix)]
+use std::path::PathBuf;
+
+use dayzmake_core::config::Config;
+use dayzmake_core::warning::Warnings;
+
+#[cfg(unix)]
+use dayzmake_core::preprocess::preprocess;
+
+/// Asserts the message shows `escaped` and holds no raw ESC.
+fn assert_escaped(msg: &str, escaped: &str) {
+    assert!(msg.contains(escaped), "{msg:?}");
+    assert!(!msg.contains('\u{1b}'), "{msg:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn error_inside_an_include_with_a_control_character_name_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("main.cpp"), "").unwrap();
+    std::fs::write(dir.path().join("a\u{1b}b.hpp"), "#endif\n").unwrap();
+    let err = preprocess(
+        String::from("#include \"a\u{1b}b.hpp\"\n"),
+        Some(dir.path().join("main.cpp")),
+        &Vec::<PathBuf>::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "a\\u{1b}b.hpp");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_error_location_in_an_include_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("config.cpp"), "").unwrap();
+    std::fs::write(dir.path().join("a\u{1b}b.hpp"), "class {\n").unwrap();
+    let err = Config::from_string(
+        String::from("#include \"a\u{1b}b.hpp\"\n"),
+        Some(dir.path().join("config.cpp")),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "a\\u{1b}b.hpp");
+}
+
+#[cfg(unix)]
+#[test]
+fn include_case_warning_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("z")).unwrap();
+    std::fs::write(dir.path().join("z/\u{1b}foo.hpp"), "x\n").unwrap();
+    let mut warnings = Warnings::new();
+    preprocess(
+        String::from("#include \"\\z\\\u{1b}Foo.hpp\"\n"),
+        None,
+        &[dir.path().to_path_buf()],
+        &mut warnings,
+    )
+    .unwrap();
+    let w = warnings
+        .warnings()
+        .iter()
+        .find(|w| w.name == Some("include-case"))
+        .expect("include-case warning");
+    assert_escaped(&w.to_string(), "\\u{1b}Foo.hpp");
+}

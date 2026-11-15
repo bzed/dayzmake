@@ -704,7 +704,7 @@ fn find_include_file(
             let Some(origin_dir) = absolute.parent() else {
                 return Err(error!(
                     "Include origin \"{}\" has no parent directory.",
-                    origin_path.display()
+                    printable(&origin_path.display().to_string())
                 ));
             };
             path = origin_dir.join(path);
@@ -803,7 +803,10 @@ fn preprocess_rec(
                             includefolders,
                             warnings,
                         )
-                        .prepend_error(format!("Failed to preprocess include \"{path}\":"))?;
+                        .prepend_error(format!(
+                            "Failed to preprocess include \"{}\":",
+                            printable(&path)
+                        ))?;
 
                         info.import_stack.pop();
 

@@ -58,7 +58,7 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 let line_origin = u32::try_from(line_index)
                     .map_err(|_| error!("invalid line number {}", pe.location.line))?;
                 let file_origin = match origin {
-                    Some(path) => format!("{}:", path.display()),
+                    Some(path) => format!("{}:", printable(&path.display().to_string())),
                     None => String::new(),
                 };
 
@@ -102,7 +102,7 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 };
                 let line_origin = *line_origin;
                 let file_origin = match file {
-                    Some(path) => format!("{}:", path.display()),
+                    Some(path) => format!("{}:", printable(&path.display().to_string())),
                     None => String::new(),
                 };
 
