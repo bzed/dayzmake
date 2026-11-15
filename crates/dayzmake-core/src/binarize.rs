@@ -671,12 +671,31 @@ mod proton {
             .map(|e| format!("Warning: failed to remove \"{}\": {}", sb.root.display(), e))
     }
 
+    /// The prefix as safe path parts. An empty prefix (an addon without `$PBOPREFIX$`) has no parts;
+    /// anything `safe_relative_path` rejects (`..`, `.`, absolute, drive letter, control characters) is an error.
+    fn prefix_parts(prefix: &str) -> Result<Vec<String>, Error> {
+        if prefix.chars().all(|c| c == '\\' || c == '/') {
+            return Ok(Vec::new());
+        }
+        let unsafe_prefix = || error!("Unsafe PBO prefix \"{}\" for binarize.", printable(prefix));
+        // `safe_relative_path` skips empty components, so a leading separator (absolute) is checked here
+        if prefix.starts_with(['\\', '/']) {
+            return Err(unsafe_prefix());
+        }
+        let safe = crate::pbo::safe_relative_path(prefix).ok_or_else(unsafe_prefix)?;
+        safe.iter()
+            .map(|c| c.to_str().map(String::from).ok_or_else(unsafe_prefix))
+            .collect()
+    }
+
     /// Makes the addon visible at `<sandbox>/P/<prefix>` (once per addon).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prefix would leave the sandbox, or the link cannot be created.
     pub fn stage_addon(root: &Path, prefix: &str, addon_root: &Path) -> Result<(), Error> {
         let mut link = root.join("P");
-        for part in prefix.split(['\\', '/']).filter(|p| !p.is_empty()) {
-            link.push(part);
-        }
+        link.extend(prefix_parts(prefix)?);
         if link.symlink_metadata().is_ok() {
             return Ok(());
         }
@@ -687,19 +706,19 @@ mod proton {
     }
 
     /// Windows path on the P: drive of `relative_dir` inside the addon with the given prefix.
-    pub fn p_win_path(prefix: &str, relative_dir: &Path) -> String {
-        let mut parts: Vec<String> = prefix
-            .split(['\\', '/'])
-            .filter(|p| !p.is_empty())
-            .map(String::from)
-            .collect();
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the prefix would leave the sandbox.
+    pub fn p_win_path(prefix: &str, relative_dir: &Path) -> Result<String, Error> {
+        let mut parts = prefix_parts(prefix)?;
         parts.extend(
             relative_dir
                 .iter()
                 .filter_map(|c| c.to_str())
                 .map(String::from),
         );
-        format!("P:\\{}", parts.join("\\"))
+        Ok(format!("P:\\{}", parts.join("\\")))
     }
 
     pub fn binarize(
@@ -733,7 +752,7 @@ mod proton {
         create_dir_all(&out_dir)?;
 
         let log = out_dir.join("binarize.log");
-        let in_w = p_win_path(prefix, relative_dir);
+        let in_w = p_win_path(prefix, relative_dir)?;
         let out_w = win_path(&sb.root, &out_dir);
         run_proton(
             sb,
@@ -799,10 +818,52 @@ mod proton {
             // staging twice is fine
             stage_addon(root.path(), "my\\mod", src.path()).unwrap();
             assert_eq!(
-                p_win_path("my\\mod", Path::new("sub/dir")),
+                p_win_path("my\\mod", Path::new("sub/dir")).unwrap(),
                 "P:\\my\\mod\\sub\\dir"
             );
-            assert_eq!(p_win_path("my\\mod", Path::new("")), "P:\\my\\mod");
+            assert_eq!(p_win_path("my\\mod", Path::new("")).unwrap(), "P:\\my\\mod");
+        }
+
+        const BAD_PREFIXES: [&str; 5] = ["..\\..\\x", "a\\..\\..\\x", "/abs", "C:\\x", "a\\.\\b"];
+
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for e in fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                out.push(p.clone());
+                if p.is_dir() && !p.is_symlink() {
+                    walk(&p, out);
+                }
+            }
+        }
+
+        #[test]
+        fn stage_addon_rejects_parent_components() {
+            let outer = tempfile::tempdir().unwrap();
+            let root = outer.path().join("root");
+            let src = tempfile::tempdir().unwrap();
+            fs::create_dir_all(root.join("P")).unwrap();
+            let snapshot = || {
+                let mut v = Vec::new();
+                walk(outer.path(), &mut v);
+                v.sort();
+                v
+            };
+            let before = snapshot();
+            for prefix in BAD_PREFIXES {
+                let err = stage_addon(&root, prefix, src.path()).unwrap_err();
+                assert!(
+                    err.to_string().contains("Unsafe PBO prefix"),
+                    "{prefix}: {err}"
+                );
+                assert_eq!(snapshot(), before, "{prefix}");
+            }
+        }
+
+        #[test]
+        fn p_win_path_rejects_parent_components() {
+            for prefix in BAD_PREFIXES {
+                assert!(p_win_path(prefix, Path::new("")).is_err(), "{prefix}");
+            }
         }
 
         #[test]
