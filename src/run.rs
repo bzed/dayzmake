@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
 use std::path::{Path, PathBuf};
 
@@ -182,9 +181,10 @@ pub struct Args {
 
 fn get_input(args: &Args) -> Result<Input, Error> {
     if let Some(ref source) = args.arg_source {
-        Ok(Input::File(
-            File::open(source).prepend_error("Failed to open input file:")?,
-        ))
+        Ok(Input::File(crate::cli_io::open_input(
+            Path::new(source),
+            "input file",
+        )?))
     } else {
         let mut buffer: Vec<u8> = Vec::new();
         stdin()

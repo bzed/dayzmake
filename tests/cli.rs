@@ -591,3 +591,35 @@ fn build_warning_in_an_include_outside_the_addon_keeps_its_path() {
     let expected = format!("In file {}:1: ", shared.display());
     assert!(err.contains(&expected), "{err}");
 }
+
+#[test]
+fn missing_input_errors_name_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "x.pbo", "");
+    let cases: [(&[&str], &str); 7] = [
+        (&["rapify", "nope.cpp", "x"], "nope.cpp"),
+        (&["inspect", "nope.pbo"], "nope.pbo"),
+        (&["unpack", "nope.pbo", "d"], "nope.pbo"),
+        (
+            &["sign", "nokey.biprivatekey", "x.pbo"],
+            "nokey.biprivatekey",
+        ),
+        (&["verify", "nokey.bikey", "x.pbo"], "nokey.bikey"),
+        (&["paa2img", "nope.paa", "o.png"], "nope.paa"),
+        (&["img2paa", "nope.png", "o.paa"], "nope.png"),
+    ];
+    for (args, name) in cases {
+        let (code, _, err) = dayzmake(args, dir.path());
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(err.contains(&format!("\"{name}\":")), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn control_characters_in_a_missing_path_are_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "a\u{1b}[31mb.cpp", "x"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("a\\u{1b}[31mb.cpp"), "{err}");
+    assert!(!err.contains('\u{1b}'), "{err}");
+}
