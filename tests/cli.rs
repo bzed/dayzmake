@@ -975,3 +975,54 @@ fn rapify_rejects_a_nul_in_a_string_and_names_the_entry() {
     assert!(err.contains("Entry \"a\""), "{err}");
     assert!(!dir.path().join("c.bin").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn build_writes_to_dev_null() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "/dev/null"], dir.path());
+    assert_eq!(code, 0, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_to_dev_stdout_through_a_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let (code, out, err) = dayzmake_raw(&["build", "-f", "mod", "/dev/stdout"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.windows(5).any(|w| w == b"hello"), "{out:?}");
+    assert_eq!(names(dir.path()), ["mod"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_into_a_fifo_and_keeps_it() {
+    use std::os::unix::fs::FileTypeExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let fifo = dir.path().join("f.pbo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "f.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let bytes = reader.join().unwrap();
+    assert!(bytes.windows(5).any(|w| w == b"hello"));
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+    assert_eq!(names(dir.path()), ["f.pbo", "mod"]);
+}

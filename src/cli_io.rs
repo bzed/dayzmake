@@ -86,6 +86,8 @@ pub struct AtomicTarget {
     temp: PathBuf,
     file: Option<File>,
     done: bool,
+    /// a device, FIFO or pipe: written in place, no temp file, no rename
+    direct: bool,
 }
 
 /// Where a write to `path` really lands: `path` itself, or what a symlink there points to.
@@ -148,6 +150,21 @@ impl AtomicTarget {
         if path.is_dir() {
             return Err(error!("Target \"{}\" is a directory.", path.display()));
         }
+        // `metadata` follows links, so `/dev/stdout` onto a pipe is found too
+        if std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
+            // no truncate: a device or FIFO has nothing to truncate
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .prepend_error(failure)?;
+            return Ok(AtomicTarget {
+                path: path.to_path_buf(),
+                temp: PathBuf::new(),
+                file: Some(file),
+                done: true,
+                direct: true,
+            });
+        }
         let real = resolve_link(path)?;
         let name = real
             .file_name()
@@ -170,6 +187,7 @@ impl AtomicTarget {
                         temp,
                         file: Some(file),
                         done: false,
+                        direct: false,
                     };
                     if !private && let Ok(meta) = std::fs::metadata(&target.path) {
                         // on error `target` is dropped, which removes the temp file
@@ -188,12 +206,21 @@ impl AtomicTarget {
         ))
     }
 
-    /// Flushes the data to disk and renames the temp file over the target.
+    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO or pipe target was written
+    /// in place and is only flushed.
     ///
     /// # Errors
     ///
     /// Returns an error if syncing or renaming fails; the temp file is removed then.
     pub fn commit(mut self) -> io::Result<()> {
+        if self.direct {
+            // devices and pipes cannot be synced; flushing is all there is
+            return self
+                .file
+                .take()
+                .map_or(Ok(()), |mut f| f.flush())
+                .prepend_error("Failed to write output file:");
+        }
         if let Some(file) = self.file.take() {
             file.sync_all()
                 .prepend_error("Failed to write output file:")?;
