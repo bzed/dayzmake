@@ -24,6 +24,9 @@ is maintained here.
 
 ## Changes
 
+- Key generation no longer uses OpenSSL: `dayzmake key` generates the RSA key pair with the pure-Rust `rsa` crate and the
+  operating system's random number generator. Key files keep their layout. `dayzmake-core` needs OpenSSL only for its
+  tests now. Key components read from a key file are wiped from memory when dropped.
 - Two misleading errors are fixed: a `.bisign` with a bad header says "Invalid signature file" (not "public key"), and
   verifying with a key other than the one that made the signature says "The signature was made with a different key"
   (names and lengths only) instead of a complaint about the modulus (#56).

@@ -258,7 +258,6 @@ dependencies = [
  "image",
  "linked-hash-map",
  "lzo1x",
- "openssl",
  "peg",
  "regex",
  "rsa",

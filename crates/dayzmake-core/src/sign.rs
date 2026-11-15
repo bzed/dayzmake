@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use getrandom::SysRng;
-use openssl::bn::BigNumRef;
-use openssl::rsa::Rsa;
 use rsa::hazmat::{rsa_decrypt_and_check, rsa_encrypt};
+use rsa::rand_core::TryCryptoRng;
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BoxedUint, PrivateKey, PublicKey};
 use sha1::{Digest, Sha1};
@@ -445,17 +444,18 @@ impl BIPrivateKey {
 
         let full = (length / 8) as usize;
         let half = (length / 16) as usize;
+        // Everything but `n` is secret: wiped on drop, also on the error returns below.
         let n = read_uint(input, full)?;
-        let p = read_uint(input, half)?;
-        let q = read_uint(input, half)?;
-        let exp_p = read_uint(input, half)?;
-        let exp_q = read_uint(input, half)?;
-        let iqmp = read_uint(input, half)?;
-        let d = read_uint(input, full)?;
+        let p = Zeroizing::new(read_uint(input, half)?);
+        let q = Zeroizing::new(read_uint(input, half)?);
+        let exp_p = Zeroizing::new(read_uint(input, half)?);
+        let exp_q = Zeroizing::new(read_uint(input, half)?);
+        let iqmp = Zeroizing::new(read_uint(input, half)?);
+        let d = Zeroizing::new(read_uint(input, full)?);
 
         // `rsa` would reject most of these, but some values would reach its arithmetic first (a modulus of
         // one, a prime of zero), so every component is checked here.
-        for value in [&n, &p, &q, &exp_p, &exp_q, &iqmp, &d] {
+        for value in [&n, &*p, &*q, &*exp_p, &*exp_q, &*iqmp, &*d] {
             if is_trivial(value) {
                 return Err(error!("Invalid private key (a component is zero or one)."));
             }
@@ -465,13 +465,22 @@ impl BIPrivateKey {
                 "Invalid private key file (the modulus is not {length} bits wide)."
             ));
         }
-        let key =
-            PrivateKey::from_components(n, BoxedUint::from(u64::from(exponent)), d, vec![p, q])
-                .map_err(key_err)
-                .prepend_error("Invalid private key:")?;
+        // `from_components` takes its numbers by value: the key owns (and wipes) copies, ours are wiped here.
+        let key = PrivateKey::from_components(
+            n,
+            BoxedUint::from(u64::from(exponent)),
+            (*d).clone(),
+            vec![(*p).clone(), (*q).clone()],
+        )
+        .map_err(key_err)
+        .prepend_error("Invalid private key:")?;
 
         // `rsa` recomputes the CRT values from `d`, `p` and `q`; the file's copies must agree.
-        let consistent = match (key.dp(), key.dq(), key.crt_coefficient()) {
+        let consistent = match (
+            key.dp(),
+            key.dq(),
+            key.crt_coefficient().map(Zeroizing::new),
+        ) {
             (Some(dp), Some(dq), Some(qinv)) => {
                 same_value(dp, &exp_p) && same_value(dq, &exp_q) && same_value(&qinv, &iqmp)
             }
@@ -491,31 +500,45 @@ impl BIPrivateKey {
         })
     }
 
-    /// Generate a new private key with the given name and bitlength.
+    /// Generate a new private key with the given name and bitlength, with the exponent 65537.
     ///
-    /// Arma 3 uses 1024 bit keys.
+    /// Arma 3 uses 1024 bit keys. The length must be a multiple of 16 (the key file layout) between 384 bits (the
+    /// `CryptoAPI` minimum, see [`BIPrivateKey::sign`]) and 16384 bits. Primes come from the operating system's
+    /// random number generator.
     ///
     /// # Errors
     ///
-    /// Returns an error if `length` is below 384 bits (the `CryptoAPI` minimum) or the keypair cannot be generated.
+    /// Returns an error if `length` is not usable or the keypair cannot be generated.
     pub fn generate(length: u32, name: String) -> Result<BIPrivateKey, Error> {
+        Self::generate_with_rng(length, name, &mut SysRng)
+    }
+
+    /// [`generate`](Self::generate) with a caller-supplied random number generator (seeded ones in tests).
+    pub(crate) fn generate_with_rng<R: TryCryptoRng + ?Sized>(
+        length: u32,
+        name: String,
+        rng: &mut R,
+    ) -> Result<BIPrivateKey, Error> {
         check_sign_length(length)?;
-        let rsa = Rsa::generate(length).map_err(|e| error!("Failed to generate keypair: {e}"))?;
-        // `OpenSSL` hands out its numbers as plain vectors; ours are wiped on drop.
-        let secret = |v: &BigNumRef| BoxedUint::from_be_slice_vartime(&Zeroizing::new(v.to_vec()));
-        let factor = |v: Option<&BigNumRef>| {
-            let v = v.ok_or_else(|| error!("Generated keypair is missing a factor."))?;
-            Ok::<_, Error>(secret(v))
-        };
+        check_key_length(length)?;
+        if !length.is_multiple_of(16) {
+            return Err(error!(
+                "Invalid key length: {length} (it must be a multiple of 16)."
+            ));
+        }
         let exponent = 65537;
-        let key = PrivateKey::from_components(
-            secret(rsa.n()),
-            BoxedUint::from(u64::from(exponent)),
-            secret(rsa.d()),
-            vec![factor(rsa.p())?, factor(rsa.q())?],
-        )
-        .map_err(key_err)
-        .prepend_error("Generated keypair:")?;
+        // `rsa` refuses anything below 1024 bits by default; BI keys may be smaller (down to 384 bits for
+        // signing), so the unchecked variant is used and the size limits are ours.
+        let bits = usize::try_from(length).map_err(|_| error!("Invalid key length: {length}."))?;
+        let key =
+            PrivateKey::new_with_exp_unchecked(rng, bits, BoxedUint::from(u64::from(exponent)))
+                .map_err(key_err)
+                .prepend_error("Failed to generate keypair:")?;
+        if key.n().as_ref().bit_width_vartime() != length {
+            return Err(error!(
+                "Failed to generate keypair: the modulus is not {length} bits wide."
+            ));
+        }
 
         Ok(BIPrivateKey {
             name,
@@ -596,9 +619,11 @@ impl BIPrivateKey {
             return Err(error!("Invalid private key (missing primes)."));
         };
         // The CRT values are recomputed from `d`, `p` and `q`; `read` checks that the file holds the same.
-        let (Some(exp_p), Some(exp_q), Some(iqmp)) =
-            (self.key.dp(), self.key.dq(), self.key.crt_coefficient())
-        else {
+        let (Some(exp_p), Some(exp_q), Some(iqmp)) = (
+            self.key.dp(),
+            self.key.dq(),
+            self.key.crt_coefficient().map(Zeroizing::new),
+        ) else {
             return Err(error!("Invalid private key (missing CRT values)."));
         };
         write_uint(output, self.key.n().as_ref(), full)?;
@@ -816,5 +841,147 @@ impl BISign {
         output.write_u32::<LittleEndian>(self.length / 8)?;
         write_uint(output, &self.sig3, (self.length / 8) as usize)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Key generation is tested here because the seeded entry point `generate_with_rng` is private to the crate.
+    #![expect(
+        clippy::many_single_char_names,
+        reason = "the names of the RSA numbers: n, e, d, p, q"
+    )]
+
+    use std::fs;
+    use std::io::Cursor;
+
+    use openssl::bn::{BigNum, BigNumContext};
+    use rand_chacha::ChaCha20Rng;
+    use rand_core::SeedableRng;
+
+    use super::*;
+
+    fn seeded(seed: u64, bits: u32) -> BIPrivateKey {
+        let mut rng = ChaCha20Rng::seed_from_u64(seed);
+        BIPrivateKey::generate_with_rng(bits, "gen".to_string(), &mut rng).unwrap()
+    }
+
+    fn bn(value: &BoxedUint) -> BigNum {
+        BigNum::from_slice(&value.to_be_bytes_trimmed_vartime()).unwrap()
+    }
+
+    fn file(key: &BIPrivateKey) -> Vec<u8> {
+        let mut out = Vec::new();
+        key.write(&mut out).unwrap();
+        out
+    }
+
+    #[test]
+    fn generated_key_is_valid() {
+        for (seed, bits) in [(1u64, 384u32), (2, 1024)] {
+            let key = seeded(seed, bits);
+            assert_eq!((key.length, key.exponent), (bits, 65537));
+            let n = bn(key.key.n().as_ref());
+            assert_eq!(n.num_bits(), i32::try_from(bits).unwrap());
+            let primes = key.key.primes();
+            let (p, q) = (bn(&primes[0]), bn(&primes[1]));
+            let (d, e) = (bn(key.key.d()), BigNum::from_u32(65537).unwrap());
+            let mut ctx = BigNumContext::new().unwrap();
+            let one = BigNum::from_u32(1).unwrap();
+
+            // p * q = n
+            let mut product = BigNum::new().unwrap();
+            product.checked_mul(&p, &q, &mut ctx).unwrap();
+            assert_eq!(product, n);
+
+            // e * d = 1 mod phi(n); `rsa` computes d from phi (not from lambda)
+            let (mut p1, mut q1, mut phi) = (
+                BigNum::new().unwrap(),
+                BigNum::new().unwrap(),
+                BigNum::new().unwrap(),
+            );
+            p1.checked_sub(&p, &one).unwrap();
+            q1.checked_sub(&q, &one).unwrap();
+            phi.checked_mul(&p1, &q1, &mut ctx).unwrap();
+            let (mut ed, mut check) = (BigNum::new().unwrap(), BigNum::new().unwrap());
+            ed.checked_mul(&e, &d, &mut ctx).unwrap();
+            check.nnmod(&ed, &phi, &mut ctx).unwrap();
+            assert_eq!(check, one, "e * d mod phi(n)");
+
+            // CRT values
+            let (mut dp, mut dq, mut qinv_q) = (
+                BigNum::new().unwrap(),
+                BigNum::new().unwrap(),
+                BigNum::new().unwrap(),
+            );
+            dp.nnmod(&d, &p1, &mut ctx).unwrap();
+            dq.nnmod(&d, &q1, &mut ctx).unwrap();
+            assert_eq!(dp, bn(key.key.dp().unwrap()));
+            assert_eq!(dq, bn(key.key.dq().unwrap()));
+            let qinv = key.key.crt_coefficient().unwrap();
+            let mut prod = BigNum::new().unwrap();
+            prod.checked_mul(&bn(&qinv), &q, &mut ctx).unwrap();
+            qinv_q.nnmod(&prod, &p, &mut ctx).unwrap();
+            assert_eq!(qinv_q, one, "qinv * q mod p");
+
+            // the key file round-trips byte for byte
+            let bytes = file(&key);
+            let again = BIPrivateKey::read(&mut Cursor::new(&bytes)).unwrap();
+            assert_eq!(file(&again), bytes);
+            assert_eq!(again.name(), "gen");
+        }
+    }
+
+    #[test]
+    fn generated_key_signs_and_verifies() {
+        let pbo_bytes = fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/bi/sign/testsig.pbo"
+        ))
+        .unwrap();
+        let pbo = PBO::read(&mut Cursor::new(pbo_bytes)).unwrap();
+        let key = seeded(3, 1024);
+        let public = key.to_public_key().unwrap();
+        for version in [BISignVersion::V2, BISignVersion::V3] {
+            let signature = key.sign(&pbo, version).unwrap();
+            public.verify(&pbo, &signature).unwrap();
+
+            // the independent side: OpenSSL's modular exponentiation recovers the padded hashes
+            let hashes = generate_hashes(&pbo, version, 1024).unwrap();
+            let n = bn(key.key.n().as_ref());
+            let e = BigNum::from_u32(65537).unwrap();
+            let mut ctx = BigNumContext::new().unwrap();
+            for (sig, hash) in [&signature.sig1, &signature.sig2, &signature.sig3]
+                .into_iter()
+                .zip(&hashes)
+            {
+                let mut back = BigNum::new().unwrap();
+                back.mod_exp(&bn(sig), &e, &n, &mut ctx).unwrap();
+                assert_eq!(back.to_vec(), trim_zeros(hash));
+            }
+        }
+    }
+
+    #[test]
+    fn seeded_generation_is_deterministic() {
+        assert_eq!(file(&seeded(4, 512)), file(&seeded(4, 512)));
+        assert_ne!(file(&seeded(4, 512)), file(&seeded(5, 512)));
+    }
+
+    #[test]
+    fn generation_with_the_os_rng_is_not_deterministic() {
+        let a = BIPrivateKey::generate(384, "a".to_string()).unwrap();
+        let b = BIPrivateKey::generate(384, "a".to_string()).unwrap();
+        assert_ne!(file(&a), file(&b));
+    }
+
+    #[test]
+    fn unusable_lengths_are_refused() {
+        for bits in [0, 288, 368, 383, 392, 400 + 8, MAX_KEY_BITS + 16] {
+            assert!(
+                BIPrivateKey::generate(bits, "x".to_string()).is_err(),
+                "{bits}"
+            );
+        }
     }
 }
