@@ -695,17 +695,22 @@ impl PBO {
     }
 
     /// The SHA-1 of the PBO: the one computed while reading for a PBO that was read (an error if
-    /// the stored trailer differs), the one [`PBO::write`] would produce otherwise (nothing is
+    /// the stored trailer differs; `signing` adds the advice to repack), the one [`PBO::write`] would produce otherwise (nothing is
     /// kept in memory or on disk for it).
     #[cfg(feature = "sign")]
-    pub(crate) fn trailer_checksum(&self) -> Result<Vec<u8>, Error> {
+    pub(crate) fn trailer_checksum(&self, signing: bool) -> Result<Vec<u8>, Error> {
         match (&self.checksum, &self.computed_checksum) {
             (Some(stored), Some(computed)) => {
                 if stored == computed {
                     Ok(computed.clone())
                 } else {
                     Err(error!(
-                        "PBO checksum mismatch: the stored SHA-1 trailer does not match the SHA-1 of the PBO's contents (the PBO is corrupt or was modified)."
+                        "PBO checksum mismatch: the stored SHA-1 trailer does not match the SHA-1 of the PBO's contents (the PBO is corrupt or was modified){}.",
+                        if signing {
+                            "; repack it (dayzmake pack/build) before signing"
+                        } else {
+                            ""
+                        }
                     ))
                 }
             }

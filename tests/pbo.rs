@@ -596,6 +596,7 @@ fn cli_verify_rejects_a_pbo_with_a_stale_trailer() {
     );
     assert_ne!(code, 0, "{err}");
     assert!(err.contains("checksum mismatch"), "{err}");
+    assert!(!err.contains("repack"), "{err}");
 }
 
 #[test]
@@ -615,5 +616,6 @@ fn cli_sign_refuses_a_pbo_with_a_stale_trailer() {
     );
     assert_ne!(code, 0, "{err}");
     assert!(err.contains("checksum mismatch"), "{err}");
+    assert!(err.contains("repack it"), "{err}");
     assert!(!sig.exists());
 }

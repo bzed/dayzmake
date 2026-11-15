@@ -322,10 +322,15 @@ fn filehash(pbo: &PBO, version: BISignVersion) -> [u8; 20] {
 }
 
 /// The three padded hashes that BI signs, big-endian, `length / 8` bytes each.
-fn generate_hashes(pbo: &PBO, version: BISignVersion, length: u32) -> Result<[Vec<u8>; 3], Error> {
-    // a PBO that was read keeps its stored trailer (a foreign one may differ from what we would
-    // write); one that was not read gets the trailer `PBO::write` would produce
-    let checksum = pbo.trailer_checksum()?;
+fn generate_hashes(
+    pbo: &PBO,
+    version: BISignVersion,
+    length: u32,
+    signing: bool,
+) -> Result<[Vec<u8>; 3], Error> {
+    // the SHA-1 of the PBO's contents: computed while reading for a PBO that was read (a stored trailer that
+    // differs is an error), the one `PBO::write` would produce for one that was not read
+    let checksum = pbo.trailer_checksum(signing)?;
     let hash1 = &checksum[..];
 
     let namehash = namehash(pbo);
@@ -566,11 +571,12 @@ impl BIPrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if the key is below 384 bits (the `CryptoAPI` minimum), hashing fails or the RSA operation
+    /// Returns an error if the key is below 384 bits (the `CryptoAPI` minimum), the PBO's stored SHA-1 trailer does
+    /// not match its contents (a checksum mismatch: repack the PBO first), hashing fails or the RSA operation
     /// fails.
     pub fn sign(&self, pbo: &PBO, version: BISignVersion) -> Result<BISign, Error> {
         check_sign_length(self.length)?;
-        let hashes = generate_hashes(pbo, version, self.length)?;
+        let hashes = generate_hashes(pbo, version, self.length, true)?;
         let n = self.key.n().as_ref();
         let precision = n.bits_precision();
 
@@ -686,7 +692,9 @@ impl BIPublicKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if hashing fails or one of the signature hashes doesn't match.
+    /// Returns an error if the signature was made with a different key, a signature value is not smaller than the
+    /// modulus, the PBO's stored SHA-1 trailer does not match its contents (a checksum mismatch), hashing fails or
+    /// one of the signature hashes doesn't match.
     pub fn verify(&self, pbo: &PBO, signature: &BISign) -> Result<(), Error> {
         let n = self.key.n().as_ref();
         // a signature carries the public key it was made with: compare before anything else, so that a wrong key
@@ -700,7 +708,7 @@ impl BIPublicKey {
                 self.length
             ));
         }
-        let hashes = generate_hashes(pbo, signature.version, self.length)?;
+        let hashes = generate_hashes(pbo, signature.version, self.length, false)?;
         let precision = n.bits_precision();
 
         let values = [&signature.sig1, &signature.sig2, &signature.sig3];
@@ -925,7 +933,7 @@ mod tests {
             public.verify(&pbo, &signature).unwrap();
 
             // the independent side: num-bigint's modular exponentiation recovers the padded hashes
-            let hashes = generate_hashes(&pbo, version, 1024).unwrap();
+            let hashes = generate_hashes(&pbo, version, 1024, false).unwrap();
             let n = bn(key.key.n().as_ref());
             let e = BigUint::from(65537u32);
             for (sig, hash) in [&signature.sig1, &signature.sig2, &signature.sig3]
