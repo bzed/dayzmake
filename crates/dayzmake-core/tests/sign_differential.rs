@@ -1,9 +1,9 @@
 //! Differential tests of BI signing: they pin the RSA results of dayzmake against an independent
 //! implementation, so a change of the RSA backend can be measured.
 //!
-//! Before the switch to the `rsa` crate dayzmake signs with `OpenSSL` and the test computes the signatures with
-//! `rsa::hazmat::rsa_decrypt`; after the switch the roles are exchanged. Keys are generated here from
-//! fixed seeds; no key material is committed except the throwaway `armk` fixture key.
+//! dayzmake signs with the `rsa` crate; the test computes the signatures independently with `OpenSSL`'s
+//! `BigNum::mod_exp` (the roles were the other way round before the switch to `rsa`). Keys are generated here
+//! from fixed seeds; no key material is committed except the throwaway `armk` fixture key.
 #![cfg(feature = "sign")]
 #![expect(
     clippy::unwrap_used,
@@ -18,9 +18,9 @@ use std::path::PathBuf;
 
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign, BISignVersion};
+use openssl::bn::{BigNum, BigNumContext};
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use rsa::hazmat::{rsa_decrypt, rsa_encrypt};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
 use rsa::{BoxedUint, PrivateKey};
 use sha1::{Digest, Sha1};
@@ -164,6 +164,15 @@ fn le(value: &BoxedUint, size: usize) -> Vec<u8> {
     v
 }
 
+/// Little-endian bytes of `value`, zero-padded to `size`.
+fn le_bn(value: &BigNum, size: usize) -> Vec<u8> {
+    let mut v = value.to_vec();
+    v.reverse();
+    assert!(v.len() <= size);
+    v.resize(size, 0);
+    v
+}
+
 /// The `.biprivatekey` bytes of an `rsa` key (BI layout, same as `BIPrivateKey::write`).
 fn biprivatekey_bytes(key: &PrivateKey, bits: u32, name: &str) -> Vec<u8> {
     let size = usize::try_from(bits / 8).unwrap();
@@ -230,27 +239,26 @@ fn seeded_keys_sign_like_an_independent_implementation() {
             let padded = padded_hashes(&pbo, version, size);
             let values = signature_values(&signed);
             for (i, (value, hash)) in values.iter().zip(&padded).enumerate() {
-                let precision = key.n().as_ref().bits_precision();
-                let m = BoxedUint::from_be_slice(hash, precision).unwrap();
-                let expected = rsa_decrypt(Some(&mut rng), &key, &m).unwrap();
+                let mut ctx = BigNumContext::new().unwrap();
+                let n =
+                    BigNum::from_slice(&key.n().as_ref().to_be_bytes_trimmed_vartime()).unwrap();
+                let d = BigNum::from_slice(&key.d().to_be_bytes_trimmed_vartime()).unwrap();
+                let m = BigNum::from_slice(hash).unwrap();
+                let mut expected = BigNum::new().unwrap();
+                expected.mod_exp(&m, &d, &n, &mut ctx).unwrap();
                 assert_eq!(
                     *value,
-                    le(&expected, size),
+                    le_bn(&expected, size),
                     "seed {seed} {version:?} signature {}",
                     i + 1
                 );
                 // the public operation gives the padded hash back
-                let sig = BoxedUint::from_be_slice(
-                    &value.iter().rev().copied().collect::<Vec<_>>(),
-                    precision,
-                )
-                .unwrap();
-                let back = rsa_encrypt(&key.to_public_key(), &sig).unwrap();
-                assert_eq!(
-                    back.to_be_bytes().to_vec(),
-                    *hash,
-                    "seed {seed} {version:?}"
-                );
+                let sig =
+                    BigNum::from_slice(&value.iter().rev().copied().collect::<Vec<_>>()).unwrap();
+                let mut back = BigNum::new().unwrap();
+                back.mod_exp(&sig, &BigNum::from_u32(65537).unwrap(), &n, &mut ctx)
+                    .unwrap();
+                assert_eq!(back.to_vec(), hash[1..].to_vec(), "seed {seed} {version:?}");
             }
             // and dayzmake verifies its own signature
             let public = bi.to_public_key().unwrap();
@@ -340,14 +348,16 @@ fn verify_accepts_and_rejects() {
         flip(&mut bad_header, 30);
         assert!(rejected(&bad_header), "{pbo_name} header");
 
-        // one flipped bit in the key's n (not the lowest one: an even n is no longer a readable key)
+        // one flipped bit in the key's n: a key `BIPublicKey::read` refuses counts as rejected, one it reads
+        // must not verify
         let key_name_len = public_bytes.iter().position(|&b| b == 0).unwrap() + 1;
         let mut bad_key = public_bytes.clone();
         flip(&mut bad_key, key_name_len + 24 + 5);
-        let bad_public = BIPublicKey::read(&mut Cursor::new(&bad_key)).unwrap();
-        assert!(
-            verify(&pbo_bytes, &sig_bytes, &bad_public).is_err(),
-            "{pbo_name} n"
-        );
+        if let Ok(bad_public) = BIPublicKey::read(&mut Cursor::new(&bad_key)) {
+            assert!(
+                verify(&pbo_bytes, &sig_bytes, &bad_public).is_err(),
+                "{pbo_name} n"
+            );
+        }
     }
 }

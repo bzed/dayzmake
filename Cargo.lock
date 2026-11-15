@@ -373,6 +373,7 @@ dependencies = [
  "byteorder",
  "criterion",
  "encoding_rs",
+ "getrandom",
  "image",
  "linked-hash-map",
  "lzo1x",
@@ -386,6 +387,7 @@ dependencies = [
  "tempfile",
  "texpresso",
  "winreg",
+ "zeroize",
 ]
 
 [[package]]

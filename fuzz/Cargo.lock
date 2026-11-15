@@ -254,6 +254,7 @@ version = "0.1.0"
 dependencies = [
  "byteorder",
  "encoding_rs",
+ "getrandom",
  "image",
  "linked-hash-map",
  "lzo1x",
@@ -264,6 +265,7 @@ dependencies = [
  "sha1",
  "texpresso",
  "winreg",
+ "zeroize",
 ]
 
 [[package]]

@@ -24,6 +24,9 @@ is maintained here.
 
 ## Changes
 
+- Signing and verification no longer use OpenSSL: they run on the pure-Rust `rsa` crate (blinded, constant-time private-key
+  operation; the result is checked against the public key before it is written). `.bisign` output is byte-identical. A
+  signature value that is not smaller than the key's modulus is a verification error.
 - A `.bisign` file is read with the same checks as a public key: its embedded key must carry the `RSA1` blob header and a
   modulus exactly as wide as the header length says; anything else is a read error (#52).
 - Macro expansion has a depth limit on every path (64 levels); a config that nests deeper, or expands a macro into
