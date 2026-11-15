@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- Keys and `.bisign` files are limited to 16384 bits (288 at the low end); a larger header length is a read error
+  (#49).
 - A key file whose modulus is not exactly as wide as its header length says, and a private key whose length is not a
   multiple of 16, is rejected when read (#48).
 - `verify` and `sign` recompute the SHA-1 of the PBO instead of trusting its stored trailer: a PBO whose bytes

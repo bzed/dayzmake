@@ -155,8 +155,11 @@ fn sha1_err(err: openssl::error::ErrorStack) -> Error {
     error!("OpenSSL operation failed: {err}")
 }
 
-/// Largest key length accepted, in bits.
-const MAX_KEY_BITS_U32: u32 = 1 << 20;
+/// Smallest key length accepted, in bits.
+const MIN_KEY_BITS: u32 = 288;
+/// Largest key length accepted, in bits: the largest RSA key the Windows `CryptoAPI` (which BI's key format comes
+/// from) handles. Bigger keys would only make hostile files expensive to read.
+const MAX_KEY_BITS: u32 = 16384;
 
 /// Validates a key length read from a key or signature file.
 ///
@@ -164,8 +167,10 @@ const MAX_KEY_BITS_U32: u32 = 1 << 20;
 ///
 /// Returns an error if the length is not a sane RSA key length.
 fn check_key_length(length: u32) -> Result<(), Error> {
-    if !(288..=MAX_KEY_BITS_U32).contains(&length) {
-        return Err(error!("Invalid key length: {length}."));
+    if !(MIN_KEY_BITS..=MAX_KEY_BITS).contains(&length) {
+        return Err(error!(
+            "Invalid key length: {length} (supported: {MIN_KEY_BITS} to {MAX_KEY_BITS} bits)."
+        ));
     }
     Ok(())
 }

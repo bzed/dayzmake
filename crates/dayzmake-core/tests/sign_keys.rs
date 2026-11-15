@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 
-use dayzmake_core::sign::{BIPrivateKey, BIPublicKey};
+use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 use rand_chacha::ChaCha20Rng;
 use rand_core::{Rng, SeedableRng};
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
@@ -426,4 +426,56 @@ fn armk_in_a_bigger_frame_is_rejected() {
         at += len;
     }
     assert!(read(&out).is_err());
+}
+
+/// A `.bikey` frame of `length` bits holding `n` (an odd number of exactly `length` bits: all ones).
+fn public_frame(length: u32) -> Vec<u8> {
+    let mut out = NAME.as_bytes().to_vec();
+    out.push(0);
+    out.extend((length / 8 + 20).to_le_bytes());
+    out.extend(b"\x06\x02\x00\x00\x00\x24\x00\x00RSA1");
+    out.extend(length.to_le_bytes());
+    out.extend(65537u32.to_le_bytes());
+    out.extend(vec![0xff; usize::try_from(length / 8).unwrap()]);
+    out
+}
+
+/// A `.bisign` frame of `length` bits with an all-ones modulus and zero signatures.
+fn bisign_frame(length: u32) -> Vec<u8> {
+    let size = usize::try_from(length / 8).unwrap();
+    let mut out = NAME.as_bytes().to_vec();
+    out.push(0);
+    out.extend((length / 8 + 20).to_le_bytes());
+    out.extend(b"\x06\x02\x00\x00\x00\x24\x00\x00RSA1");
+    out.extend(length.to_le_bytes());
+    out.extend(65537u32.to_le_bytes());
+    out.extend(vec![0xff; size]);
+    out.extend(u32::try_from(size).unwrap().to_le_bytes());
+    out.extend(vec![0; size]);
+    out.extend(2u32.to_le_bytes());
+    out.extend(u32::try_from(size).unwrap().to_le_bytes());
+    out.extend(vec![0; size]);
+    out.extend(u32::try_from(size).unwrap().to_le_bytes());
+    out.extend(vec![0; size]);
+    out
+}
+
+#[test]
+fn keys_and_signatures_are_capped_at_16384_bits() {
+    // the largest size reads, one step more is an error that names the limit
+    BIPublicKey::read(&mut Cursor::new(public_frame(16384))).unwrap();
+    BISign::read(&mut Cursor::new(bisign_frame(16384))).unwrap();
+    for length in [16400u32, 1 << 17, 1 << 20] {
+        let err = BIPublicKey::read(&mut Cursor::new(public_frame(length)))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("16384"), "{err}");
+        let err = BISign::read(&mut Cursor::new(bisign_frame(length)))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("16384"), "{err}");
+        let bytes = key_bytes(&seeded_key(1, 1024), 1024);
+        let err = read(&reframe_private(&bytes, length)).unwrap_err();
+        assert!(err.to_string().contains("16384"), "{err}");
+    }
 }
