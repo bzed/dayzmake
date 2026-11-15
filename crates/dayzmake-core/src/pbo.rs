@@ -1242,7 +1242,8 @@ fn list_files(directory: &Path, excluded: &[Excluded]) -> Result<Vec<PathBuf>, E
 
 /// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
 /// Windows opens instead of a file whatever the extension.
-fn is_device_name(component: &str) -> bool {
+#[must_use]
+pub fn is_device_name(component: &str) -> bool {
     let stem = component
         .split('.')
         .next()

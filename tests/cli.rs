@@ -768,6 +768,20 @@ fn build_keeps_the_permissions_of_the_existing_target() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn build_writes_to_a_windows_device_name_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "NUL"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let left: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["m"], "no temp file or NUL file is left");
+}
+
 #[cfg(unix)]
 #[test]
 fn build_into_a_read_only_directory_names_the_directory() {

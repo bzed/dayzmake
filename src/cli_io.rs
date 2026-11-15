@@ -162,7 +162,13 @@ impl AtomicTarget {
         private: bool,
         failure: &str,
     ) -> io::Result<AtomicTarget> {
-        if !force && path.exists() {
+        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name.
+        let windows_device = cfg!(windows)
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(dayzmake_core::pbo::is_device_name);
+        if !force && !windows_device && path.exists() {
             return Err(error!(
                 "Target file \"{}\" already exists. Use --force to overwrite.",
                 path.display()
@@ -172,7 +178,7 @@ impl AtomicTarget {
             return Err(error!("Target \"{}\" is a directory.", path.display()));
         }
         // `metadata` follows links, so `/dev/stdout` onto a pipe is found too
-        if std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
+        if windows_device || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
             // no truncate: a device or FIFO has nothing to truncate
             let file = std::fs::OpenOptions::new()
                 .write(true)
