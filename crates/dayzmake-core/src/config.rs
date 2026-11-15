@@ -12,6 +12,18 @@ use crate::error;
 use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
+
+/// Refuses a name with a control character: the config grammar has no way to write one, and it
+/// would reach the terminal raw.
+fn text_name(name: &str, what: &str) -> Result<(), Error> {
+    if name.chars().any(char::is_control) {
+        return Err(error!(
+            "{what} name \"{}\" cannot be written as config text.",
+            printable(name)
+        ));
+    }
+    Ok(())
+}
 use crate::preprocess::preprocess;
 use crate::warning::{Warning, WarningSink};
 
@@ -597,6 +609,7 @@ impl ConfigClass {
                 output.write_all(b"\n")?;
             }
             for (key, value) in entries {
+                text_name(key, "Entry")?;
                 output.write_all(String::from("    ").repeat(level).as_bytes())?;
 
                 match value {
@@ -609,6 +622,7 @@ impl ConfigClass {
                             let parent = if c.parent.is_empty() {
                                 String::new()
                             } else {
+                                text_name(&c.parent, "Parent class")?;
                                 format!(": {}", c.parent)
                             };
                             match &c.entries {

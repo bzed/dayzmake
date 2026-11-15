@@ -162,3 +162,32 @@ fn p3d_tagg_name_is_escaped_in_errors() {
     let err = P3D::read(&mut Cursor::new(bytes)).unwrap_err();
     assert_escaped(&err.to_string(), "\\u{1b}[31mT");
 }
+
+/// A rapified config whose root has the entries given as raw bytes (`count` of them).
+fn rapified(count: u8, body: &[u8]) -> Vec<u8> {
+    let mut bytes = b"\0raP\0\0\0\0\x08\0\0\0\0\0\0\0\0".to_vec();
+    bytes.push(count);
+    bytes.extend_from_slice(body);
+    bytes.extend_from_slice(b"\0\0\0\0\0");
+    bytes
+}
+
+#[test]
+fn derapify_refuses_a_class_name_with_a_control_character() {
+    let bytes = rapified(1, b"\x02A\x1b]0;pwned\x07\0\0\0\0\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "A\\u{1b}]0;pwned\\u{7}");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_an_entry_name_with_a_control_character() {
+    let bytes = rapified(1, b"\x01\x00k\x1b[2J\0v\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "k\\u{1b}[2J");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
