@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use linked_hash_map::LinkedHashMap;
-use openssl::hash::{Hasher, MessageDigest};
 use regex::Regex;
+use sha1::{Digest, Sha1};
 use std::sync::LazyLock;
 
 #[expect(clippy::unwrap_used, reason = "the static patterns are valid regexes")]
@@ -981,20 +981,18 @@ impl PBO {
         };
         header.write(&mut headers)?;
 
-        let mut h = Hasher::new(MessageDigest::sha1()).map_err(|e| error!("SHA-1: {e}"))?;
+        let mut h = Sha1::new();
 
         output.write_all(headers.get_ref())?;
-        h.update(headers.get_ref())
-            .map_err(|e| error!("SHA-1: {e}"))?;
+        h.update(headers.get_ref());
 
         for (_, cursor) in &files_sorted {
             output.write_all(cursor.get_ref())?;
-            h.update(cursor.get_ref())
-                .map_err(|e| error!("SHA-1: {e}"))?;
+            h.update(cursor.get_ref());
         }
 
         output.write_all(&[0])?;
-        let checksum = h.finish().map_err(|e| error!("SHA-1: {e}"))?;
+        let checksum = h.finalize();
         output.write_all(&checksum)?;
 
         Ok(checksum.to_vec())
