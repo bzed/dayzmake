@@ -549,7 +549,8 @@ fn build_warning_path_is_relative_to_the_addon() {
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("In file config.cpp:2: "), "{err}");
     assert!(
-        !err.contains("./config.cpp") && !err.contains("mod/config.cpp"),
+        !err.contains("./config.cpp")
+            && !err.contains(&Path::new("mod").join("config.cpp").display().to_string()),
         "{err}"
     );
 

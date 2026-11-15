@@ -467,20 +467,17 @@ impl Default for PBO {
 /// Rewrites `Warning.file` to the path relative to the addon folder when it lies inside it.
 struct AddonRelative<'a> {
     /// The addon folder as given and canonicalised (includes are reported canonicalised).
-    roots: [PathBuf; 2],
+    roots: &'a [PathBuf; 2],
     inner: &'a mut dyn WarningSink,
 }
 
-impl<'a> AddonRelative<'a> {
-    fn new(directory: &Path, inner: &'a mut dyn WarningSink) -> Self {
-        let canonical = directory
-            .canonicalize()
-            .unwrap_or_else(|_| directory.to_path_buf());
-        AddonRelative {
-            roots: [directory.to_path_buf(), canonical],
-            inner,
-        }
-    }
+/// The addon folder as given and canonicalised, computed once per pack.
+fn addon_roots(directory: &Path) -> [PathBuf; 2] {
+    // a folder that cannot be canonicalised is reported as given: paths then still match as given
+    let canonical = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+    [directory.to_path_buf(), canonical]
 }
 
 impl WarningSink for AddonRelative<'_> {
@@ -829,6 +826,8 @@ impl PBO {
             .map(|p| p.replace('/', "\\").to_lowercase())
             .collect();
 
+        let addon_roots = addon_roots(directory);
+
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
@@ -897,7 +896,10 @@ impl PBO {
                     );
                     files.insert(name, Cursor::new(buffer.into_boxed_slice()));
                 } else {
-                    let mut addon_warnings = AddonRelative::new(directory, warnings);
+                    let mut addon_warnings = AddonRelative {
+                        roots: &addon_roots,
+                        inner: warnings,
+                    };
                     let config = Config::read(
                         &mut Cursor::new(buffer),
                         Some(path.clone()),
