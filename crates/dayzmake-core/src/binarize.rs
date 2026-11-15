@@ -89,7 +89,7 @@ impl Binarizer {
         #[cfg(unix)]
         {
             if self.sandbox.is_none() {
-                self.sandbox = Some(proton::create_sandbox()?);
+                self.sandbox = Some(proton::create_sandbox(warnings)?);
             }
             let sb = self
                 .sandbox
@@ -108,7 +108,9 @@ impl Drop for Binarizer {
     fn drop(&mut self) {
         #[cfg(unix)]
         if let Some(sb) = self.sandbox.take() {
-            proton::destroy(&sb);
+            // Drop has no warning sink and must not print; a sandbox that cannot be removed is
+            // left in the temp directory.
+            let _ = proton::destroy(&sb);
         }
     }
 }
@@ -196,7 +198,7 @@ fn native_binarize(
             Stdio::null()
         })
         .output()
-        .unwrap();
+        .prepend_error("Failed to run binarize.exe:")?;
 
     if !binarize_output.status.success() {
         let msg = match binarize_output.status.code() {
@@ -212,7 +214,7 @@ fn native_binarize(
         return Err(error!("{}{}", msg, outputhint));
     }
 
-    let result_path = tempdir.join(input.strip_prefix(&input_dir).unwrap());
+    let result_path = tempdir.join(&file_name);
     let mut buffer: Vec<u8> = Vec::new();
 
     {
@@ -484,6 +486,7 @@ mod proton {
         cwd: &Path,
         log: &Path,
         timeout: Duration,
+        warnings: &mut dyn WarningSink,
     ) -> Result<(), Error> {
         let logfile = File::create(log)?;
         let mut child = Command::new(sb.proton_dir.join("proton"))
@@ -519,10 +522,13 @@ mod proton {
         };
 
         if super::var("BIOUTPUT").unwrap_or_else(|_| "0".to_string()) == "1" {
-            #[expect(clippy::print_stderr, reason = "BIOUTPUT=1 shows binarize.exe output")]
-            {
-                eprintln!("{}", read_to_string(log).unwrap_or_default());
-            }
+            warnings.warn(Warning::new(
+                Some("binarize-output"),
+                format!(
+                    "binarize.exe output:\n{}",
+                    printable(&read_to_string(log).unwrap_or_default())
+                ),
+            ));
         }
 
         if !status.success() {
@@ -535,7 +541,7 @@ mod proton {
         Ok(())
     }
 
-    pub fn create_sandbox() -> Result<Sandbox, Error> {
+    pub fn create_sandbox(warnings: &mut dyn WarningSink) -> Result<Sandbox, Error> {
         let steam_root = find_steam_root(&steam_candidates());
         let tools = find_dayz_tools(
             steam_root.as_deref(),
@@ -583,12 +589,10 @@ mod proton {
             copy_dir(&tools.join("Bin/Binarize"), &sb.root.join("Binarize"))
                 .prepend_error("Failed to copy Binarize:")?;
 
-            #[expect(clippy::print_stderr, reason = "progress message on stderr")]
-            {
-                eprintln!(
-                    "Creating a Wine prefix for binarize.exe (the first run takes a while)..."
-                );
-            }
+            warnings.warn(Warning::new(
+                Some("proton-prefix"),
+                "Creating a Wine prefix for binarize.exe (the first run takes a while)...",
+            ));
             let log = sb.root.join("prefix-init.log");
             run_proton(
                 &sb,
@@ -596,6 +600,7 @@ mod proton {
                 &sb.root,
                 &log,
                 PREFIX_TIMEOUT,
+                warnings,
             )
             .prepend_error("Failed to create the Wine prefix:")?;
 
@@ -621,13 +626,15 @@ mod proton {
             Ok(()) => Ok(sb),
             Err(e) => {
                 sb.counter = 0;
-                destroy(&sb);
+                if let Err(cleanup) = destroy(&sb) {
+                    warnings.warn(Warning::new(Some("proton-cleanup"), cleanup.to_string()));
+                }
                 Err(e)
             }
         }
     }
 
-    pub fn destroy(sb: &Sandbox) {
+    pub fn destroy(sb: &Sandbox) -> Result<(), Error> {
         // wineserver keeps the prefix busy after the last run; stop it before deleting
         let _ = Command::new(sb.proton_dir.join("files/bin/wineserver"))
             .arg("-k")
@@ -637,12 +644,8 @@ mod proton {
             .stderr(Stdio::null())
             .status();
         sleep(Duration::from_secs(1));
-        if let Err(e) = remove_dir_all(&sb.root) {
-            #[expect(clippy::print_stderr, reason = "warning on stderr")]
-            {
-                eprintln!("Warning: failed to remove \"{}\": {}", sb.root.display(), e);
-            }
-        }
+        remove_dir_all(&sb.root)
+            .prepend_error(format!("Failed to remove \"{}\":", sb.root.display()))
     }
 
     /// Makes the addon visible at `<sandbox>/P/<prefix>` (once per addon).
@@ -724,6 +727,7 @@ mod proton {
             &sb.root.join("P"),
             &log,
             BINARIZE_TIMEOUT,
+            warnings,
         )
         .prepend_error("binarize.exe failed:")?;
 
