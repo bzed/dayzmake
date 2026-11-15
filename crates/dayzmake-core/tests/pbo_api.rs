@@ -135,3 +135,23 @@ fn unpack_rejects_unsafe_entry_names() {
     assert!(!target.join("evil.txt").exists());
     assert!(target.join("a.txt").exists());
 }
+
+#[test]
+fn packing_a_model_without_binarizer_warns_only_outside_windows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("addon");
+    fs::create_dir_all(&root).unwrap();
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/mlod/small.p3d"),
+        root.join("small.p3d"),
+    )
+    .unwrap();
+    let mut warnings = Warnings::new();
+    PBO::from_directory(&root, &PackOptions::pack(), None, &mut warnings).unwrap();
+    let warned = warnings
+        .warnings()
+        .iter()
+        .any(|w| w.name == Some("non-windows-binarization"));
+    // Windows has a native binarize.exe, so "non-Windows systems" must not be mentioned there.
+    assert_eq!(warned, !cfg!(windows));
+}
