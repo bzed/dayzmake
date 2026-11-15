@@ -131,7 +131,7 @@ fn is_trivial(value: &BoxedUint) -> bool {
     reason = "used as a map_err closure; the error is formatted, not stored"
 )]
 fn key_err(err: rsa::Error) -> Error {
-    error!("Invalid key: {err}.")
+    error!("{err}")
 }
 
 /// A PBO entry's lowercased raw name bytes paired with its contents.
@@ -157,8 +157,6 @@ fn sha1_err(err: openssl::error::ErrorStack) -> Error {
 
 /// Largest key length accepted, in bits.
 const MAX_KEY_BITS_U32: u32 = 1 << 20;
-/// Largest key length accepted, in bits, as a size.
-const MAX_KEY_BITS: usize = MAX_KEY_BITS_U32 as usize;
 
 /// Validates a key length read from a key or signature file.
 ///
@@ -391,6 +389,11 @@ impl BIPrivateKey {
         if temp != length / 16 * 9 + 20 {
             return Err(error!("Invalid private key file (bad length field)."));
         }
+        if length % 16 != 0 {
+            return Err(error!(
+                "Invalid private key file (the length {length} is not a multiple of 16)."
+            ));
+        }
 
         let full = (length / 8) as usize;
         let half = (length / 16) as usize;
@@ -408,6 +411,11 @@ impl BIPrivateKey {
             if is_trivial(value) {
                 return Err(error!("Invalid private key (a component is zero or one)."));
             }
+        }
+        if n.bit_width_vartime() != length {
+            return Err(error!(
+                "Invalid private key file (the modulus is not {length} bits wide)."
+            ));
         }
         let key =
             PrivateKey::from_components(n, BoxedUint::from(u64::from(exponent)), d, vec![p, q])
@@ -575,11 +583,14 @@ impl BIPublicKey {
         }
 
         let n = read_uint(input, (length / 8) as usize)?;
-        // Sizes: BI keys down to 288 bits are accepted, `rsa`'s default limits (1024 to 8192 bits) are widened.
+        // The modulus must be exactly `length` bits wide (a key frame bigger than its number, or a length that is
+        // no multiple of 8, is rejected). BI keys down to 288 bits are accepted, `rsa`'s default limits (1024 to
+        // 8192 bits) are widened to exactly this size.
+        let length_bits = length as usize;
         let key = PublicKey::new_with_size_limits(
             n,
             BoxedUint::from(u64::from(exponent)),
-            2..=MAX_KEY_BITS,
+            length_bits..=length_bits,
         )
         .map_err(key_err)
         .prepend_error("Invalid public key:")?;

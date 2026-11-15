@@ -345,3 +345,85 @@ fn public_key_with_unusable_values_is_rejected() {
         );
     }
 }
+
+/// A private key file with the header length `length`, holding the (zero-padded) components of `bytes`
+/// (a 1024-bit key file named `NAME`).
+fn reframe_private(bytes: &[u8], length: u32) -> Vec<u8> {
+    let mut out = NAME.as_bytes().to_vec();
+    out.push(0);
+    out.extend((length / 16 * 9 + 20).to_le_bytes());
+    out.extend(b"\x07\x02\x00\x00\x00\x24\x00\x00RSA2");
+    out.extend(length.to_le_bytes());
+    out.extend(65537u32.to_le_bytes());
+    let full = usize::try_from(length / 8).unwrap();
+    let half = usize::try_from(length / 16).unwrap();
+    for i in 0..PARTS.len() {
+        let mut value = bytes[part(1024, i)].to_vec();
+        value.resize(if i == 0 || i == 6 { full } else { half }, 0);
+        out.extend(value);
+    }
+    out
+}
+
+fn reframe_public(bytes: &[u8], length: u32) -> Vec<u8> {
+    let mut out = NAME.as_bytes().to_vec();
+    out.push(0);
+    out.extend((length / 8 + 20).to_le_bytes());
+    out.extend(b"\x06\x02\x00\x00\x00\x24\x00\x00RSA1");
+    out.extend(length.to_le_bytes());
+    out.extend(65537u32.to_le_bytes());
+    let mut n = bytes[part(1024, 0)].to_vec();
+    n.resize(usize::try_from(length / 8).unwrap(), 0);
+    out.extend(n);
+    out
+}
+
+#[test]
+fn a_modulus_that_does_not_fill_the_header_length_is_rejected() {
+    let bytes = key_bytes(&seeded_key(1, 1024), 1024);
+    // sanity: the frame at the true length reads
+    read(&reframe_private(&bytes, 1024)).unwrap();
+    BIPublicKey::read(&mut Cursor::new(reframe_public(&bytes, 1024))).unwrap();
+    // a small key in a big frame, a length that is no multiple of 16, a huge frame
+    for length in [2048u32, 1032, 1040, 1 << 20] {
+        assert!(
+            read(&reframe_private(&bytes, length)).is_err(),
+            "private {length}"
+        );
+    }
+    for length in [2048u32, 1032, 1025, 1 << 20] {
+        assert!(
+            BIPublicKey::read(&mut Cursor::new(reframe_public(&bytes, length))).is_err(),
+            "public {length}"
+        );
+    }
+}
+
+#[test]
+fn armk_in_a_bigger_frame_is_rejected() {
+    let armk = fs::read(sign_dir().join("armk.biprivatekey")).unwrap();
+    let name_len = armk.iter().position(|&b| b == 0).unwrap() + 1;
+    let bits = 1024;
+    let size = bits / 8;
+    // zero-pad every component into a 2048-bit frame
+    let mut out = armk[..name_len].to_vec();
+    out.extend((2048u32 / 16 * 9 + 20).to_le_bytes());
+    out.extend(&armk[name_len + 4..name_len + 16]);
+    out.extend(2048u32.to_le_bytes());
+    out.extend(&armk[name_len + 20..name_len + 24]);
+    let mut at = name_len + 24;
+    for (len, new_len) in [
+        (size, 256),
+        (size / 2, 128),
+        (size / 2, 128),
+        (size / 2, 128),
+        (size / 2, 128),
+        (size / 2, 128),
+        (size, 256),
+    ] {
+        out.extend(&armk[at..at + len]);
+        out.extend(vec![0; new_len - len]);
+        at += len;
+    }
+    assert!(read(&out).is_err());
+}

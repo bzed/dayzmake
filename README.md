@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- A key file whose modulus is not exactly as wide as its header length says, and a private key whose length is not a
+  multiple of 16, is rejected when read (#48).
 - `verify` and `sign` recompute the SHA-1 of the PBO instead of trusting its stored trailer: a PBO whose bytes
   changed (`config.bin`, files a signature version leaves out, the header) no longer verifies, and a PBO with a
   wrong trailer is not signed. Both fail with a "checksum mismatch" error (#46). `inspect` and `unpack` still read
