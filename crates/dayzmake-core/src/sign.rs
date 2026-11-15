@@ -161,6 +161,41 @@ const MIN_KEY_BITS: u32 = 288;
 /// from) handles. Bigger keys would only make hostile files expensive to read.
 const MAX_KEY_BITS: u32 = 16384;
 
+/// bType, bVersion and reserved of a private key blob (`PRIVATEKEYBLOB`, version 2), as a little-endian word.
+const PRIVATE_BLOB: u32 = 0x0207;
+/// The same for a public key blob (`PUBLICKEYBLOB`).
+const PUBLIC_BLOB: u32 = 0x0206;
+/// `aiKeyAlg` of every key: `CALG_RSA_SIGN`.
+const KEY_ALG: u32 = 0x2400;
+/// Magic of a private key blob.
+const PRIVATE_MAGIC: [u8; 4] = *b"RSA2";
+/// Magic of a public key blob.
+const PUBLIC_MAGIC: [u8; 4] = *b"RSA1";
+
+/// Reads and checks the 12 bytes of a `CryptoAPI` key blob header that follow the blob length: type and
+/// version, key algorithm and magic.
+///
+/// # Errors
+///
+/// Returns an error on I/O failure or if the header is not the one of a `kind` key.
+fn check_blob_header<I: Read>(
+    input: &mut I,
+    blob: u32,
+    magic: [u8; 4],
+    kind: &str,
+) -> Result<(), Error> {
+    let found_blob = input.read_u32::<LittleEndian>()?;
+    let found_alg = input.read_u32::<LittleEndian>()?;
+    let mut found_magic = [0; 4];
+    input.read_exact(&mut found_magic)?;
+    if found_blob != blob || found_alg != KEY_ALG || found_magic != magic {
+        return Err(error!(
+            "Invalid {kind} key file (bad header: not a {kind} key blob)."
+        ));
+    }
+    Ok(())
+}
+
 /// Validates a key length read from a key or signature file.
 ///
 /// # Errors
@@ -384,9 +419,7 @@ impl BIPrivateKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPrivateKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PRIVATE_BLOB, PRIVATE_MAGIC, "private")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 
@@ -576,9 +609,7 @@ impl BIPublicKey {
     pub fn read<I: Read>(input: &mut I) -> Result<BIPublicKey, Error> {
         let name = input.read_cstring()?;
         let temp = input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
-        input.read_u32::<LittleEndian>()?;
+        check_blob_header(input, PUBLIC_BLOB, PUBLIC_MAGIC, "public")?;
         let length = input.read_u32::<LittleEndian>()?;
         let exponent = input.read_u32::<LittleEndian>()?;
 

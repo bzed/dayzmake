@@ -479,3 +479,37 @@ fn keys_and_signatures_are_capped_at_16384_bits() {
         assert!(err.to_string().contains("16384"), "{err}");
     }
 }
+
+#[test]
+fn key_files_with_a_wrong_header_type_or_magic_are_rejected() {
+    let private = fs::read(sign_dir().join("armk.biprivatekey")).unwrap();
+    let public = fs::read(sign_dir().join("armk.bikey")).unwrap();
+    let name_len = private.iter().position(|&b| b == 0).unwrap() + 1;
+    read(&private).unwrap();
+    BIPublicKey::read(&mut Cursor::new(&public)).unwrap();
+    // offsets after the name: length (4), bType (1), bVersion (1), reserved (2), aiKeyAlg (4), magic (4)
+    let at = |i: usize| name_len + i;
+    for (what, offset, value) in [
+        ("magic", 12, b'X'),
+        ("magic last byte", 15, b'9'),
+        ("bType", 4, 0x06),
+        ("bVersion", 5, 3),
+        ("reserved", 6, 1),
+        ("aiKeyAlg", 9, 0x25),
+        ("aiKeyAlg low", 8, 1),
+    ] {
+        let mut bad = private.clone();
+        bad[at(offset)] = value;
+        let err = read(&bad).err().unwrap_or_else(|| panic!("private {what}"));
+        assert!(err.to_string().contains("header"), "{what}: {err}");
+        let mut bad = public.clone();
+        bad[at(offset)] = if what == "bType" { 0x07 } else { value };
+        assert!(
+            BIPublicKey::read(&mut Cursor::new(&bad)).is_err(),
+            "public {what}"
+        );
+    }
+    // a public key file is not a private key and the other way round
+    assert!(read(&public).is_err());
+    assert!(BIPublicKey::read(&mut Cursor::new(&private)).is_err());
+}

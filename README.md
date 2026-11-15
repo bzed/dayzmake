@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- Key files must carry the CryptoAPI blob header (type, key algorithm, `RSA1`/`RSA2` magic) that `dayzmake` and BI's
+  tools write; any other header is a read error (#50).
 - Keys and `.bisign` files are limited to 16384 bits (288 at the low end); a larger header length is a read error
   (#49).
 - A key file whose modulus is not exactly as wide as its header length says, and a private key whose length is not a
