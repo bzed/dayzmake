@@ -90,6 +90,8 @@ pub mod config;
 pub mod error;
 /// Evaluator for config `__EVAL` / `__EXEC` expressions.
 pub(crate) mod eval;
+/// File identity (the same file under different spellings).
+pub mod fileid;
 /// I/O helpers for the binary formats.
 pub(crate) mod io;
 /// P3D model reading and inspection.

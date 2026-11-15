@@ -1531,3 +1531,21 @@ fn build_warns_when_p3d_and_p3do_collide_and_renames_p3do() {
     assert_eq!(out.matches("a.p3d").count(), 1, "{out}");
     assert!(out.contains("b.p3d") && !out.contains("p3do"), "{out}");
 }
+
+#[test]
+fn pack_force_over_the_output_spelled_in_another_case_does_not_pack_the_old_output() {
+    // #37: on a case-insensitive file system (Windows, macOS default) `OUT.PBO` is `out.pbo`; elsewhere the
+    // probe fails and there is nothing to test
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    if !modf.join("OUT.PBO").exists() {
+        return;
+    }
+    let (code, _, err) = dayzmake(&["pack", ".", "OUT.PBO", "--force"], &modf);
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "OUT.PBO"], &modf);
+    assert!(out.contains("config.cpp"), "{out}");
+    assert!(!out.to_lowercase().contains("out.pbo"), "{out}");
+}

@@ -18,6 +18,7 @@ static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.p3do$").un
 use crate::binarize::{self, Binarizer};
 use crate::config::{Config, is_rapified};
 use crate::error::{ErrorExt, printable};
+use crate::fileid::FileId;
 use crate::io::WriteExt;
 use crate::p3d;
 use crate::warning::{Warning, WarningSink};
@@ -455,7 +456,10 @@ pub fn atomic_temp_prefix(name: &str) -> String {
 struct Excluded {
     folder: PathBuf,
     name: std::ffi::OsString,
+    /// Lower-cased temp prefix: the temp file does not exist yet, so it is matched by name.
     temp_prefix: String,
+    /// The identity of the excluded file when it exists, for the comparison that is independent of spelling.
+    id: Option<FileId>,
 }
 
 fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
@@ -467,37 +471,52 @@ fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
             // fails open: an exclude whose folder cannot be resolved matches nothing (the folder exists in practice,
             // the temp file was created there)
             let folder = std::fs::canonicalize(parent.unwrap_or(Path::new("."))).ok()?;
-            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy());
+            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy()).to_lowercase();
+            let id = FileId::of(&folder.join(&name));
             Some(Excluded {
                 folder,
                 name,
                 temp_prefix,
+                id,
             })
         })
         .collect()
 }
 
+/// Whether `path` is the build's own output or a temp file of it.
+///
+/// The output is recognised by file identity when it exists (case-insensitive file systems, hard links and symlinks
+/// name it differently), by exact name in the same folder otherwise. The temp prefix is matched by name, ignoring
+/// case on every platform: the temp file does not exist yet, and a stale hidden `.X.dayzmake-tmp-` file that differs
+/// only in case is never wanted in a PBO.
 fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
-    let name_str = name.to_string_lossy();
-    // canonicalize only when the name could match
+    let name_lower = name.to_string_lossy().to_lowercase();
+    // canonicalize and open only when needed, once per path
     let mut folder: Option<Option<PathBuf>> = None;
+    let mut id: Option<Option<FileId>> = None;
     excluded.iter().any(|e| {
-        if name != e.name && !name_str.starts_with(&e.temp_prefix) {
-            return false;
+        if name == e.name || name_lower.starts_with(&e.temp_prefix) {
+            let folder = folder.get_or_insert_with(|| {
+                path.parent()
+                    .filter(|d| !d.as_os_str().is_empty())
+                    .map_or_else(
+                        // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
+                        || std::fs::canonicalize(".").ok(),
+                        |d| std::fs::canonicalize(d).ok(),
+                    )
+            });
+            if folder.as_deref() == Some(e.folder.as_path()) {
+                return true;
+            }
         }
-        let folder = folder.get_or_insert_with(|| {
-            path.parent()
-                .filter(|d| !d.as_os_str().is_empty())
-                .map_or_else(
-                    // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
-                    || std::fs::canonicalize(".").ok(),
-                    |d| std::fs::canonicalize(d).ok(),
-                )
-        });
-        folder.as_deref() == Some(e.folder.as_path())
+        // an unopenable file (gone meanwhile, no permission) is not the same file
+        match (&e.id, id.get_or_insert_with(|| FileId::of(path))) {
+            (Some(own), Some(this)) => own == this,
+            _ => false,
+        }
     })
 }
 

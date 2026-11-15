@@ -724,3 +724,69 @@ fn a_prefix_with_nul_is_rejected_and_nothing_written() {
     assert!(out.is_empty(), "{msg}");
     assert!(msg.contains("Header extension \"prefix\""), "{msg}");
 }
+
+/// Packs `root` with `exclude` as the own output and returns the entry names.
+fn packed_names_excluding(root: &Path, exclude: &Path) -> Vec<String> {
+    let mut options = PackOptions::pack();
+    options.exclude_paths = vec![exclude.to_path_buf()];
+    let bytes = pack_to_bytes(root, &options);
+    read(&bytes).entry_names().map(str::to_owned).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn own_output_is_excluded_by_identity_through_a_hard_link() {
+    let tmp = addon();
+    let root = tmp.path().join("addon");
+    fs::write(root.join("out.pbo"), "old").unwrap();
+    fs::hard_link(root.join("out.pbo"), root.join("alias.pbo")).unwrap();
+    let names = packed_names_excluding(&root, &root.join("out.pbo"));
+    assert!(!names.iter().any(|n| n.contains("alias")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("out.pbo")), "{names:?}");
+    assert!(names.iter().any(|n| n == "a.txt"), "{names:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn own_output_is_excluded_through_a_symlink_with_a_different_spelling() {
+    let tmp = addon();
+    let root = tmp.path().join("addon");
+    fs::write(root.join("out.pbo"), "old").unwrap();
+    std::os::unix::fs::symlink("out.pbo", root.join("OUT.PBO")).unwrap();
+    let names = packed_names_excluding(&root, &root.join("out.pbo"));
+    assert!(
+        !names.iter().any(|n| n.eq_ignore_ascii_case("out.pbo")),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn own_output_is_excluded_whatever_the_case_of_the_given_path() {
+    // the repro of #37: `build m M\OUT.PBO` with an existing `m\out.pbo`. Only meaningful on a case-insensitive
+    // file system (Windows, macOS default); on others the probe below fails and the test returns.
+    let tmp = addon();
+    let root = tmp.path().join("addon");
+    fs::write(root.join("out.pbo"), "old").unwrap();
+    let upper = root.join("OUT.PBO");
+    if !upper.exists() {
+        return;
+    }
+    let names = packed_names_excluding(&root, &upper);
+    assert!(
+        !names.iter().any(|n| n.eq_ignore_ascii_case("out.pbo")),
+        "{names:?}"
+    );
+    assert!(names.iter().any(|n| n == "a.txt"), "{names:?}");
+}
+
+#[test]
+fn stale_temp_file_of_the_target_is_skipped_whatever_its_case() {
+    let tmp = addon();
+    let root = tmp.path().join("addon");
+    fs::write(root.join(".OUT.PBO.dayzmake-tmp-1-0"), "stale").unwrap();
+    let names = packed_names_excluding(&root, &root.join("out.pbo"));
+    assert!(
+        !names.iter().any(|n| n.contains("dayzmake-tmp")),
+        "{names:?}"
+    );
+}

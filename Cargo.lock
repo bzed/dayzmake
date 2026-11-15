@@ -312,6 +312,7 @@ dependencies = [
  "openssl",
  "peg",
  "regex",
+ "same-file",
  "sha1",
  "tempfile",
  "texpresso",
