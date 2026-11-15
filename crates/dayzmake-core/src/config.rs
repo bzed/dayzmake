@@ -287,6 +287,7 @@ pub struct ConfigClass {
 
 /// Config entry
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConfigEntry {
     /// String entry
     StringEntry(String),
@@ -309,6 +310,7 @@ pub struct ConfigArray {
 
 /// Config array element
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ConfigArrayElement {
     /// String element
     StringElement(String),
@@ -385,6 +387,18 @@ impl ReadBudget {
 }
 
 impl ConfigArray {
+    /// The array's elements.
+    #[must_use]
+    pub fn elements(&self) -> &[ConfigArrayElement] {
+        &self.elements
+    }
+
+    /// Whether this is an array expansion (`x[] += {...}`).
+    #[must_use]
+    pub fn is_expansion(&self) -> bool {
+        self.is_expansion
+    }
+
     fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         output.write_all(b"{")?;
         for (key, value) in self.elements.iter().enumerate() {
@@ -526,6 +540,44 @@ impl ConfigEntry {
 }
 
 impl ConfigClass {
+    /// The parent class name, or `None` when the class has no parent.
+    #[must_use]
+    pub fn parent(&self) -> Option<&str> {
+        if self.parent.is_empty() {
+            None
+        } else {
+            Some(&self.parent)
+        }
+    }
+
+    /// Whether this is an external declaration (`class X;`).
+    #[must_use]
+    pub fn is_external(&self) -> bool {
+        self.is_external
+    }
+
+    /// Whether this is a deletion (`delete X;`).
+    #[must_use]
+    pub fn is_deletion(&self) -> bool {
+        self.is_deletion
+    }
+
+    /// The entries in file order; empty for external classes and deletions.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &ConfigEntry)> {
+        self.entries
+            .iter()
+            .flatten()
+            .map(|(name, entry)| (name.as_str(), entry))
+    }
+
+    /// Looks up an entry by name, ASCII case-insensitively like the game.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&ConfigEntry> {
+        self.entries()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, entry)| entry)
+    }
+
     fn write<O: Write>(&self, output: &mut O, level: usize) -> Result<(), Error> {
         if let Some(entries) = &self.entries {
             if level > 0 && !entries.is_empty() {
@@ -842,6 +894,12 @@ impl ConfigClass {
 }
 
 impl Config {
+    /// The unnamed top-level class holding all entries of the file.
+    #[must_use]
+    pub fn root(&self) -> &ConfigClass {
+        &self.root_body
+    }
+
     /// Writes the config (unrapified) to the output.
     ///
     /// # Errors

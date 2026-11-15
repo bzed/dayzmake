@@ -26,6 +26,7 @@ fn capacity(n: u32) -> usize {
 
 /// A vertex position with its flags.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct Point {
     /// Position in model space.
     pub coords: (f32, f32, f32),
@@ -35,6 +36,7 @@ pub struct Point {
 
 /// A face vertex: indices into the point and normal arrays plus a UV pair.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct Vertex {
     /// Index into the LOD's points.
     pub point_index: u32,
@@ -46,6 +48,7 @@ pub struct Vertex {
 
 /// A face with its vertices, texture and material.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct Face {
     /// The face's vertices (3 for a triangle, 4 for a quad).
     pub vertices: Vec<Vertex>,
@@ -62,6 +65,7 @@ pub struct Face {
 /// One entry of a LOD's TAGG section. The same name can occur several times
 /// (`#Property#`, `#UVSet#`), so these are kept in file order in a `Vec`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Tagg {
     /// The tagg's active byte.
     pub active: u8,
@@ -73,6 +77,7 @@ pub struct Tagg {
 
 /// One level of detail of the model.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct LOD {
     /// LOD format version, major part.
     pub version_major: u32,
@@ -93,7 +98,12 @@ pub struct LOD {
 }
 
 /// An MLOD model.
+///
+/// ```compile_fail
+/// let _ = dayzmake_core::p3d::P3D { version: 0, lods: Vec::new() };
+/// ```
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct P3D {
     /// MLOD format version.
     pub version: u32,
