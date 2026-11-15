@@ -60,6 +60,15 @@ impl Write for Output {
 }
 
 impl Output {
+    /// The paths a build into this output must not pack: the target and its temp file (none for stdout).
+    #[must_use]
+    pub fn own_paths(&self) -> Vec<PathBuf> {
+        match self {
+            Output::File(f) => f.own_paths(),
+            Output::Standard(_) => Vec::new(),
+        }
+    }
+
     /// Makes a file output the real target file; stdout needs nothing. Call it only after the command succeeded:
     /// an output dropped without it leaves the target as it was.
     ///
@@ -120,6 +129,16 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
 }
 
 impl AtomicTarget {
+    /// The real target path and the temp file next to it (none for a device or FIFO).
+    #[must_use]
+    pub fn own_paths(&self) -> Vec<PathBuf> {
+        if self.direct {
+            Vec::new()
+        } else {
+            vec![self.path.clone(), self.temp.clone()]
+        }
+    }
+
     /// Prepares the target: an existing file is an error unless `force`; nothing at `path` is touched.
     ///
     /// # Errors
@@ -173,7 +192,10 @@ impl AtomicTarget {
             .into_owned();
         let pid = std::process::id();
         for n in 0_u32..1000 {
-            let temp = real.with_file_name(format!(".{name}.dayzmake-tmp-{pid}-{n}"));
+            let temp = real.with_file_name(format!(
+                "{}{pid}-{n}",
+                dayzmake_core::pbo::atomic_temp_prefix(&name)
+            ));
             let mut options = std::fs::OpenOptions::new();
             options.write(true).create_new(true);
             #[cfg(unix)]

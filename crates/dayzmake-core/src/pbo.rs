@@ -439,6 +439,63 @@ pub struct PackOptions {
     pub include_folders: Vec<PathBuf>,
     /// Header extensions (`key`, `value`) set after `$PBOPREFIX$` was read; they win on a clash.
     pub header_extensions: Vec<(String, String)>,
+    /// Paths the folder walk skips (the output file of a build inside the source folder), compared after
+    /// canonicalizing. Hidden temp files of such a target (see [`atomic_temp_prefix`]) next to it are skipped too.
+    pub exclude_paths: Vec<PathBuf>,
+}
+
+/// The file-name prefix of the temp files written next to the target `name` before they are renamed into place
+/// (`.<name>.dayzmake-tmp-<pid>-<n>`); a build leaves them out of the PBO.
+#[must_use]
+pub fn atomic_temp_prefix(name: &str) -> String {
+    format!(".{name}.dayzmake-tmp-")
+}
+
+/// An excluded path split into its canonical folder and file name.
+struct Excluded {
+    folder: PathBuf,
+    name: std::ffi::OsString,
+    temp_prefix: String,
+}
+
+fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
+    paths
+        .iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_owned();
+            let parent = p.parent().filter(|d| !d.as_os_str().is_empty());
+            let folder = std::fs::canonicalize(parent.unwrap_or(Path::new("."))).ok()?;
+            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy());
+            Some(Excluded {
+                folder,
+                name,
+                temp_prefix,
+            })
+        })
+        .collect()
+}
+
+fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let name_str = name.to_string_lossy();
+    // canonicalize only when the name could match
+    let mut folder: Option<Option<PathBuf>> = None;
+    excluded.iter().any(|e| {
+        if name != e.name && !name_str.starts_with(&e.temp_prefix) {
+            return false;
+        }
+        let folder = folder.get_or_insert_with(|| {
+            path.parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .map_or_else(
+                    || std::fs::canonicalize(".").ok(),
+                    |d| std::fs::canonicalize(d).ok(),
+                )
+        });
+        folder.as_deref() == Some(e.folder.as_path())
+    })
 }
 
 impl PackOptions {
@@ -797,7 +854,7 @@ impl PBO {
         let mut binarize = options.build;
         let exclude_patterns = &options.exclude;
         let includefolders = &options.include_folders;
-        let file_list = list_files(directory)?;
+        let file_list = list_files(directory, &excluded_paths(&options.exclude_paths))?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 
@@ -1095,7 +1152,7 @@ impl PBO {
     }
 }
 
-fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
+fn list_files(directory: &Path, excluded: &[Excluded]) -> Result<Vec<PathBuf>, Error> {
     let mut files: Vec<PathBuf> = Vec::new();
 
     // read_dir order depends on the file system; sort by file name so warnings come in a fixed order
@@ -1106,10 +1163,10 @@ fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
 
     for path in paths {
         if path.is_dir() {
-            for f in list_files(&path)? {
+            for f in list_files(&path, excluded)? {
                 files.push(f);
             }
-        } else {
+        } else if !is_excluded(&path, excluded) {
             files.push(path);
         }
     }

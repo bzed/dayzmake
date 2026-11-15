@@ -1069,3 +1069,49 @@ fn build_writes_through_a_symlink_to_a_fifo() {
     );
     assert_eq!(names(dir.path()), ["f.fifo", "link.pbo", "mod"]);
 }
+
+/// Runs `args` twice in `cwd` (the second with `--force`), checks both runs gave the same bytes and that `inspect`
+/// lists neither the target nor a temp entry.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn build_twice_is_identical(args: &[&str], cwd: &Path, pbo: &Path) {
+    let mut forced = args.to_vec();
+    forced.push("--force");
+    let (code, _, err) = dayzmake(args, cwd);
+    assert_eq!(code, 0, "{err}");
+    let first = std::fs::read(pbo).unwrap();
+    let (code, _, err) = dayzmake(&forced, cwd);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(first, std::fs::read(pbo).unwrap());
+    let (code, out, err) = dayzmake(&["inspect", pbo.to_str().unwrap()], cwd);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("config.bin") || out.contains("config.cpp"),
+        "{out}"
+    );
+    assert!(!out.contains("out.pbo"), "{out}");
+    assert!(!out.contains("dayzmake-tmp"), "{out}");
+}
+
+#[test]
+fn build_inside_source_folder_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    build_twice_is_identical(&["build", ".", "out.pbo"], &modf, &modf.join("out.pbo"));
+}
+
+#[test]
+fn build_target_inside_source_from_parent_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    build_twice_is_identical(
+        &["build", "mod", "mod/out.pbo"],
+        dir.path(),
+        &dir.path().join("mod/out.pbo"),
+    );
+}
+
+#[test]
+fn pack_inside_source_folder_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    build_twice_is_identical(&["pack", ".", "out.pbo"], &modf, &modf.join("out.pbo"));
+}

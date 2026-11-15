@@ -1000,12 +1000,14 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         // Only the build can binarize; the binarizer (and its sandbox) lives for this call only.
         let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
         let mut file = AtomicTarget::create(&target, force)?;
+        let own = file.own_paths();
         let result = pbo::cmd_build(
             &source,
             &mut file,
             &headerext,
             &exclude,
             &include_folders(args)?,
+            &own,
             binarizer.as_mut(),
             warnings,
         );
@@ -1016,7 +1018,8 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         file.commit()?;
     } else {
         let mut file = AtomicTarget::create(&target, force)?;
-        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;
+        let own = file.own_paths();
+        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, &own, warnings)?;
         file.commit()?;
     }
     if let Some(key) = key {

@@ -123,10 +123,12 @@ pub fn cmd_pack<O: Write>(
     output: &mut O,
     headerext: &[String],
     excludes: &[String],
+    exclude_paths: &[PathBuf],
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut options = PackOptions::pack();
     options.exclude = excludes.to_vec();
+    options.exclude_paths = exclude_paths.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
     check_source_folder(input)?;
     let pbo = PBO::from_directory(input, &options, None, warnings)?;
@@ -141,18 +143,24 @@ pub fn cmd_pack<O: Write>(
 /// # Errors
 ///
 /// Returns an error if a file cannot be read, binarized or written.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per CLI option; a parameter struct would only move them"
+)]
 pub fn cmd_build<O: Write>(
     input: &Path,
     output: &mut O,
     headerext: &[String],
     excludes: &[String],
     includefolders: &[PathBuf],
+    exclude_paths: &[PathBuf],
     binarizer: Option<&mut Binarizer>,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut options = PackOptions::build();
     options.exclude = excludes.to_vec();
     options.include_folders = includefolders.to_vec();
+    options.exclude_paths = exclude_paths.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
     check_source_folder(input)?;
     let pbo = PBO::from_directory(input, &options, binarizer, warnings)?;
