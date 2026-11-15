@@ -11,9 +11,9 @@ use sha1::{Digest, Sha1};
 use std::sync::LazyLock;
 
 #[expect(clippy::unwrap_used, reason = "the static patterns are valid regexes")]
-static BINARIZABLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".(rtm|p3d)$").unwrap());
+static BINARIZABLE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.(rtm|p3d)$").unwrap());
 #[expect(clippy::unwrap_used, reason = "the static pattern is a valid regex")]
-static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(".p3do$").unwrap());
+static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.p3do$").unwrap());
 
 use crate::binarize::{self, Binarizer};
 use crate::config::{Config, is_rapified};
@@ -439,6 +439,66 @@ pub struct PackOptions {
     pub include_folders: Vec<PathBuf>,
     /// Header extensions (`key`, `value`) set after `$PBOPREFIX$` was read; they win on a clash.
     pub header_extensions: Vec<(String, String)>,
+    /// Paths the folder walk skips (the output file of a build inside the source folder), compared after
+    /// canonicalizing. Hidden temp files of such a target (see [`atomic_temp_prefix`]) next to it are skipped too.
+    pub exclude_paths: Vec<PathBuf>,
+}
+
+/// The file-name prefix of the temp files written next to the target `name` before they are renamed into place
+/// (`.<name>.dayzmake-tmp-<pid>-<n>`); a build leaves them out of the PBO.
+#[must_use]
+pub fn atomic_temp_prefix(name: &str) -> String {
+    format!(".{name}.dayzmake-tmp-")
+}
+
+/// An excluded path split into its canonical folder and file name.
+struct Excluded {
+    folder: PathBuf,
+    name: std::ffi::OsString,
+    temp_prefix: String,
+}
+
+fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
+    paths
+        .iter()
+        .filter_map(|p| {
+            let name = p.file_name()?.to_owned();
+            let parent = p.parent().filter(|d| !d.as_os_str().is_empty());
+            // fails open: an exclude whose folder cannot be resolved matches nothing (the folder exists in practice,
+            // the temp file was created there)
+            let folder = std::fs::canonicalize(parent.unwrap_or(Path::new("."))).ok()?;
+            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy());
+            Some(Excluded {
+                folder,
+                name,
+                temp_prefix,
+            })
+        })
+        .collect()
+}
+
+fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let name_str = name.to_string_lossy();
+    // canonicalize only when the name could match
+    let mut folder: Option<Option<PathBuf>> = None;
+    excluded.iter().any(|e| {
+        if name != e.name && !name_str.starts_with(&e.temp_prefix) {
+            return false;
+        }
+        let folder = folder.get_or_insert_with(|| {
+            path.parent()
+                .filter(|d| !d.as_os_str().is_empty())
+                .map_or_else(
+                    // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
+                    || std::fs::canonicalize(".").ok(),
+                    |d| std::fs::canonicalize(d).ok(),
+                )
+        });
+        folder.as_deref() == Some(e.folder.as_path())
+    })
 }
 
 impl PackOptions {
@@ -539,7 +599,7 @@ impl PBO {
     /// that was read drops its stored checksum: it is signed as the PBO that would be written.
     pub fn insert_entry(&mut self, name: impl Into<String>, data: Vec<u8>) -> Result<(), Error> {
         let name = name.into().replace('/', "\\");
-        if name.split('\\').any(str::is_empty) || safe_relative_path(&name).is_none() {
+        if safe_relative_path(&name).is_none() {
             return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
         }
         self.modified(&name);
@@ -797,7 +857,7 @@ impl PBO {
         let mut binarize = options.build;
         let exclude_patterns = &options.exclude;
         let includefolders = &options.include_folders;
-        let file_list = list_files(directory)?;
+        let file_list = list_files(directory, &excluded_paths(&options.exclude_paths))?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 
@@ -808,17 +868,20 @@ impl PBO {
         // the prefix is needed while binarizing, so read it before looking at the other files
         let mut pre_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
         for prefix_file in &["$PBOPREFIX$", "$PREFIX$"] {
-            if let Ok(content) = std::fs::read_to_string(directory.join(prefix_file)) {
+            let prefix_path = directory.join(prefix_file);
+            // a FIFO or device named like the prefix file would block the read; the walk below
+            // reports it
+            if !std::fs::metadata(&prefix_path).is_ok_and(|m| m.file_type().is_file()) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(prefix_path) {
                 parse_prefix_file(&content, &mut pre_extensions, false, warnings);
             }
         }
-        let prefix: String = pre_extensions.get("prefix").cloned().unwrap_or_else(|| {
-            directory
-                .canonicalize()
-                .ok()
-                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .unwrap_or_default()
-        });
+        let prefix: String = pre_extensions
+            .get("prefix")
+            .cloned()
+            .unwrap_or_else(|| default_prefix(directory).unwrap_or_default());
 
         let addon_files: HashSet<String> = file_list
             .iter()
@@ -828,23 +891,99 @@ impl PBO {
             .collect();
 
         let addon_roots = addon_roots(directory);
+        let mut seen_names: HashMap<String, String> = HashMap::new();
+
+        // Entries generated from source (the rapified config.cpp, a .p3do packed as .p3d) win over a
+        // plain file of the same name, so find them first: the plain file is then skipped before it
+        // is binarized or read. The gates are the ones of the loop below.
+        let mut generated_names: HashMap<String, String> = HashMap::new();
+        for path in &file_list {
+            let Ok(relative) = path.strip_prefix(directory) else {
+                continue;
+            };
+            let (pre_name, name, generated) = entry_name(relative, binarize);
+            if !generated
+                || !file_allowed(&pre_name, exclude_patterns)
+                || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file())
+                || relative.to_str().is_none()
+                || safe_relative_path(&name).is_none()
+            {
+                continue;
+            }
+            generated_names
+                .entry(name.to_lowercase())
+                .or_insert_with(|| printable(&relative.to_string_lossy()));
+        }
 
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
             };
+            let shown = printable(&relative.to_string_lossy());
+            let mut generated = false;
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
                 relative = relative.with_file_name("config.bin");
+                generated = true;
             }
 
             let mut name: String = relative.to_string_lossy().replace('/', "\\");
-            let is_binarizable = BINARIZABLE_RE.is_match(&name);
-
+            // excluded files are silent, whatever they are
             if !file_allowed(&name, exclude_patterns) {
                 continue;
             }
+            // only regular files (or links to them): a FIFO would block the build, a device never
+            // ends. A path that cannot be inspected falls through to the open error below.
+            if std::fs::metadata(&path).is_ok_and(|m| !m.file_type().is_file()) {
+                warnings.warn(
+                    Warning::new(
+                        Some("unsupported-file"),
+                        "Skipping a file that is not a regular file (FIFO, device or socket).",
+                    )
+                    .in_file(relative.to_string_lossy()),
+                );
+                continue;
+            }
+            if relative.to_str().is_none() || safe_relative_path(&name).is_none() {
+                warnings.warn(Warning::new(
+                    Some("unsafe-path"),
+                    format!("Skipping \"{shown}\": unsafe entry name."),
+                ));
+                continue;
+            }
+            // a .p3do is packed as .p3d (it is not binarized itself, so decide that first)
+            let is_binarizable = BINARIZABLE_RE.is_match(&name);
+            if P3DO_RE.is_match(&name) {
+                name = P3DO_RE.replace(&name, ".p3d").into_owned();
+                generated = true;
+            }
+            // entry names compare case-insensitively; the first file in walk order wins, except
+            // that an entry generated from source replaces a plain file of the same name (found
+            // by the pre-pass above, so the plain file is skipped before it is processed)
+            let key = name.to_lowercase();
+            if !generated && let Some(source) = generated_names.get(&key) {
+                warnings.warn(Warning::new(
+                    Some("duplicate-entry"),
+                    format!(
+                        "Skipping \"{shown}\": the entry \"{}\" is generated from \"{source}\".",
+                        printable(&name)
+                    ),
+                ));
+                continue;
+            }
+            if let Some(first) = seen_names.get(&key) {
+                warnings.warn(Warning::new(
+                    Some("duplicate-entry"),
+                    format!(
+                        "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
+                        printable(first)
+                    ),
+                ));
+                continue;
+            }
+            seen_names.insert(key, name.clone());
 
-            let mut file = File::open(&path)?;
+            let mut file =
+                File::open(&path).prepend_error(format!("Failed to open \"{shown}\":"))?;
 
             let prebinarized_as = if binarize && is_binarizable {
                 binarize::binarized_description(&path)?
@@ -878,14 +1017,16 @@ impl PBO {
 
             if name == "$PBOPREFIX$" || name == "$PREFIX$" {
                 let mut content = String::new();
-                file.read_to_string(&mut content)?;
+                file.read_to_string(&mut content)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
                 parse_prefix_file(&content, &mut header_extensions, true, warnings);
             } else if binarize
                 && ["cpp", "rvmat"]
                     .contains(&path.extension().and_then(|e| e.to_str()).unwrap_or(""))
             {
                 let mut buffer: Vec<u8> = Vec::new();
-                file.read_to_end(&mut buffer)?;
+                file.read_to_end(&mut buffer)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
 
                 if is_rapified(&buffer) {
                     warnings.warn(
@@ -916,7 +1057,10 @@ impl PBO {
             ) {
                 let data = b
                     .binarize(&path, directory, &prefix, warnings)
-                    .prepend_error(format!("Failed to binarize {}:", relative.display()))?;
+                    .prepend_error(format!(
+                        "Failed to binarize {}:",
+                        printable(&relative.display().to_string())
+                    ))?;
 
                 files.insert(name, Cursor::new(data.into_boxed_slice()));
             } else {
@@ -931,19 +1075,20 @@ impl PBO {
                 }
 
                 let mut buffer: Vec<u8> = Vec::new();
-                file.read_to_end(&mut buffer)?;
-
-                name = P3DO_RE.replace_all(&name, ".p3d").to_string();
+                file.read_to_end(&mut buffer)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
 
                 files.insert(name, Cursor::new(buffer.into_boxed_slice()));
             }
         }
 
         if !header_extensions.contains_key("prefix") {
-            let prefix: String = directory
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| error!("Invalid addon directory \"{}\".", directory.display()))?;
+            let prefix: String = default_prefix(directory).ok_or_else(|| {
+                error!(
+                    "Invalid addon directory \"{}\".",
+                    printable(&directory.display().to_string())
+                )
+            })?;
             header_extensions.insert("prefix".to_string(), prefix);
         }
 
@@ -965,7 +1110,8 @@ impl PBO {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure or if an entry is too large.
+    /// Returns an error on I/O failure, if an entry is too large, or if a header extension key
+    /// or value contains a NUL byte.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
         self.write_with_checksum(output).map(|_| ())
     }
@@ -987,7 +1133,9 @@ impl PBO {
 
         if let Some(prefix) = self.header_extensions.get("prefix") {
             headers.write_all(b"prefix\0")?;
-            headers.write_cstring(self.extension_bytes(prefix))?;
+            headers
+                .write_cstring(self.extension_bytes(prefix))
+                .prepend_error("Header extension \"prefix\":")?;
         }
 
         for (key, value) in &self.header_extensions {
@@ -995,8 +1143,10 @@ impl PBO {
                 continue;
             }
 
-            headers.write_cstring(self.extension_bytes(key))?;
-            headers.write_cstring(self.extension_bytes(value))?;
+            headers
+                .write_cstring(self.extension_bytes(key))
+                .and_then(|()| headers.write_cstring(self.extension_bytes(value)))
+                .prepend_error(format!("Header extension \"{}\":", printable(key)))?;
         }
         headers.write_cstring(String::new())?;
 
@@ -1006,14 +1156,15 @@ impl PBO {
 
         for (name, cursor) in &files_sorted {
             let size = u32::try_from(cursor.get_ref().len())
-                .map_err(|_| error!("PBO entry \"{name}\" is too large."))?;
-            // an entry that was read and not replaced since keeps its compression: `files`
-            // holds its stored bytes, so the header must still say how to decode them
+                .map_err(|_| error!("PBO entry \"{}\" is too large.", printable(name)))?;
+            // an entry that was read and not replaced since keeps its packing method (compressed or
+            // one we do not know): `files` holds its stored bytes, so the header must still say
+            // how to decode them
             let kept = self
                 .headers
                 .iter()
                 .rfind(|h| h.filename == *name)
-                .filter(|h| h.packing_method == PACKING_COMPRESSED);
+                .filter(|h| h.packing_method != 0);
             let header = PBOHeader {
                 filename: (*name).to_string(),
                 raw_filename: self.raw_names.get(*name).cloned(),
@@ -1087,7 +1238,7 @@ impl PBO {
     }
 }
 
-fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
+fn list_files(directory: &Path, excluded: &[Excluded]) -> Result<Vec<PathBuf>, Error> {
     let mut files: Vec<PathBuf> = Vec::new();
 
     // read_dir order depends on the file system; sort by file name so warnings come in a fixed order
@@ -1098,10 +1249,10 @@ fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
 
     for path in paths {
         if path.is_dir() {
-            for f in list_files(&path)? {
+            for f in list_files(&path, excluded)? {
                 files.push(f);
             }
-        } else {
+        } else if !is_excluded(&path, excluded) {
             files.push(path);
         }
     }
@@ -1109,9 +1260,30 @@ fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
     Ok(files)
 }
 
+/// The entry names a source file packs as in `build`: the name before the `.p3do` rename (what `-x`
+/// matches), the final one, and whether the entry is generated from source (the rapified
+/// `config.cpp`, a `.p3do` packed as `.p3d`).
+fn entry_name(relative: &Path, binarize: bool) -> (String, String, bool) {
+    let mut relative = relative.to_path_buf();
+    let mut generated = false;
+    if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
+        relative = relative.with_file_name("config.bin");
+        generated = true;
+    }
+    let pre = relative.to_string_lossy().replace('/', "\\");
+    let name = if P3DO_RE.is_match(&pre) {
+        generated = true;
+        P3DO_RE.replace(&pre, ".p3d").into_owned()
+    } else {
+        pre.clone()
+    };
+    (pre, name, generated)
+}
+
 /// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
 /// Windows opens instead of a file whatever the extension.
-fn is_device_name(component: &str) -> bool {
+#[must_use]
+pub fn is_device_name(component: &str) -> bool {
     let stem = component
         .split('.')
         .next()
@@ -1128,17 +1300,18 @@ fn is_device_name(component: &str) -> bool {
 /// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
 /// is joined to.
 ///
-/// The name is split on `\` and `/` and empty components are dropped, so a leading separator does
-/// not make the path absolute. Returns `None` if any component is `.` or `..`, consists only of
-/// dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or an ASCII control character, or if no
-/// component remains.
+/// The name is split on `\` and `/`. Returns `None` if any component is empty (a leading,
+/// trailing or doubled separator, so an absolute name is never accepted), is `.` or `..`, consists
+/// only of dots and spaces, is a Windows device name, or contains `:` (drive letters), a NUL or any
+/// control character (C0, DEL and C1, `char::is_control`), or if the name is empty.
 #[must_use]
 pub fn safe_relative_path(name: &str) -> Option<PathBuf> {
     let mut path = PathBuf::new();
-    for component in name.split(['\\', '/']).filter(|c| !c.is_empty()) {
-        if is_device_name(component)
+    for component in name.split(['\\', '/']) {
+        if component.is_empty()
+            || is_device_name(component)
             || component.chars().all(|c| c == '.' || c == ' ')
-            || component.chars().any(|c| c == ':' || c.is_ascii_control())
+            || component.chars().any(|c| c == ':' || c.is_control())
         {
             return None;
         }
@@ -1168,6 +1341,13 @@ fn crosses_symlink(base: &Path, relative: &Path) -> bool {
         }
     }
     false
+}
+
+/// The prefix of an addon folder without `$PBOPREFIX$`: its own name (a symlink keeps the name it is
+/// reached by), or for `.`, `./` and `..` the name of the real folder.
+fn default_prefix(directory: &Path) -> Option<String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    name(directory).or_else(|| directory.canonicalize().ok().and_then(|d| name(&d)))
 }
 
 /// Replaces control characters (line breaks included) with a space.
@@ -1210,6 +1390,26 @@ fn write_prefix_file(
     Ok(())
 }
 
+/// The relative path an unpacked entry is written to, and whether leading separators were
+/// stripped from its name (`\scripts\x.c` is written as `scripts/x.c`). Everything else
+/// [`safe_relative_path`] rejects stays rejected.
+fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
+    let stripped = name.trim_start_matches(['\\', '/']);
+    safe_relative_path(stripped).map(|relative| (relative, stripped.len() != name.len()))
+}
+
+/// Warns that an entry name starts with a separator that was stripped.
+fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
+    warnings.warn(Warning::new(
+        Some("leading-separator"),
+        format!(
+            "Entry \"{}\" starts with a path separator; extracting it as \"{}\".",
+            printable(name),
+            printable(&relative.to_string_lossy())
+        ),
+    ));
+}
+
 /// The folder a PBO is unpacked into: `output`, or with `use_prefix` `<output>/<prefix>`. An empty
 /// prefix (or one of only separators) means no prefix.
 fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Error> {
@@ -1219,7 +1419,8 @@ fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Er
     match pbo.header_extensions.get("prefix") {
         Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(output.to_path_buf()),
         Some(prefix) => {
-            let relative = safe_relative_path(prefix)
+            // other tools may write a trailing separator; a leading or doubled one is rejected
+            let relative = safe_relative_path(prefix.trim_end_matches(['\\', '/']))
                 .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
             if crosses_symlink(output, &relative) {
                 return Err(error!(
@@ -1246,7 +1447,8 @@ pub struct UnpackOptions {
 ///
 /// Entry names and the prefix come from the (untrusted) PBO: entries whose name does not map to a
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
-/// with an entry already written in this run are skipped with a warning. With `options.use_prefix`
+/// with an entry already written in this run are skipped with a warning. Leading separators are
+/// stripped from a name (`leading-separator` warning). With `options.use_prefix`
 /// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix.
 ///
 /// # Errors
@@ -1273,7 +1475,7 @@ pub fn unpack<I: Read>(
             .into_iter()
             .chain(pbo.files.keys().map(String::as_str))
             .find(|name| {
-                safe_relative_path(name).is_some_and(|relative| {
+                unpack_relative(name).is_some_and(|(relative, _)| {
                     !crosses_symlink(&base, &relative) && base.join(relative).exists()
                 })
             });
@@ -1302,13 +1504,16 @@ pub fn unpack<I: Read>(
                 ),
             ));
         }
-        let Some(relative) = safe_relative_path(file_name) else {
+        let Some((relative, stripped)) = unpack_relative(file_name) else {
             warnings.warn(Warning::new(
                 Some("unsafe-path"),
                 format!("Skipping \"{}\": unsafe path.", printable(file_name)),
             ));
             continue;
         };
+        if stripped {
+            warn_leading_separator(file_name, &relative, warnings);
+        }
         let key = relative.to_string_lossy().to_lowercase();
         if written.contains(&key) {
             warnings.warn(Warning::new(
@@ -1402,10 +1607,19 @@ mod tests {
     }
 
     #[test]
-    fn safe_path_drops_empty_components() {
-        assert_eq!(p("\\abs.txt"), Some(PathBuf::from("abs.txt")));
-        assert_eq!(p("/tmp//x"), Some(PathBuf::from("tmp").join("x")));
-        assert_eq!(p("a\\\\b\\"), Some(PathBuf::from("a").join("b")));
+    fn safe_path_rejects_empty_components() {
+        for bad in [
+            "\\abs.txt",
+            "/abs",
+            "\\abs",
+            "/tmp//x",
+            "a\\\\b",
+            "a\\b\\",
+            "a/",
+            "\\\\?\\x",
+        ] {
+            assert_eq!(p(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
@@ -1425,7 +1639,17 @@ mod tests {
 
     #[test]
     fn safe_path_rejects_colon_nul_and_control() {
-        for bad in ["C:\\x.txt", "a:b", "a\0b", "a\nb", "a\tb", "a\x7fb"] {
+        for bad in [
+            "C:\\x.txt",
+            "a:b",
+            "a\0b",
+            "a\nb",
+            "a\tb",
+            "a\x7fb",
+            "a\u{80}b",
+            "a\u{9b}b",
+            "a\u{9f}",
+        ] {
             assert_eq!(p(bad), None, "{bad:?}");
         }
     }

@@ -55,10 +55,11 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                     .line
                     .checked_sub(1)
                     .ok_or_else(|| error!("invalid line number {}", pe.location.line))?;
-                let line_origin = u32::try_from(line_index)
+                // Reported 1-based, like config errors; `line_index` is only for the lookup.
+                let line_origin = u32::try_from(pe.location.line)
                     .map_err(|_| error!("invalid line number {}", pe.location.line))?;
                 let file_origin = match origin {
-                    Some(path) => format!("{}:", path.display()),
+                    Some(path) => format!("{}:", printable(&path.display().to_string())),
                     None => String::new(),
                 };
 
@@ -90,9 +91,9 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {
-                // line_origins is never empty: preprocess() always seeds it with the
-                // top-level file, and its length is an upper bound for the parser's
-                // 1-based line numbers.
+                // line_origins holds one entry per preprocessed line and is empty for an
+                // input without lines, so the lookup can fail (handled below); otherwise its
+                // length is an upper bound for the parser's 1-based line numbers.
                 let idx = min(pe.location.line, info.line_origins.len()).saturating_sub(1);
                 let Some((line_origin, file)) = info.line_origins.get(idx) else {
                     return Err(error!(
@@ -102,7 +103,7 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 };
                 let line_origin = *line_origin;
                 let file_origin = match file {
-                    Some(path) => format!("{}:", path.display()),
+                    Some(path) => format!("{}:", printable(&path.display().to_string())),
                     None => String::new(),
                 };
 

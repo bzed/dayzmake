@@ -1,0 +1,237 @@
+//! Text taken from untrusted files never reaches an error or warning as a raw control character
+//! (issues #15 and #22).
+
+use std::io::Cursor;
+#[cfg(unix)]
+use std::path::PathBuf;
+
+use dayzmake_core::config::Config;
+use dayzmake_core::paa::Paa;
+use dayzmake_core::warning::Warnings;
+
+#[cfg(unix)]
+use dayzmake_core::preprocess::preprocess;
+
+/// Asserts the message shows `escaped` and holds no raw ESC.
+fn assert_escaped(msg: &str, escaped: &str) {
+    assert!(msg.contains(escaped), "{msg:?}");
+    assert!(!msg.contains('\u{1b}'), "{msg:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn error_inside_an_include_with_a_control_character_name_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("main.cpp"), "").unwrap();
+    std::fs::write(dir.path().join("a\u{1b}b.hpp"), "#endif\n").unwrap();
+    let err = preprocess(
+        String::from("#include \"a\u{1b}b.hpp\"\n"),
+        Some(dir.path().join("main.cpp")),
+        &Vec::<PathBuf>::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "a\\u{1b}b.hpp");
+}
+
+#[cfg(unix)]
+#[test]
+fn parse_error_location_in_an_include_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("config.cpp"), "").unwrap();
+    std::fs::write(dir.path().join("a\u{1b}b.hpp"), "class {\n").unwrap();
+    let err = Config::from_string(
+        String::from("#include \"a\u{1b}b.hpp\"\n"),
+        Some(dir.path().join("config.cpp")),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "a\\u{1b}b.hpp");
+}
+
+#[cfg(unix)]
+#[test]
+fn include_case_warning_is_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("z")).unwrap();
+    std::fs::write(dir.path().join("z/\u{1b}foo.hpp"), "x\n").unwrap();
+    let mut warnings = Warnings::new();
+    preprocess(
+        String::from("#include \"\\z\\\u{1b}Foo.hpp\"\n"),
+        None,
+        &[dir.path().to_path_buf()],
+        &mut warnings,
+    )
+    .unwrap();
+    let w = warnings
+        .warnings()
+        .iter()
+        .find(|w| w.name == Some("include-case"))
+        .expect("include-case warning");
+    assert_escaped(&w.to_string(), "\\u{1b}Foo.hpp");
+}
+
+#[test]
+fn rapified_class_name_is_escaped_in_nested_errors() {
+    let config = Config::from_string(
+        String::from("class AAAA { class BBBB { x=1; }; };"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let mut bytes = Vec::new();
+    config.write_rapified(&mut bytes).unwrap();
+    let pos = bytes.windows(4).position(|w| w == b"AAAA").unwrap();
+    bytes[pos] = 0x1b;
+    bytes.truncate(bytes.len() - 5);
+    let err = Config::read_rapified(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}AAA");
+}
+
+#[test]
+fn eval_body_is_escaped_in_errors() {
+    let err = Config::from_string(
+        String::from("x = __EVAL(\u{1b}[31m);\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31m");
+}
+
+#[test]
+fn exec_statement_is_escaped_in_errors() {
+    let err = Config::from_string(
+        String::from("__EXEC(\u{1b}[31m);\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31m");
+}
+
+#[test]
+fn paa_tagg_name_is_escaped_in_errors() {
+    let mut bytes = vec![0x01, 0xff];
+    bytes.extend_from_slice(b"\x1bGGATSFF");
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    let err = Paa::read(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}GGATSFF");
+}
+
+#[test]
+fn unquoted_string_warning_is_escaped() {
+    let mut warnings = Warnings::new();
+    Config::from_string(
+        String::from("class A { x = \u{1b}[31mRED; y[] = {\u{1b}[32mGREEN}; };\n"),
+        None,
+        &[],
+        &mut warnings,
+    )
+    .unwrap();
+    let messages: Vec<String> = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.name == Some("unquoted-string"))
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_escaped(&messages[0], "\\u{1b}[31mRED");
+    assert_escaped(&messages[1], "\\u{1b}[32mGREEN");
+}
+
+#[test]
+fn p3d_tagg_name_is_escaped_in_errors() {
+    use dayzmake_core::p3d::P3D;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"MLOD");
+    bytes.extend_from_slice(&257u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes()); // one LOD
+    bytes.extend_from_slice(b"P3DM");
+    bytes.extend_from_slice(&28u32.to_le_bytes());
+    bytes.extend_from_slice(&256u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 16]); // no points, normals, faces; flags
+    bytes.extend_from_slice(b"TAGG");
+    bytes.push(1);
+    bytes.extend_from_slice(b"\x1b[31mT\0");
+    bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    let err = P3D::read(&mut Cursor::new(bytes)).unwrap_err();
+    assert_escaped(&err.to_string(), "\\u{1b}[31mT");
+}
+
+/// A rapified config whose root has the entries given as raw bytes (`count` of them).
+fn rapified(count: u8, body: &[u8]) -> Vec<u8> {
+    let mut bytes = b"\0raP\0\0\0\0\x08\0\0\0\0\0\0\0\0".to_vec();
+    bytes.push(count);
+    bytes.extend_from_slice(body);
+    bytes.extend_from_slice(b"\0\0\0\0\0");
+    bytes
+}
+
+/// Entry bytes of a class `name` whose body, `body`, comes right after the entry (the root has one entry).
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn class_with_body(name: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut entry = vec![0];
+    entry.extend_from_slice(name);
+    entry.push(0);
+    // the root header is 18 bytes with its parent and entry count
+    let offset = 18 + entry.len() + 4;
+    entry.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+    entry.extend_from_slice(body);
+    rapified(1, &entry)
+}
+
+#[test]
+fn derapify_refuses_an_external_class_name_with_a_control_character() {
+    // type 3 is an external class, type 2 an array
+    let bytes = rapified(1, b"\x03A\x1b]0;pwned\x07\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "A\\u{1b}]0;pwned\\u{7}");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_a_nested_class_name_with_a_control_character() {
+    // class Outer { class <bad>; };
+    let bytes = class_with_body(b"Outer", b"\0\x01\x03A\x1b[2J\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "A\\u{1b}[2J");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_a_parent_class_name_with_a_control_character() {
+    // class Outer: <bad> {};
+    let bytes = class_with_body(b"Outer", b"P\x1b[2J\0\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "P\\u{1b}[2J");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn derapify_refuses_an_entry_name_with_a_control_character() {
+    let bytes = rapified(1, b"\x01\x00k\x1b[2J\0v\0");
+    let config = Config::read_rapified(&mut Cursor::new(bytes)).unwrap();
+    let mut out = Vec::new();
+    let err = config.write(&mut out).unwrap_err();
+    assert_escaped(&err.to_string(), "k\\u{1b}[2J");
+    assert!(!out.contains(&0x1b), "{out:?}");
+}
+
+#[test]
+fn binarized_description_names_the_file_it_cannot_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("miss\u{1b}ing.p3d");
+    let err = dayzmake_core::binarize::binarized_description(&path).unwrap_err();
+    assert_escaped(&err.to_string(), "miss\\u{1b}ing.p3d");
+}

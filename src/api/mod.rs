@@ -16,8 +16,8 @@ use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
 use query::{Query, render_json, render_text, run_query, src_files};
 use source::{
-    InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, installed_mods, installed_source,
-    match_installed, parse_mods, resolve_mod,
+    InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, index_entry_name, installed_mods,
+    installed_source, match_installed, parse_mods, resolve_mod,
 };
 use steam::{Branch, find_game, libraries, steam_roots};
 
@@ -92,7 +92,10 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
     let (scripts_pbo, build) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
         if !pbo.is_file() {
-            return Err(error!("{} not found (--dayz)", pbo.display()));
+            return Err(error!(
+                "{} not found (--dayz)",
+                printable(&pbo.display().to_string())
+            ));
         }
         (pbo, format!("{} build unknown", ctx.branch.name()))
     } else {
@@ -227,7 +230,7 @@ fn load_mods(
                                 local.warn(
                                     Warning::new(
                                         Some("api-bad-mod"),
-                                        format!("skipping mod {}: {e}", m.name),
+                                        format!("skipping mod {}: {e}", printable(&m.name)),
                                     )
                                     .in_file(m.dir.display().to_string()),
                                 );
@@ -368,9 +371,9 @@ pub fn src_contents(
                 .mods
                 .iter()
                 .find(|m| m.name == f.index)
-                .ok_or_else(|| error!("mod {} is not selected", f.index))?;
+                .ok_or_else(|| error!("mod {} is not selected", printable(&f.index)))?;
             let rel = safe_relative_path(&f.pbo)
-                .ok_or_else(|| error!("unsafe PBO path \"{}\" in the index", f.pbo))?;
+                .ok_or_else(|| error!("unsafe PBO path \"{}\" in the index", printable(&f.pbo)))?;
             m.dir.join(rel)
         });
     }
@@ -385,22 +388,35 @@ pub fn src_contents(
             .filter(|(_, p)| *p == path)
             .map(|(f, _)| f.path.as_str())
             .collect();
-        let mut file = std::fs::File::open(path).map_err(|e| error!("{}: {e}", path.display()))?;
-        let sel = PBO::read_entries(&mut file, |n| wanted.contains(n))
-            .map_err(|e| error!("{}: {e}", path.display()))?;
+        let mut file = std::fs::File::open(path)
+            .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+        let sel = PBO::read_entries(&mut file, |n| {
+            index_entry_name(n).is_some_and(|k| wanted.contains(k.as_str()))
+        })
+        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
         read.insert(path.clone(), sel);
     }
     let mut out = Vec::new();
     for (f, path) in files.into_iter().zip(&paths) {
         let data = match read
             .get(path)
-            .and_then(|sel| sel.entries().iter().find(|e| e.name() == f.path))
-        {
+            // two raw names that normalise to one index name resolve to the first match
+            .and_then(|sel| {
+                sel.entries()
+                    .iter()
+                    .find(|e| index_entry_name(e.name()).as_deref() == Some(f.path.as_str()))
+            }) {
             Some(entry) => match entry.data() {
                 Ok(data) => data.to_vec(),
-                Err(e) => return Err(error!("{}: {e}", f.path)),
+                Err(e) => return Err(error!("{}: {e}", printable(&f.path))),
             },
-            None => return Err(error!("{} not found in {}", f.path, path.display())),
+            None => {
+                return Err(error!(
+                    "{} not found in {}",
+                    printable(&f.path),
+                    printable(&path.display().to_string())
+                ));
+            }
         };
         out.push(SrcContent {
             index: f.index,

@@ -152,3 +152,13 @@ fn macro_arity_warnings_do_not_leak_into_the_next_call() {
     preprocess("y = 1;\n".to_string(), None, &[], &mut second).unwrap();
     assert!(second.warnings().is_empty(), "{:?}", second.warnings());
 }
+
+#[test]
+fn warning_location_is_escaped() {
+    let w = Warning::new(None, "m").in_file("a\u{9b}b.cpp").at_line(1);
+    let text = w.to_string();
+    assert!(text.contains("a\\u{9b}b.cpp"), "{text:?}");
+    assert!(!text.contains('\u{9b}'), "{text:?}");
+    assert!(!w.location().contains('\u{9b}'));
+    assert_eq!(w.file.as_deref(), Some("a\u{9b}b.cpp"));
+}

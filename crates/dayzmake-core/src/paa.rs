@@ -23,6 +23,8 @@ use image::{DynamicImage, ImageBuffer, Rgba};
 use linked_hash_map::LinkedHashMap;
 use lzo1x;
 use texpresso::Format;
+
+use crate::error::printable;
 #[cfg(feature = "image")]
 use texpresso::{Algorithm, Params};
 
@@ -45,12 +47,15 @@ const MAX_TAGG_SIZE: usize = 1 << 20;
 fn read_tagg_data<I: Read>(input: &mut I, name: &str) -> Result<Vec<u8>, Error> {
     let tagg_size = input.read_u32::<LittleEndian>()? as usize;
     if tagg_size > MAX_TAGG_SIZE {
-        return Err(error!("PAA tagg '{name}' is too large: {tagg_size} bytes."));
+        return Err(error!(
+            "PAA tagg '{}' is too large: {tagg_size} bytes.",
+            printable(name)
+        ));
     }
     let mut data = Vec::new();
     input.take(tagg_size as u64).read_to_end(&mut data)?;
     if data.len() != tagg_size {
-        return Err(error!("Truncated PAA tagg '{name}'."));
+        return Err(error!("Truncated PAA tagg '{}'.", printable(name)));
     }
     Ok(data)
 }

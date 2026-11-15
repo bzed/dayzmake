@@ -4,7 +4,7 @@
 use std::fs::File;
 use std::io;
 use std::io::{Cursor, Read, Seek, Stdout, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -19,8 +19,8 @@ pub enum Input {
 
 /// Output sink: a file, or stdout.
 pub enum Output {
-    /// A file on disk.
-    File(File),
+    /// A target file, written atomically (see [`AtomicTarget`]).
+    File(AtomicTarget),
     /// Standard output.
     Standard(Stdout),
 }
@@ -59,19 +59,245 @@ impl Write for Output {
     }
 }
 
-/// Creates the target file of a command; an existing file is an error unless `force`.
+impl Output {
+    /// The paths a build into this output must not pack: the target and its temp file (none for stdout).
+    #[must_use]
+    pub fn own_paths(&self) -> Vec<PathBuf> {
+        match self {
+            Output::File(f) => f.own_paths(),
+            Output::Standard(_) => Vec::new(),
+        }
+    }
+
+    /// Makes a file output the real target file; stdout needs nothing. Call it only after the command succeeded:
+    /// an output dropped without it leaves the target as it was.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target cannot be flushed or renamed into place.
+    pub fn commit(self) -> io::Result<()> {
+        match self {
+            Output::File(f) => f.commit(),
+            Output::Standard(_) => Ok(()),
+        }
+    }
+}
+
+/// A target file written atomically: data goes to a temp file next to `path`, which
+/// [`commit`](AtomicTarget::commit) renames over `path`; dropped without `commit`, the temp file is removed.
+///
+/// `std::fs::rename` replaces an existing file on every platform (on Windows it uses `MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING`). An existing target keeps its permissions; a symlink target is written
+/// through (the link stays, the file it points to is replaced). Hard links to the target are detached:
+/// they keep the old content.
+pub struct AtomicTarget {
+    path: PathBuf,
+    /// the path as the caller gave it (a symlink there stays what it is)
+    given: PathBuf,
+    temp: PathBuf,
+    file: Option<File>,
+    done: bool,
+    /// a device, FIFO or pipe: written in place, no temp file, no rename
+    direct: bool,
+}
+
+/// Where a write to `path` really lands: `path` itself, or what a symlink there points to.
 ///
 /// # Errors
 ///
-/// Returns an error if the file exists without `force` or cannot be created.
-pub fn create_target(path: &std::path::Path, force: bool) -> io::Result<File> {
-    if !force && path.exists() {
+/// Returns an error for a symlink loop, or a chain that ends in a link that cannot be resolved.
+fn resolve_link(path: &Path) -> io::Result<PathBuf> {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        return Ok(path.to_path_buf());
+    }
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return Ok(real);
+    }
+    // a dangling link: its target, relative to the link's directory
+    let Ok(link) = std::fs::read_link(path) else {
+        return Ok(path.to_path_buf());
+    };
+    let target = path
+        .parent()
+        .map_or_else(|| link.clone(), |p| p.join(&link));
+    if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            path.display()
+            "Target \"{}\" is a symlink loop or chain that cannot be resolved.",
+            dayzmake_core::error::printable(&path.display().to_string())
         ));
     }
-    File::create(path).prepend_error("Failed to open output file:")
+    Ok(target)
+}
+
+impl AtomicTarget {
+    /// The target as given, its resolved path and the temp file next to it (a device or FIFO: just the path).
+    #[must_use]
+    pub fn own_paths(&self) -> Vec<PathBuf> {
+        if self.direct {
+            vec![self.path.clone()]
+        } else {
+            vec![self.given.clone(), self.path.clone(), self.temp.clone()]
+        }
+    }
+
+    /// Prepares the target: an existing file is an error unless `force`; nothing at `path` is touched.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists without `force`, is a directory, or the temp file cannot be created.
+    pub fn create(path: &Path, force: bool) -> io::Result<AtomicTarget> {
+        Self::create_with(path, force, false, "Failed to open output file:")
+    }
+
+    /// Like [`create`](AtomicTarget::create), with the message that starts an open failure and, with
+    /// `private`, the file created owner-only (`0600` on unix, also over an existing file).
+    ///
+    /// # Errors
+    ///
+    /// As [`create`](AtomicTarget::create).
+    pub fn create_with(
+        path: &Path,
+        force: bool,
+        private: bool,
+        failure: &str,
+    ) -> io::Result<AtomicTarget> {
+        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name.
+        let windows_device = cfg!(windows)
+            && path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(dayzmake_core::pbo::is_device_name);
+        if !force && !windows_device && path.exists() {
+            return Err(error!(
+                "Target file \"{}\" already exists. Use --force to overwrite.",
+                path.display()
+            ));
+        }
+        if path.is_dir() {
+            return Err(error!("Target \"{}\" is a directory.", path.display()));
+        }
+        // `metadata` follows links, so `/dev/stdout` onto a pipe is found too
+        if windows_device || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
+            // no truncate: a device or FIFO has nothing to truncate
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .prepend_error(failure)?;
+            return Ok(AtomicTarget {
+                path: path.to_path_buf(),
+                given: path.to_path_buf(),
+                temp: PathBuf::new(),
+                file: Some(file),
+                done: true,
+                direct: true,
+            });
+        }
+        let real = resolve_link(path)?;
+        let name = real
+            .file_name()
+            .ok_or_else(|| error!("Invalid output file \"{}\"", path.display()))?
+            .to_string_lossy()
+            .into_owned();
+        let pid = std::process::id();
+        for n in 0_u32..1000 {
+            let temp = real.with_file_name(format!(
+                "{}{pid}-{n}",
+                dayzmake_core::pbo::atomic_temp_prefix(&name)
+            ));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            if private {
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            }
+            match options.open(&temp) {
+                Ok(file) => {
+                    let target = AtomicTarget {
+                        path: real,
+                        given: path.to_path_buf(),
+                        temp,
+                        file: Some(file),
+                        done: false,
+                        direct: false,
+                    };
+                    if !private && let Ok(meta) = std::fs::metadata(&target.path) {
+                        // on error `target` is dropped, which removes the temp file
+                        std::fs::set_permissions(&target.temp, meta.permissions())
+                            .prepend_error(failure)?;
+                    }
+                    return Ok(target);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    // a bare file name has the empty parent: the current directory
+                    let dir = real
+                        .parent()
+                        .filter(|d| !d.as_os_str().is_empty())
+                        .map_or_else(
+                            || ".".to_string(),
+                            |d| dayzmake_core::error::printable(&d.display().to_string()),
+                        );
+                    return Err(e).prepend_error(format!(
+                        "{failure} cannot create a temporary file in \"{dir}\":"
+                    ));
+                }
+            }
+        }
+        Err(error!(
+            "{failure} no free temp file name next to \"{}\"",
+            path.display()
+        ))
+    }
+
+    /// Flushes the data to disk and renames the temp file over the target. A device, FIFO or pipe is written in
+    /// place and is only flushed; anything else non-regular (a socket) is opened directly and fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if syncing or renaming fails; the temp file is removed then.
+    pub fn commit(mut self) -> io::Result<()> {
+        if self.direct {
+            // devices, FIFOs and pipes cannot be synced; flushing is all there is
+            return self
+                .file
+                .take()
+                .map_or(Ok(()), |mut f| f.flush())
+                .prepend_error("Failed to write output file:");
+        }
+        if let Some(file) = self.file.take() {
+            file.sync_all()
+                .prepend_error("Failed to write output file:")?;
+            // closed before the rename, which Windows needs
+            drop(file);
+            std::fs::rename(&self.temp, &self.path).prepend_error(format!(
+                "Failed to replace output file \"{}\":",
+                self.path.display()
+            ))?;
+            self.done = true;
+        }
+        Ok(())
+    }
+}
+
+impl Write for AtomicTarget {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.file.as_mut().map_or(Ok(0), |f| f.write(buf))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.as_mut().map_or(Ok(()), Write::flush)
+    }
+}
+
+impl Drop for AtomicTarget {
+    fn drop(&mut self) {
+        // without a successful commit the temp file goes
+        if !self.done {
+            // a failed cleanup leaves a hidden temp file; nothing more can be done in a destructor
+            let _ = std::fs::remove_file(&self.temp);
+        }
+    }
 }
 
 /// The first line of an open error: `Failed to open <what> "<path>":`, the path made printable.

@@ -12,6 +12,9 @@ use dayzmake::api::query::{
 };
 use dayzmake::api::steam::Branch;
 
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 fn fixture(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/api")
@@ -1715,6 +1718,7 @@ fn inherited_walks_across_indexes() {
 // ---- sources from PBOs, cache and CLI ----
 
 mod from_pbo {
+    use super::support::raw_pbo;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -1851,6 +1855,32 @@ mod from_pbo {
             fs::write(dir.join("meta.cpp"), "name = \"Community Framework\";\n").expect("meta");
             dir
         }
+    }
+
+    #[test]
+    fn mod_entry_with_a_leading_separator_is_indexed() {
+        let w = World::new();
+        let dir = w.home.join("@Raw");
+        fs::create_dir_all(dir.join("addons")).expect("mkdir");
+        let pbo = raw_pbo(
+            &[
+                ("\\scripts\\3_Game\\x.c", b"class LeadingSep\n{\n}\n"),
+                ("..\\y.c", b"class ParentEntry\n{\n}\n"),
+            ],
+            &[("prefix", "raw")],
+        );
+        fs::write(dir.join("addons/raw.pbo"), pbo).expect("write");
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "class", "LeadingSep", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("LeadingSep"), "{out}");
+        // only the `..` entry is reported, the leading separator is not
+        assert!(err.contains("..\\y.c") && !err.contains("x.c"), "{err}");
+        let (code, out, err2) = w.run(&["api", "src", "LeadingSep", "--cat", "-m", &m]);
+        assert_eq!(code, 0, "{err2}");
+        assert!(out.contains("class LeadingSep"), "{out}");
+        let (code, _, err) = w.run(&["api", "class", "ParentEntry", "-m", &m]);
+        assert_eq!(code, 1, "{err}");
     }
 
     #[test]
@@ -2055,6 +2085,80 @@ mod from_pbo {
         assert!(out.contains("CFBase"), "{out}");
     }
 
+    /// An entry name with a control character is reported once-escaped (`\u{1b}`, not `\\u{1b}`).
+    #[cfg(unix)]
+    #[test]
+    fn api_unsafe_entry_name_is_escaped_once() {
+        let w = World::new();
+        let pbo_path = w.root.join("steamapps/common/DayZ/dta/scripts.pbo");
+        // build leaves unsafe names out, so patch the name into the finished PBO (same length)
+        make_pbo(
+            &fixture("vanilla/scripts"),
+            &[("3_Game/a_b.c", "class Evil {}\n")],
+            None,
+            &pbo_path,
+        );
+        let mut bytes = fs::read(&pbo_path).expect("read pbo");
+        let at = bytes
+            .windows(12)
+            .position(|win| win == b"3_Game\\a_b.c")
+            .expect("entry name");
+        bytes[at + 8] = 0x1b;
+        fs::write(&pbo_path, bytes).expect("write pbo");
+        let (code, _, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(err.contains("a\\u{1b}b.c"), "{err:?}");
+        assert!(!err.contains("a\\\\u{1b}"), "{err:?}");
+        assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    /// An index entry path with a control character (a poisoned cache) is escaped in the error.
+    #[cfg(unix)]
+    #[test]
+    fn api_src_error_escapes_index_paths() {
+        let w = World::new();
+        assert_eq!(w.run(&["api", "class", "Base"]).0, 0);
+        let mut poisoned = 0;
+        for e in fs::read_dir(&w.cache).expect("cache") {
+            let path = e.expect("entry").path();
+            if path.extension().is_some_and(|x| x == "json") {
+                let text = fs::read_to_string(&path).expect("read");
+                let new = text.replace("Base.c", "Ba\\u001bse.c");
+                poisoned += usize::from(new != text);
+                fs::write(&path, new).expect("write");
+            }
+        }
+        assert!(poisoned > 0, "no cache file mentions Base.c");
+        let (code, _, err) = w.run(&["api", "src", "Base", "--cat"]);
+        assert_eq!(code, 1, "{err}");
+        assert!(err.contains("Ba\\u{1b}se.c"), "{err:?}");
+        assert!(!err.contains('\u{1b}'), "{err:?}");
+    }
+
+    /// An entry that cannot be read is skipped with a warning in a fixed format, and the rest is indexed.
+    #[test]
+    fn api_unreadable_entry_is_skipped_with_a_warning() {
+        let w = World::new();
+        let pbo_path = w.stable_pbo();
+        // a truncated LZSS stream: the entry claims 64 bytes and holds none
+        let bytes = super::support::raw_pbo_with_headers(
+            &[
+                ("3_Game/Good.c", b"class GoodOne {}\n", 0, 17),
+                ("3_Game/Bad.c", b"\xFF", super::support::CPRS, 64),
+            ],
+            &[],
+        );
+        fs::write(&pbo_path, bytes).expect("write pbo");
+        let (code, out, err) = w.run(&["api", "class", "GoodOne"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("GoodOne"), "{out}");
+        assert!(
+            err.contains("warning: cannot read \"3_Game/Bad.c\": "),
+            "{err}"
+        );
+        assert!(err.contains("[api-bad-entry]"), "{err}");
+    }
+
     #[test]
     fn api_mod_unsafe_prefix_skipped() {
         let w = World::new();
@@ -2071,7 +2175,7 @@ mod from_pbo {
         let (code, out, err) = w.run(&["api", "class", "CFBase", "-m", &m]);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains("CFBase"));
-        assert!(err.contains("unsafe prefix"), "{err}");
+        assert!(err.contains("unsafe prefix \"..\\evil\""), "{err}");
         let (code, _, _) = w.run(&["api", "class", "EvilClass", "-m", &m]);
         assert_eq!(code, 1);
         // Nothing was written outside the cache dir and the mod dir.

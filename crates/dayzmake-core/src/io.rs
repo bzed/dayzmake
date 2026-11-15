@@ -70,7 +70,8 @@ pub(crate) trait WriteExt: Write {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure.
+    /// Returns an `InvalidInput` error if the string contains a NUL byte (it would end the
+    /// string early and shift every following field), and an error on I/O failure.
     fn write_cstring<S: AsRef<[u8]>>(&mut self, s: S) -> io::Result<()>;
     /// Writes a BI compressed integer, returning the number of bytes written.
     ///
@@ -82,7 +83,14 @@ pub(crate) trait WriteExt: Write {
 
 impl<T: Write> WriteExt for T {
     fn write_cstring<S: AsRef<[u8]>>(&mut self, s: S) -> io::Result<()> {
-        self.write_all(s.as_ref())?;
+        let bytes = s.as_ref();
+        if bytes.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "string contains a NUL byte",
+            ));
+        }
+        self.write_all(bytes)?;
         self.write_all(b"\0")?;
         Ok(())
     }
@@ -123,4 +131,18 @@ pub(crate) fn compressed_int_len(x: u32) -> usize {
     }
 
     len + 1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn write_cstring_rejects_an_embedded_nul() {
+        let mut out = Vec::new();
+        let err = out.write_cstring("a\0b").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        out.write_cstring("ab").unwrap();
+        assert_eq!(out, b"ab\0");
+    }
 }

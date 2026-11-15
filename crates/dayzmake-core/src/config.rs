@@ -9,11 +9,23 @@ use std::path::PathBuf;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error;
-use crate::error::{ConfigParseErrorExt, ErrorExt};
+use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::preprocess;
 use crate::warning::{Warning, WarningSink};
+
+/// Refuses a name with a control character: the config grammar has no way to write one, and it
+/// would reach the terminal raw.
+fn text_name(name: &str, what: &str) -> Result<(), Error> {
+    if name.chars().any(char::is_control) {
+        return Err(error!(
+            "{what} name \"{}\" cannot be written as config text.",
+            printable(name)
+        ));
+    }
+    Ok(())
+}
 
 /// State shared with the grammar for `__EVAL` / `__EXEC`.
 #[derive(Default)]
@@ -106,16 +118,17 @@ peg::parser! {
         rule unquoted_string() -> String = pos:position!() s:$((![';' | '}' | '\r' | '\n'] [_])*) {
             let result = s.to_string().trim().to_string();
             // an empty value comes from a macro that expanded to nothing (e.g. an argument-count
-            // mismatch, which has its own warning); CfgConvert makes it "" as well
+            // mismatch, which has its own warning); CfgConvert makes it "" as well.
+            // `unquoted_string_entry` raises `empty-value` for it
             if !result.is_empty() {
-                warnings.push((pos, format!("String value \"{result}\" is not quoted properly."), Some("unquoted-string")));
+                warnings.push((pos, format!("String value \"{}\" is not quoted properly.", printable(&result)), Some("unquoted-string")));
             }
             result
         }
 
         rule unquoted_string_array() -> String = pos:position!() s:$( (![',' | '}' | ' ' | '\t' | '\r' | '\n'] [_]) (![',' | '}' | '\r' | '\n'] [_])* ) {
             let result = s.to_string().trim().to_string();
-            warnings.push((pos, format!("String array element \"{result}\" is not quoted properly."), Some("unquoted-string")));
+            warnings.push((pos, format!("String array element \"{}\" is not quoted properly.", printable(&result)), Some("unquoted-string")));
             result
         }
 
@@ -164,7 +177,11 @@ peg::parser! {
             (n, ce)
         }
 
-        rule unquoted_string_entry() -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? s:unquoted_string() {
+        rule unquoted_string_entry() -> (String, ConfigEntry) = pos:position!() n:name() whitespace()? "=" whitespace()? s:unquoted_string() {
+            if s.is_empty() {
+                // `x = ;`, or a macro that expanded to nothing; kept as "" so existing mods still build
+                warnings.push((pos, format!("Entry \"{}\" has no value; it is stored as an empty string.", printable(&n)), Some("empty-value")));
+            }
             (n, ConfigEntry::StringEntry(s))
         }
 
@@ -437,11 +454,13 @@ impl ConfigArray {
             .map_err(|_| error!("too many array elements: {}", self.elements.len()))?;
         let mut written = output.write_compressed_int(num_elements)?;
 
-        for element in &self.elements {
+        for (index, element) in self.elements.iter().enumerate() {
             match element {
                 ConfigArrayElement::StringElement(s) => {
                     output.write_all(&[0])?;
-                    output.write_cstring(s)?;
+                    output
+                        .write_cstring(s)
+                        .prepend_error(format!("Array element {index}:"))?;
                     written += s.len() + 2;
                 }
                 ConfigArrayElement::FloatElement(f) => {
@@ -456,7 +475,9 @@ impl ConfigArray {
                 }
                 ConfigArrayElement::ArrayElement(a) => {
                     output.write_all(&[3])?;
-                    written += 1 + a.write_rapified(output)?;
+                    written += 1 + a
+                        .write_rapified(output)
+                        .prepend_error(format!("Array element {index}:"))?;
                 }
             }
         }
@@ -588,6 +609,7 @@ impl ConfigClass {
                 output.write_all(b"\n")?;
             }
             for (key, value) in entries {
+                text_name(key, "Entry")?;
                 output.write_all(String::from("    ").repeat(level).as_bytes())?;
 
                 match value {
@@ -600,6 +622,7 @@ impl ConfigClass {
                             let parent = if c.parent.is_empty() {
                                 String::new()
                             } else {
+                                text_name(&c.parent, "Parent class")?;
                                 format!(": {}", c.parent)
                             };
                             match &c.entries {
@@ -707,8 +730,10 @@ impl ConfigClass {
                     match entry {
                         ConfigEntry::StringEntry(s) => {
                             output.write_all(&[1, 0])?;
-                            output.write_cstring(name)?;
-                            output.write_cstring(s)?;
+                            output
+                                .write_cstring(name)
+                                .and_then(|()| output.write_cstring(s))
+                                .prepend_error(format!("Entry \"{}\":", printable(name)))?;
                             written += name.len() + s.len() + 4;
                         }
                         ConfigEntry::FloatEntry(f) => {
@@ -730,7 +755,10 @@ impl ConfigClass {
                                 written += 4;
                             }
                             output.write_cstring(name)?;
-                            written += name.len() + 2 + a.write_rapified(output)?;
+                            written += name.len()
+                                + 2
+                                + a.write_rapified(output)
+                                    .prepend_error(format!("Entry \"{}\":", printable(name)))?;
                         }
                         ConfigEntry::ClassEntry(c) => {
                             if c.is_external || c.is_deletion {
@@ -750,9 +778,10 @@ impl ConfigClass {
                                 let buffer: Box<[u8]> =
                                     vec![0; c.rapified_length()].into_boxed_slice();
                                 let mut cursor: Cursor<Box<[u8]>> = Cursor::new(buffer);
-                                class_offset += c
-                                    .write_rapified(&mut cursor, class_offset)
-                                    .prepend_error(format!("Failed to rapify {name}:"))?;
+                                class_offset +=
+                                    c.write_rapified(&mut cursor, class_offset).prepend_error(
+                                        format!("Failed to rapify {}:", printable(name)),
+                                    )?;
 
                                 class_bodies.push(cursor);
                             }
@@ -839,7 +868,10 @@ impl ConfigClass {
                 let name = input.read_cstring()?;
 
                 let class_entry = ConfigClass::read_rapified(input, level + 1, budget)
-                    .prepend_error(format!("Failed to read rapified class \"{name}\":"))?;
+                    .prepend_error(format!(
+                        "Failed to read rapified class \"{}\":",
+                        printable(&name)
+                    ))?;
                 entries.push((name, ConfigEntry::ClassEntry(class_entry)));
             } else if entry_type == 1 {
                 let mut buf = [0u8; 1];

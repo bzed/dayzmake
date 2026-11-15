@@ -1,10 +1,9 @@
 //! Key generation, signing and verification commands.
 
-use std::fs::File;
 use std::io::Error;
 use std::path::PathBuf;
 
-use crate::cli_io::open_input;
+use crate::cli_io::{AtomicTarget, open_input};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::pbo::PBO;
@@ -43,8 +42,14 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             private_key_path.display()
         ));
     }
+    let mut private_file = AtomicTarget::create_with(
+        &private_key_path,
+        true,
+        true,
+        "Failed to create private key:",
+    )?;
     private_key
-        .write(&mut File::create(&private_key_path).prepend_error("Failed to create private key:")?)
+        .write(&mut private_file)
         .prepend_error("Failed to write private key:")?;
 
     let mut public_key_path = keyname.clone();
@@ -55,9 +60,22 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             public_key_path.display()
         ));
     }
+    let mut public_file = AtomicTarget::create_with(
+        &public_key_path,
+        true,
+        false,
+        "Failed to create public key:",
+    )?;
     public_key
-        .write(&mut File::create(&public_key_path).prepend_error("Failed to create public key:")?)
+        .write(&mut public_file)
         .prepend_error("Failed to write public key:")?;
+    // the public key first: if the second rename fails, the old private key is kept; that can leave a new public key
+    // without its private key, and the error says the public key was already replaced
+    public_file.commit()?;
+    private_file.commit().prepend_error(format!(
+        "The public key \"{}\" was already replaced:",
+        public_key_path.display()
+    ))?;
 
     Ok(())
 }
@@ -97,8 +115,11 @@ pub fn cmd_sign(
         ));
     }
     let sig = privatekey.sign(&pbo, version)?;
-    sig.write(&mut File::create(&sig_path).prepend_error("Failed to open signature file:")?)
+    let mut file =
+        AtomicTarget::create_with(&sig_path, true, false, "Failed to open signature file:")?;
+    sig.write(&mut file)
         .prepend_error("Failed to write signature:")?;
+    file.commit()?;
 
     Ok(())
 }

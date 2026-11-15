@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::io::Error;
 
+use crate::error::printable;
+
 /// Result of an `__EVAL`
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalValue {
@@ -25,7 +27,10 @@ enum Tok {
 }
 
 fn unsupported(expr: &str) -> Error {
-    error!("__EVAL expression not supported by dayzmake: {expr}")
+    error!(
+        "__EVAL expression not supported by dayzmake: {}",
+        printable(expr)
+    )
 }
 
 fn tokenize(expr: &str) -> Result<Vec<Tok>, Error> {
@@ -161,13 +166,19 @@ impl<S: BuildHasher> Parser<'_, S> {
                 '*' => x * y,
                 '/' => {
                     if matches!(y.classify(), std::num::FpCategory::Zero) {
-                        return Err(error!("__EVAL: division by zero in: {}", self.expr));
+                        return Err(error!(
+                            "__EVAL: division by zero in: {}",
+                            printable(self.expr)
+                        ));
                     }
                     x / y
                 }
                 '%' => {
                     if matches!(y.classify(), std::num::FpCategory::Zero) {
-                        return Err(error!("__EVAL: division by zero in: {}", self.expr));
+                        return Err(error!(
+                            "__EVAL: division by zero in: {}",
+                            printable(self.expr)
+                        ));
                     }
                     x % y
                 }
@@ -228,14 +239,17 @@ pub fn exec<S: BuildHasher>(
     parts.push(current);
 
     for stmt in parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        let eq = stmt
-            .find('=')
-            .ok_or_else(|| error!("__EXEC statement not supported by dayzmake: {}", stmt))?;
+        let eq = stmt.find('=').ok_or_else(|| {
+            error!(
+                "__EXEC statement not supported by dayzmake: {}",
+                printable(stmt)
+            )
+        })?;
         let name = stmt[..eq].trim();
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(error!(
                 "__EXEC statement not supported by dayzmake: {}",
-                stmt
+                printable(stmt)
             ));
         }
         let value = eval(stmt[eq + 1..].trim(), vars)?;

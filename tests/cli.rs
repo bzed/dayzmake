@@ -159,8 +159,9 @@ fn macro_arity_warning_has_location() {
         "{}",
         err
     );
-    // the empty value it expands to is not reported again as an unquoted string
+    // the empty value it expands to is not reported again as an unquoted string, but as an empty value
     assert!(!err.contains("unquoted-string"), "{}", err);
+    assert!(err.contains("empty-value"), "{}", err);
 }
 
 #[test]
@@ -554,8 +555,7 @@ fn build_warning_path_is_relative_to_the_addon() {
         "{err}"
     );
 
-    // "." has no folder name to derive a prefix from
-    write(dir.path(), "mod/$PBOPREFIX$", "mod\n");
+    // "." builds without $PBOPREFIX$ too
     let (code, _, err) = dayzmake(&["build", ".", "../out2.pbo"], &dir.path().join("mod"));
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("In file config.cpp:2: "), "{err}");
@@ -689,4 +689,845 @@ fn rapify_nbsp_indent_reports_a_parse_error() {
     let (code, _, err) = dayzmake(&["rapify", "nbsp.cpp", "out.bin"], dir.path());
     assert_eq!(code, 1, "{err}");
     assert!(err.starts_with("error:"), "{err}");
+}
+
+/// File names in `dir`, sorted.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn failed_build_keeps_the_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "class A {\n");
+    std::fs::write(dir.path().join("out.pbo"), b"good pbo bytes").unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(
+        std::fs::read(dir.path().join("out.pbo")).unwrap(),
+        b"good pbo bytes"
+    );
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+}
+
+#[test]
+fn build_of_a_missing_folder_creates_no_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["build", "nodir", "out.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(names(dir.path()).is_empty(), "{:?}", names(dir.path()));
+}
+
+#[test]
+fn successful_build_replaces_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::write(dir.path().join("out.pbo"), b"old").unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let pbo = std::fs::read(dir.path().join("out.pbo")).unwrap();
+    assert_ne!(pbo, b"old");
+    assert!(pbo.windows(5).any(|w| w == b"hello"));
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+}
+
+#[test]
+fn failed_rapify_keeps_the_existing_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "bad.cpp", "class A {\n");
+    std::fs::write(dir.path().join("c.bin"), b"good bin").unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "-f", "bad.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(
+        std::fs::read(dir.path().join("c.bin")).unwrap(),
+        b"good bin"
+    );
+    assert_eq!(names(dir.path()), ["bad.cpp", "c.bin"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_keeps_the_permissions_of_the_existing_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn build_writes_to_a_windows_device_name_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "NUL"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let left: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["m"], "no temp file or NUL file is left");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_force_replaces_a_read_only_target_and_keeps_it_read_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "--force", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_ne!(std::fs::read(&out).unwrap(), b"old");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+        0o444
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn build_force_refuses_a_read_only_target_and_leaves_no_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    let mut permissions = std::fs::metadata(&out).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&out, permissions).unwrap();
+    let (code, _, err) = dayzmake(&["build", "--force", "mod", "out.pbo"], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert_eq!(std::fs::read(&out).unwrap(), b"old");
+    let mut names: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["mod", "out.pbo"], "no temp file is left");
+    let mut permissions = std::fs::metadata(&out).unwrap().permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "test cleanup")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&out, permissions).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn build_into_a_read_only_directory_names_the_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out_dir = dir.path().join("ro");
+    std::fs::create_dir(&out_dir).unwrap();
+    std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "ro/out.pbo"], dir.path());
+    std::fs::set_permissions(&out_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // root ignores directory permissions
+    if code == 0 {
+        return;
+    }
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("Failed to open output file: cannot create a temporary file in \""),
+        "{err}"
+    );
+    assert!(err.contains("ro\":"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_of_a_bare_name_in_a_read_only_cwd_names_the_current_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    // root ignores directory permissions
+    if code == 0 {
+        return;
+    }
+    assert!(
+        err.contains("cannot create a temporary file in \".\":"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_symlinked_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::fs::write(dir.path().join("real/out.pbo"), b"old").unwrap();
+    std::os::unix::fs::symlink("real/out.pbo", dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("out.pbo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let real = std::fs::read(dir.path().join("real/out.pbo")).unwrap();
+    assert!(real.windows(5).any(|w| w == b"hello"));
+    assert_eq!(names(&dir.path().join("real")), ["out.pbo"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_dangling_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::os::unix::fs::symlink("real/out.pbo", dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(dir.path().join("real/out.pbo").is_file());
+}
+
+#[test]
+fn a_directory_target_is_rejected_up_front() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 1);
+    assert!(err.contains("is a directory"), "{err}");
+    // nothing was built or written: no output, no temp file, no warnings
+    assert_eq!(names(dir.path()), ["mod", "out.pbo"]);
+    assert_eq!(names(&dir.path().join("out.pbo")), Vec::<String>::new());
+    assert!(!err.contains("arning"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_target_is_rejected() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    symlink("self.pbo", dir.path().join("self.pbo")).unwrap();
+    symlink("two-b.pbo", dir.path().join("two-a.pbo")).unwrap();
+    symlink("two-a.pbo", dir.path().join("two-b.pbo")).unwrap();
+    for target in ["self.pbo", "two-a.pbo"] {
+        let (code, _, err) = dayzmake(&["build", "-f", "mod", target], dir.path());
+        assert_eq!(code, 1, "{target}: {err}");
+        assert!(
+            err.contains("is a symlink loop or chain that cannot be resolved"),
+            "{target}: {err}"
+        );
+    }
+    assert_eq!(
+        names(dir.path()),
+        ["mod", "self.pbo", "two-a.pbo", "two-b.pbo"]
+    );
+}
+
+#[test]
+fn atomic_target_commit_failure_removes_the_temp_file() {
+    use dayzmake::cli_io::AtomicTarget;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pbo");
+    let mut t = AtomicTarget::create(&target, false).unwrap();
+    t.write_all(b"data").unwrap();
+    // a directory appears at the target before the rename
+    std::fs::create_dir(&target).unwrap();
+    let err = t.commit().unwrap_err().to_string();
+    assert!(err.contains("out.pbo"), "{err}");
+    assert_eq!(names(dir.path()), ["out.pbo"]);
+}
+
+#[test]
+fn atomic_target_skips_an_existing_temp_name() {
+    use dayzmake::cli_io::AtomicTarget;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pbo");
+    let taken = dir
+        .path()
+        .join(format!(".out.pbo.dayzmake-tmp-{}-0", std::process::id()));
+    std::fs::write(&taken, b"foreign").unwrap();
+    let mut t = AtomicTarget::create(&target, false).unwrap();
+    t.write_all(b"data").unwrap();
+    t.commit().unwrap();
+    assert_eq!(std::fs::read(&taken).unwrap(), b"foreign");
+    assert_eq!(std::fs::read(&target).unwrap(), b"data");
+}
+
+#[cfg(unix)]
+#[test]
+fn keygen_creates_the_private_key_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let mode = |n: &str| {
+        std::fs::metadata(dir.path().join(n))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    let (code, _, err) = dayzmake(&["keygen", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+    // the public key keeps the default mode: the one a file created here gets (umask applied)
+    std::fs::write(dir.path().join("probe"), b"").unwrap();
+    assert_eq!(
+        mode("k.bikey"),
+        mode("probe"),
+        "the public key keeps the default mode"
+    );
+    // over a wider existing key, and over a 0600 one
+    std::fs::set_permissions(
+        dir.path().join("k.biprivatekey"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    let (code, _, err) = dayzmake(&["keygen", "-f", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+    let (code, _, err) = dayzmake(&["keygen", "-f", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(mode("k.biprivatekey"), 0o600);
+}
+
+/// The `prefix` header extension of the PBO at `path`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn pbo_prefix(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).unwrap();
+    let pbo = dayzmake_core::pbo::PBO::read(&mut f).unwrap();
+    pbo.header_extension("prefix").map(str::to_string)
+}
+
+#[test]
+fn build_dot_uses_the_folder_name_as_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mymod/config.cpp", "class A {};\n");
+    let inside = dir.path().join("mymod");
+    let (code, _, err) = dayzmake(&["build", ".", "../a.pbo"], &inside);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["build", "./", "../b.pbo"], &inside);
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["build", "mymod", "c.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let a = std::fs::read(dir.path().join("a.pbo")).unwrap();
+    assert_eq!(a, std::fs::read(dir.path().join("b.pbo")).unwrap());
+    assert_eq!(a, std::fs::read(dir.path().join("c.pbo")).unwrap());
+    assert_eq!(
+        pbo_prefix(&dir.path().join("a.pbo")).as_deref(),
+        Some("mymod")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_through_a_symlink_keeps_the_link_name_as_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "real/config.cpp", "class A {};\n");
+    std::os::unix::fs::symlink("real", dir.path().join("mylink")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mylink", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        pbo_prefix(&dir.path().join("out.pbo")).as_deref(),
+        Some("mylink")
+    );
+}
+
+#[test]
+fn empty_value_warns_and_can_be_muted() {
+    let (code, err) = rapify_str("class A { x = ; };\n");
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("config.cpp:1") && err.contains("empty-value"),
+        "{err}"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "config.cpp", "class A { x = ; };\n");
+    let (code, _, err) = dayzmake(
+        &["-w", "empty-value", "rapify", "config.cpp", "c.bin"],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("empty-value"), "{err}");
+}
+
+#[test]
+fn rapify_rejects_a_nul_in_a_string_and_names_the_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "config.cpp", "class A { a = \"x\0y\"; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "config.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("Entry \"a\""), "{err}");
+    assert!(!dir.path().join("c.bin").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_to_dev_null() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "/dev/null"], dir.path());
+    assert_eq!(code, 0, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_to_dev_stdout_through_a_pipe() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let (code, out, err) = dayzmake_raw(&["build", "-f", "mod", "/dev/stdout"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.windows(5).any(|w| w == b"hello"), "{out:?}");
+    assert_eq!(names(dir.path()), ["mod"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_into_a_fifo_and_keeps_it() {
+    use std::os::unix::fs::FileTypeExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let fifo = dir.path().join("f.pbo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    // our own write end, held until dayzmake is done: the reader sees EOF even if dayzmake never opens the FIFO
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "f.pbo"], dir.path());
+    drop(keep_open);
+    let bytes = reader.join().unwrap();
+    assert_eq!(code, 0, "{err}");
+    assert!(bytes.windows(5).any(|w| w == b"hello"));
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+    assert_eq!(names(dir.path()), ["f.pbo", "mod"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_symlink_to_a_fifo() {
+    use std::os::unix::fs::FileTypeExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let fifo = dir.path().join("f.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::os::unix::fs::symlink("f.fifo", dir.path().join("link.pbo")).unwrap();
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "link.pbo"], dir.path());
+    drop(keep_open);
+    let bytes = reader.join().unwrap();
+    assert_eq!(code, 0, "{err}");
+    assert!(bytes.windows(5).any(|w| w == b"hello"));
+    assert!(
+        std::fs::symlink_metadata(&fifo)
+            .unwrap()
+            .file_type()
+            .is_fifo()
+    );
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("link.pbo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(names(dir.path()), ["f.fifo", "link.pbo", "mod"]);
+}
+
+/// Runs `args` twice in `cwd` (the second with `--force`), checks both runs gave the same bytes and that `inspect`
+/// lists neither the target nor a temp entry.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn build_twice_is_identical(args: &[&str], cwd: &Path, pbo: &Path) {
+    let mut forced = args.to_vec();
+    forced.push("--force");
+    let (code, _, err) = dayzmake(args, cwd);
+    assert_eq!(code, 0, "{err}");
+    let first = std::fs::read(pbo).unwrap();
+    let (code, _, err) = dayzmake(&forced, cwd);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(first, std::fs::read(pbo).unwrap());
+    let (code, out, err) = dayzmake(&["inspect", pbo.to_str().unwrap()], cwd);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        out.contains("config.bin") || out.contains("config.cpp"),
+        "{out}"
+    );
+    assert!(!out.contains("out.pbo"), "{out}");
+    assert!(!out.contains("dayzmake-tmp"), "{out}");
+}
+
+#[test]
+fn build_inside_source_folder_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    build_twice_is_identical(&["build", ".", "out.pbo"], &modf, &modf.join("out.pbo"));
+}
+
+#[test]
+fn build_target_inside_source_from_parent_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    build_twice_is_identical(
+        &["build", "mod", "mod/out.pbo"],
+        dir.path(),
+        &dir.path().join("mod/out.pbo"),
+    );
+}
+
+#[test]
+fn pack_inside_source_folder_does_not_pack_output() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    build_twice_is_identical(&["pack", ".", "out.pbo"], &modf, &modf.join("out.pbo"));
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_through_symlinked_target_does_not_pack_it() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};"), ("dist/.keep", "")]);
+    let modf = dir.path().join("mod");
+    std::os::unix::fs::symlink("../dist/out.pbo", modf.join("out.pbo")).unwrap();
+    build_twice_is_identical(
+        &["pack", ".", "out.pbo"],
+        &modf,
+        &dir.path().join("dist/out.pbo"),
+    );
+}
+
+/// Runs dayzmake like `dayzmake`, but as a child with a deadline: a build that hangs fails the
+/// test (the child is killed) instead of blocking it. Returns (exit code, stderr).
+///
+/// # Panics
+///
+/// Panics if the binary cannot be spawned or does not exit within 20 seconds (it is killed first).
+#[cfg(unix)]
+#[must_use]
+#[expect(clippy::expect_used, clippy::panic, reason = "test helper")]
+fn dayzmake_with_deadline(args: &[&str], cwd: &Path) -> (i32, String) {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let home = tempfile::tempdir().expect("failed to create a temp HOME");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let mut child = cmd.spawn().expect("failed to run dayzmake");
+    let mut stderr = child.stderr.take().expect("stderr");
+    // drain stderr on a thread so a full pipe cannot stall the child
+    let reader = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text); // a read error only shortens the diagnostics
+        String::from_utf8_lossy(&text).into_owned()
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill(); // already gone is fine: the test fails below either way
+            let _ = child.wait();
+            panic!("build hung: killed {args:?} after 20 s");
+        }
+        // a watchdog poll for the deadline, not a wait for state: the child's exit ends the loop
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    (
+        status.code().unwrap_or(-1),
+        reader.join().expect("stderr reader"),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_into_fifo_inside_source_completes() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    let fifo = modf.join("f.fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let reader = {
+        let fifo = fifo.clone();
+        std::thread::spawn(move || std::fs::read(fifo).unwrap())
+    };
+    // held open so the reader sees EOF and the test cannot hang even if dayzmake never opens the FIFO
+    let keep_open = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "f.fifo", "--force"], &modf);
+    drop(keep_open);
+    assert_eq!(code, 0, "{err}");
+    let data = reader.join().unwrap();
+    assert!(data.windows(10).any(|w| w == b"config.cpp"), "no PBO read");
+    assert!(!data.windows(6).any(|w| w == b"f.fifo"));
+}
+
+#[test]
+fn stale_temp_is_skipped_but_same_name_in_subfolder_is_packed() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/.out.pbo.dayzmake-tmp-999-0", "stale"),
+        ("mod/d/out.pbo", "data"),
+    ]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], &modf);
+    assert!(!out.contains("dayzmake-tmp"), "{out}");
+    assert!(out.contains("out.pbo"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_skips_file_names_that_are_unsafe_as_entry_names() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};"), ("mod/ok.txt", "x")]);
+    let modf = dir.path().join("mod");
+    write(&modf, "a\x1bb.txt", "bad");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(err.contains("a\\u{1b}b.txt"), "{err}");
+    assert!(!err.contains('\x1b'), "{err:?}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], &modf);
+    assert!(out.contains("ok.txt"), "{out}");
+    assert!(!out.contains("b.txt"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_skips_fifos_and_device_links_in_the_source() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    std::os::unix::fs::symlink("/dev/zero", modf.join("zero")).unwrap();
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsupported-file"), "{err}");
+    assert!(err.contains("pipe") && err.contains("zero"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert!(out.contains("config.cpp"), "{out}");
+    assert!(!out.contains("pipe") && !out.contains("zero"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_skips_a_fifo_named_like_the_prefix_file() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("$PBOPREFIX$"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let (code, err) = dayzmake_with_deadline(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsupported-file"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_warns_about_names_that_are_not_utf8_and_packs_neither() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    for n in [&b"x\xff.txt"[..], &b"x\xfe.txt"[..]] {
+        std::fs::write(modf.join(std::ffi::OsStr::from_bytes(n)), "d").unwrap();
+    }
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err.matches("unsafe-path").count(), 2, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert!(
+        out.contains("config.cpp") && out.contains("# Files: 1"),
+        "{out}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_warns_about_names_that_differ_only_in_case() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/A.txt", "upper"),
+        ("mod/a.txt", "lower"),
+    ]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("a.txt") && err.contains("A.txt"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert_eq!(out.to_lowercase().matches("a.txt").count(), 1, "{out}");
+}
+
+#[test]
+fn build_warns_when_config_cpp_and_config_bin_collide() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class A{x=1;};"),
+        ("mod/config.bin", "bin"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(
+        err.contains("config.cpp") && err.contains("config.bin"),
+        "{err}"
+    );
+}
+
+#[test]
+fn build_prefers_the_compiled_config_cpp_over_a_stale_config_bin() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class CfgPatches{class A{units[]={};};};"),
+        ("mod/config.bin", "stale"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("Skipping \"config.bin\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "config.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("stale"), "{out}");
+    assert!(out.contains("CfgPatches"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_skips_a_plain_file_replaced_by_a_generated_entry_without_opening_it() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class CfgPatches{class A{units[]={};};};")]);
+    // opening this would fail the build, so it must be skipped before it is processed
+    std::os::unix::fs::symlink("nowhere", dir.path().join("mod/config.bin")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("Skipping \"config.bin\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "config.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("CfgPatches"), "{out}");
+}
+
+#[test]
+fn build_prefers_the_p3do_over_a_plain_p3d() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/m.p3d"), b"plain-p3d").unwrap();
+    std::fs::write(dir.path().join("m/m.p3do"), b"from-p3do").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("Skipping \"m.p3d\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "from-p3do");
+}
+
+#[cfg(unix)]
+#[test]
+fn pack_names_a_dangling_symlink_in_the_error() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    std::os::unix::fs::symlink("nowhere", modf.join("dangling")).unwrap();
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_ne!(code, 0);
+    assert!(err.contains("dangling"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_excluded_special_and_unsafe_files_are_silent() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    assert!(
+        Command::new("mkfifo")
+            .arg(modf.join("pipe"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    write(&modf, "bad\x1bname.txt", "x");
+    let (code, _, err) = dayzmake(
+        &["build", "-x", "pipe", "-x", "bad*", "mod", "out.pbo"],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        !err.contains("unsupported-file") && !err.contains("unsafe-path"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_matches_model_extensions_case_insensitively() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/N.P3D"), b"MLOD\x01\x01\0\0").unwrap();
+    std::fs::write(dir.path().join("m/xp3d"), b"plain").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("non-windows-binarization"), "{err}");
+    assert!(err.contains("N.P3D"), "{err}");
+    assert_eq!(err.matches("non-windows-binarization").count(), 1, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn build_warns_when_p3d_and_p3do_collide_and_renames_p3do() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/a.p3d"), b"MLOD\x01\x01\0\0").unwrap();
+    std::fs::write(dir.path().join("m/a.p3do"), b"other").unwrap();
+    std::fs::write(dir.path().join("m/b.P3DO"), b"other").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
+    assert_eq!(out.matches("a.p3d").count(), 1, "{out}");
+    assert!(out.contains("b.p3d") && !out.contains("p3do"), "{out}");
 }

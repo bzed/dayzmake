@@ -26,6 +26,42 @@ is maintained here.
 
 - `dayzmake cat` on an entry that is not in the PBO now exits 1 with an error (it used to exit 0 and print
   `not found`).
+- `x = ;` (or a value macro that expands to nothing) now raises the `empty-value` warning; the value is still
+  stored as `""` (#19).
+- `build .` (and a symlinked addon folder) without `$PBOPREFIX$` uses the folder's name as the prefix instead of
+  failing with "Invalid addon directory" (#11).
+- Preprocessor parse errors report 1-based line numbers (#12).
+- Unpacking a PBO skips entry names with any control character (C1 included), `..` or drive-letter components or
+  an empty component (`unsafe-path` warning); a leading separator is stripped instead (`\scripts\x.c` is written as
+  `scripts/x.c`, `leading-separator` warning). Modifying a PBO rejects such names. The API index (`api`) is more
+  lenient: an entry with a leading or trailing separator is indexed under its normalised name instead of being
+  skipped (#13, #21).
+- Rewriting a read PBO keeps the packing method of entries it does not know (#14).
+- Names, paths and values from untrusted files are shown with control characters escaped in errors, warnings and
+  `inspect` listings. `derapify` refuses a class or entry name that cannot be written as config text (#15, #22, #26,
+  #28).
+- Writing a P3D rejects an inconsistent model (bad selection size, vertex index out of range, a face without 3 or 4
+  vertices, a NUL in a name) before the first byte is written; the error names the LOD index (#16).
+- A string with an embedded NUL fails rapifying with an error naming the config entry, instead of writing a corrupt
+  file (#23).
+- Proton binarizing rejects a `$PBOPREFIX$` that would leave its sandbox (#17).
+- Output files (`build`, `pack`, `rapify`, `binarize`, `keygen`, ...) are replaced atomically: a failed command
+  keeps the old target, an existing target keeps its permissions (with `--force` a read-only target is replaced on unix and stays
+  read-only; Windows refuses it and leaves it intact), a symlink is written through, and a device, FIFO
+  or pipe (`/dev/null`, `/dev/stdout`, and on Windows `NUL`, `CON`, ...) is written in place. A failure to create the temporary file names the
+  directory (#18, #25).
+- `build` never packs its own output: the target and its temporary file are left out when they lie inside the
+  source folder (#24).
+- The `api` warning for a mod with an unsafe prefix shows the prefix escaped once, not twice (#31).
+- `keygen` creates the private key readable by its owner only (`0600`) (#20).
+- `build` and `pack` skip FIFOs, devices and sockets in the source folder (`unsupported-file` warning, no more hanging
+  on a FIFO) and files whose names are unsafe as PBO entry names (`unsafe-path` warning); `-x` excludes apply first.
+  Names that collide (case-insensitively, for example `config.cpp` and `config.bin`) give a `duplicate-entry`
+  warning; the first in sorted order wins, except that an entry generated from source (the rapified `config.cpp`, a
+  `.p3do` packed as `.p3d`) wins over a plain `config.bin` or `.p3d` of the same name (#35). An unreadable source file, such as a dangling symlink, is named in the
+  error (#27, #30, #32, #33, #35).
+- `build` matches the model extensions `.p3d`, `.rtm` and `.p3do` case-insensitively (`N.P3D` is binarized like
+  `n.p3d`; `xp3d` is not a model) (#34).
 
 ## Building
 
@@ -162,6 +198,8 @@ Options:
 ```
 
 See `dayzmake --help` for more.
+
+`build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both; an entry generated from source (the rapified `config.cpp`, a `.p3do`) wins over a plain `config.bin` or `.p3d` of the same name. Model extensions (`.p3d`, `.rtm`) are matched case-insensitively, and `.p3do` files are packed as `.p3d` (a colliding `m.p3d` and `m.p3do` is reported, and the `.p3do` wins). A file that cannot be opened or read fails the build with an error naming it.
 
 ## Using dayzmake-core as a library
 

@@ -408,7 +408,7 @@ impl LOD {
             if got != size as usize {
                 return Err(Error::new(
                     ErrorKind::UnexpectedEof,
-                    format!("tag \"{name}\" is truncated"),
+                    format!("tag \"{}\" is truncated", printable(&name)),
                 ));
             }
 
@@ -431,6 +431,70 @@ impl LOD {
             faces,
             taggs,
         })
+    }
+
+    /// Checks that the LOD is consistent: selection sizes and vertex indices.
+    fn validate(&self, index: usize) -> Result<(), Error> {
+        // the index tells apart LODs of the same resolution
+        let label = format!("LOD {index} ({})", self.name());
+        let expected = self
+            .points
+            .len()
+            .checked_add(self.faces.len())
+            .ok_or_else(|| invalid("LOD section count out of range"))?;
+        for (i, tagg) in self.taggs.iter().enumerate() {
+            if tagg.name.contains('\0') {
+                return Err(invalid(format!(
+                    "{label}: tagg {i} name \"{}\" contains a NUL byte",
+                    printable(&tagg.name),
+                )));
+            }
+            // The length of an inactive tagg is not enforced (real files carry empty ones).
+            if tagg.active != 0 && tagg.is_selection() && tagg.data.len() != expected {
+                return Err(invalid(format!(
+                    "{label}: tagg {i} \"{}\" is a selection with {} bytes, expected {expected} ({} points + {} faces)",
+                    printable(&tagg.name),
+                    tagg.data.len(),
+                    self.points.len(),
+                    self.faces.len(),
+                )));
+            }
+        }
+        for (i, face) in self.faces.iter().enumerate() {
+            for (field, value) in [("texture", &face.texture), ("material", &face.material)] {
+                if value.contains('\0') {
+                    return Err(invalid(format!(
+                        "{label}: face {i} {field} \"{}\" contains a NUL byte",
+                        printable(value),
+                    )));
+                }
+            }
+            if face.vertices.len() != 3 && face.vertices.len() != 4 {
+                return Err(invalid(format!(
+                    "{label}: face {i} has {} vertices (expected 3 or 4)",
+                    face.vertices.len(),
+                )));
+            }
+            for (j, vertex) in face.vertices.iter().enumerate() {
+                let point = usize::try_from(vertex.point_index).unwrap_or(usize::MAX);
+                if point >= self.points.len() {
+                    return Err(invalid(format!(
+                        "{label}: face {i} vertex {j} has point index {} but there are {} points",
+                        vertex.point_index,
+                        self.points.len(),
+                    )));
+                }
+                let normal = usize::try_from(vertex.normal_index).unwrap_or(usize::MAX);
+                if normal >= self.face_normals.len() {
+                    return Err(invalid(format!(
+                        "{label}: face {i} vertex {j} has normal index {} but there are {} normals",
+                        vertex.normal_index,
+                        self.face_normals.len(),
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
@@ -523,8 +587,13 @@ impl P3D {
     ///
     /// # Errors
     ///
-    /// Returns an error on I/O failure.
+    /// Returns an error on I/O failure, or if a LOD is inconsistent (a selection whose size is not
+    /// points + faces, a vertex index out of range, a tagg name or face texture or material
+    /// containing a NUL byte, a face that does not have 3 or 4 vertices).
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
+        for (index, lod) in self.lods.iter().enumerate() {
+            lod.validate(index)?;
+        }
         let mut writer = BufWriter::new(output);
 
         writer.write_all(b"MLOD")?;

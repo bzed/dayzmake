@@ -115,3 +115,24 @@ fn external_classes_have_no_entries() {
     assert!(base.is_external());
     assert_eq!(base.entries().count(), 0);
 }
+
+#[test]
+fn a_nul_in_a_string_entry_names_the_entry() {
+    let src = "class A { a = \"x\0y\"; b[] = {\"ok\", \"p\0q\"}; };".to_string();
+    let config = Config::from_string(src, None, &[], &mut Warnings::new()).unwrap();
+    let msg = config.to_cursor().unwrap_err().to_string();
+    assert!(msg.contains("Entry \"a\""), "{msg}");
+    let src = "class A { b[] = {\"ok\", \"p\0q\"}; };".to_string();
+    let config = Config::from_string(src, None, &[], &mut Warnings::new()).unwrap();
+    let msg = config.to_cursor().unwrap_err().to_string();
+    assert!(
+        msg.contains("Entry \"b\"") && msg.contains("element 1"),
+        "{msg}"
+    );
+    let src = "class A { b[] = {\"ok\", \"ok\", {\"p\0q\"}}; };".to_string();
+    let config = Config::from_string(src, None, &[], &mut Warnings::new()).unwrap();
+    let msg = config.to_cursor().unwrap_err().to_string();
+    let outer = msg.find("Array element 2").unwrap();
+    let inner = msg.find("Array element 0").unwrap();
+    assert!(outer < inner, "{msg}");
+}

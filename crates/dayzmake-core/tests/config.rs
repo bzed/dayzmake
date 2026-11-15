@@ -355,3 +355,28 @@ fn parse_error_shows_tabs_in_the_line_unescaped() {
     assert!(msg.contains("x\t= 1; ?"), "real tab in the line: {msg}");
     assert!(!msg.contains("\\t"), "no escaped tab: {msg}");
 }
+
+#[test]
+fn empty_value_raises_a_warning() {
+    let mut w = Warnings::default();
+    let config = Config::from_string("class A { x = ; };".to_string(), None, &[], &mut w).unwrap();
+    let warnings = w.warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    let shown = warnings[0].to_string();
+    assert!(shown.contains("empty-value"), "{shown}");
+    assert!(shown.contains("\"x\""), "{shown}");
+    assert!(shown.contains("empty string"), "{shown}");
+    assert_eq!(warnings[0].line, Some(1));
+    assert_eq!(warnings[0].name, Some("empty-value"));
+    assert!(matches!(
+        config.root().get("A"),
+        Some(ConfigEntry::ClassEntry(c)) if matches!(c.get("x"), Some(ConfigEntry::StringEntry(v)) if v.is_empty())
+    ));
+}
+
+#[test]
+fn empty_value_warning_points_at_the_entry_line() {
+    let mut w = Warnings::default();
+    Config::from_string("class A {\n  n =\n;\n};".to_string(), None, &[], &mut w).unwrap();
+    assert_eq!(w.warnings()[0].line, Some(2));
+}

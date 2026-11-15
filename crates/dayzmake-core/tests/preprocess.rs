@@ -250,3 +250,57 @@ fn endif_without_ifdef_is_an_error() {
         .is_err()
     );
 }
+
+/// An include path from the file is untrusted: the error must not carry raw control characters.
+#[test]
+fn missing_include_with_control_characters_is_escaped() {
+    let err = preprocess(
+        String::from("#include \"a\u{1b}[31mb.hpp\"\n"),
+        None,
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("a\\u{1b}[31mb.hpp"), "{msg:?}");
+    assert!(!msg.contains('\u{1b}'), "{msg:?}");
+}
+
+/// Preprocessor parse errors report 1-based line numbers, like config errors.
+#[test]
+fn preprocess_error_line_numbers_are_one_based() {
+    let err = |input: &str| {
+        preprocess(
+            input.to_string(),
+            Some(PathBuf::from("in.cpp")),
+            &Vec::new(),
+            &mut Warnings::new(),
+        )
+        .unwrap_err()
+        .to_string()
+    };
+    let first = err("#define A(\n");
+    assert!(first.contains("in.cpp:1:"), "{first}");
+    let third = err("a = 1;\nb = 2;\n#define A(\n");
+    assert!(third.contains("in.cpp:3:"), "{third}");
+}
+
+/// A parse error inside an included file names that file and its own line.
+#[test]
+fn parse_error_inside_an_included_file_names_it() {
+    let dir = tempdir().unwrap();
+    File::create(dir.path().join("inc.hpp"))
+        .unwrap()
+        .write_all(b"a = 1;\nb = \"open;\n")
+        .unwrap();
+    File::create(dir.path().join("in.cpp")).unwrap();
+    let msg = preprocess(
+        "#include \"inc.hpp\"\n".to_string(),
+        Some(dir.path().join("in.cpp")),
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(msg.contains("inc.hpp:2:"), "{msg}");
+}

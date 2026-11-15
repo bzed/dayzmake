@@ -467,22 +467,35 @@ fn unpack_conflict_message_escapes_control_characters() {
 }
 
 #[test]
-fn unpack_conflict_message_escapes_c1_control_characters_in_entry_names() {
+fn unpack_skips_entry_names_with_c1_control_characters() {
     let tmp = tempfile::tempdir().unwrap();
-    let bytes = support::raw_pbo_with_headers(&[("a\u{9b}b.txt", b"x", 0, 1)], &[]);
+    let bytes = support::raw_pbo(&[("a\u{9b}b.txt", b"x"), ("ok.txt", b"y")], &[]);
     let target = tmp.path().join("out");
-    fs::create_dir_all(&target).unwrap();
-    fs::write(target.join("a\u{9b}b.txt"), "old").unwrap();
-    let err = unpack(
+    let mut warnings = Warnings::new();
+    unpack(
         &mut Cursor::new(&bytes),
         &target,
         &UnpackOptions::default(),
-        &mut Warnings::new(),
+        &mut warnings,
     )
-    .unwrap_err()
-    .to_string();
-    assert!(err.contains("a\\u{9b}b.txt"), "{err}");
-    assert!(!err.contains('\u{9b}'), "{err}");
+    .unwrap();
+    assert!(target.join("ok.txt").exists());
+    let on_disk: Vec<_> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(on_disk.len(), 1, "{on_disk:?}");
+    let skipped: Vec<_> = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.message.contains("a\\u{9b}b.txt"))
+        .collect();
+    assert_eq!(skipped.len(), 1, "{:?}", warnings.warnings());
+    assert!(
+        !skipped[0].message.contains('\u{9b}'),
+        "{}",
+        skipped[0].message
+    );
 }
 
 #[test]
@@ -581,6 +594,47 @@ fn writing_a_read_pbo_keeps_compressed_entries() {
 }
 
 #[test]
+fn unknown_packing_method_survives_a_rewrite() {
+    const ENCR: u32 = 0x456e_6372;
+    let pbo = read(&support::raw_pbo_with_headers(
+        &[
+            ("a.txt", b"plain", 0, 5),
+            ("b.bin", b"0123456789", ENCR, 10),
+        ],
+        &[],
+    ));
+    let back = read(&rewritten(&pbo));
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.bin")
+        .unwrap();
+    assert_eq!(header.packing_method, ENCR);
+    assert_eq!(header.original_size, 10);
+    assert_eq!(header.data_size, 10);
+    assert_eq!(back.file_data("b.bin").unwrap().unwrap(), b"0123456789");
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"plain");
+}
+
+#[test]
+fn replacing_an_unknown_method_entry_stores_it_with_method_0() {
+    const ENCR: u32 = 0x456e_6372;
+    let mut pbo = read(&support::raw_pbo_with_headers(
+        &[("b.bin", b"0123456789", ENCR, 10)],
+        &[],
+    ));
+    pbo.insert_entry("b.bin", b"new".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.bin")
+        .unwrap();
+    assert_eq!(header.packing_method, 0);
+    assert_eq!(back.file_data("b.bin").unwrap().unwrap(), b"new");
+}
+
+#[test]
 fn modifying_a_read_pbo_keeps_untouched_compressed_entries() {
     let mut pbo = read(&with_compressed_entry());
     pbo.insert_entry("c.txt", b"new".to_vec()).unwrap();
@@ -649,4 +703,24 @@ fn duplicate_names_compressed_first_stored_last_survive_a_rewrite() {
     assert_eq!(pbo.file_data("a.txt").unwrap().unwrap(), b"second");
     let back = read(&rewritten(&pbo));
     assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"second");
+}
+
+#[test]
+fn a_header_extension_with_nul_is_rejected_and_nothing_written() {
+    let mut pbo = PBO::new();
+    pbo.set_header_extension("k", "a\0b");
+    let mut out = Vec::new();
+    let msg = pbo.write(&mut out).unwrap_err().to_string();
+    assert!(out.is_empty(), "{msg}");
+    assert!(msg.contains("NUL") && msg.contains("\"k\""), "{msg}");
+}
+
+#[test]
+fn a_prefix_with_nul_is_rejected_and_nothing_written() {
+    let mut pbo = PBO::new();
+    pbo.set_header_extension("prefix", "a\0b");
+    let mut out = Vec::new();
+    let msg = pbo.write(&mut out).unwrap_err().to_string();
+    assert!(out.is_empty(), "{msg}");
+    assert!(msg.contains("Header extension \"prefix\""), "{msg}");
 }

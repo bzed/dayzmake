@@ -8,6 +8,7 @@ use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::hash::{DigestBytes, Hasher, MessageDigest};
 use openssl::rsa::Rsa;
 
+use crate::error::ErrorExt;
 use crate::io::{ReadExt, WriteExt};
 use crate::pbo::PBO;
 
@@ -457,7 +458,9 @@ impl BIPrivateKey {
     ///
     /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
-        output.write_cstring(&self.name)?;
+        output
+            .write_cstring(&self.name)
+            .prepend_error("Key name:")?;
         output.write_u32::<LittleEndian>(self.length / 16 * 9 + 20)?;
         output.write_all(b"\x07\x02\x00\x00\x00\x24\x00\x00")?;
         output.write_all(b"RSA2")?;
@@ -572,7 +575,9 @@ impl BIPublicKey {
     ///
     /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
-        output.write_cstring(&self.name)?;
+        output
+            .write_cstring(&self.name)
+            .prepend_error("Key name:")?;
         output.write_u32::<LittleEndian>(self.length / 8 + 20)?;
         output.write_all(b"\x06\x02\x00\x00\x00\x24\x00\x00")?;
         output.write_all(b"RSA1")?;
@@ -665,7 +670,9 @@ impl BISign {
     ///
     /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
-        output.write_cstring(&self.name)?;
+        output
+            .write_cstring(&self.name)
+            .prepend_error("Key name:")?;
         output.write_u32::<LittleEndian>(self.length / 8 + 20)?;
         output.write_all(b"\x06\x02\x00\x00\x00\x24\x00\x00")?;
         output.write_all(b"RSA1")?;
