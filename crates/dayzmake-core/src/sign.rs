@@ -855,7 +855,7 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
 
-    use openssl::bn::{BigNum, BigNumContext};
+    use num_bigint::BigUint;
     use rand_chacha::ChaCha20Rng;
     use rand_core::SeedableRng;
 
@@ -866,8 +866,8 @@ mod tests {
         BIPrivateKey::generate_with_rng(bits, "gen".to_string(), &mut rng).unwrap()
     }
 
-    fn bn(value: &BoxedUint) -> BigNum {
-        BigNum::from_slice(&value.to_be_bytes_trimmed_vartime()).unwrap()
+    fn bn(value: &BoxedUint) -> BigUint {
+        BigUint::from_bytes_be(&value.to_be_bytes_trimmed_vartime())
     }
 
     fn file(key: &BIPrivateKey) -> Vec<u8> {
@@ -882,47 +882,25 @@ mod tests {
             let key = seeded(seed, bits);
             assert_eq!((key.length, key.exponent), (bits, 65537));
             let n = bn(key.key.n().as_ref());
-            assert_eq!(n.num_bits(), i32::try_from(bits).unwrap());
+            assert_eq!(n.bits(), u64::from(bits));
             let primes = key.key.primes();
             let (p, q) = (bn(&primes[0]), bn(&primes[1]));
-            let (d, e) = (bn(key.key.d()), BigNum::from_u32(65537).unwrap());
-            let mut ctx = BigNumContext::new().unwrap();
-            let one = BigNum::from_u32(1).unwrap();
+            let (d, e) = (bn(key.key.d()), BigUint::from(65537u32));
+            let one = BigUint::from(1u32);
 
             // p * q = n
-            let mut product = BigNum::new().unwrap();
-            product.checked_mul(&p, &q, &mut ctx).unwrap();
-            assert_eq!(product, n);
+            assert_eq!(&p * &q, n);
 
             // e * d = 1 mod phi(n); `rsa` computes d from phi (not from lambda)
-            let (mut p1, mut q1, mut phi) = (
-                BigNum::new().unwrap(),
-                BigNum::new().unwrap(),
-                BigNum::new().unwrap(),
-            );
-            p1.checked_sub(&p, &one).unwrap();
-            q1.checked_sub(&q, &one).unwrap();
-            phi.checked_mul(&p1, &q1, &mut ctx).unwrap();
-            let (mut ed, mut check) = (BigNum::new().unwrap(), BigNum::new().unwrap());
-            ed.checked_mul(&e, &d, &mut ctx).unwrap();
-            check.nnmod(&ed, &phi, &mut ctx).unwrap();
-            assert_eq!(check, one, "e * d mod phi(n)");
+            let (p1, q1) = (&p - &one, &q - &one);
+            let phi = &p1 * &q1;
+            assert_eq!((&e * &d) % &phi, one, "e * d mod phi(n)");
 
             // CRT values
-            let (mut dp, mut dq, mut qinv_q) = (
-                BigNum::new().unwrap(),
-                BigNum::new().unwrap(),
-                BigNum::new().unwrap(),
-            );
-            dp.nnmod(&d, &p1, &mut ctx).unwrap();
-            dq.nnmod(&d, &q1, &mut ctx).unwrap();
-            assert_eq!(dp, bn(key.key.dp().unwrap()));
-            assert_eq!(dq, bn(key.key.dq().unwrap()));
+            assert_eq!(&d % &p1, bn(key.key.dp().unwrap()));
+            assert_eq!(&d % &q1, bn(key.key.dq().unwrap()));
             let qinv = key.key.crt_coefficient().unwrap();
-            let mut prod = BigNum::new().unwrap();
-            prod.checked_mul(&bn(&qinv), &q, &mut ctx).unwrap();
-            qinv_q.nnmod(&prod, &p, &mut ctx).unwrap();
-            assert_eq!(qinv_q, one, "qinv * q mod p");
+            assert_eq!((bn(&qinv) * &q) % &p, one, "qinv * q mod p");
 
             // the key file round-trips byte for byte
             let bytes = file(&key);
@@ -946,18 +924,16 @@ mod tests {
             let signature = key.sign(&pbo, version).unwrap();
             public.verify(&pbo, &signature).unwrap();
 
-            // the independent side: OpenSSL's modular exponentiation recovers the padded hashes
+            // the independent side: num-bigint's modular exponentiation recovers the padded hashes
             let hashes = generate_hashes(&pbo, version, 1024).unwrap();
             let n = bn(key.key.n().as_ref());
-            let e = BigNum::from_u32(65537).unwrap();
-            let mut ctx = BigNumContext::new().unwrap();
+            let e = BigUint::from(65537u32);
             for (sig, hash) in [&signature.sig1, &signature.sig2, &signature.sig3]
                 .into_iter()
                 .zip(&hashes)
             {
-                let mut back = BigNum::new().unwrap();
-                back.mod_exp(&bn(sig), &e, &n, &mut ctx).unwrap();
-                assert_eq!(back.to_vec(), trim_zeros(hash));
+                let back = bn(sig).modpow(&e, &n);
+                assert_eq!(back.to_bytes_be(), trim_zeros(hash));
             }
         }
     }

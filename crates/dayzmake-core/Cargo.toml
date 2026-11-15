@@ -41,11 +41,11 @@ zeroize = { version = "1.9.1", optional = true }
 winreg = "0.52"
 
 [dev-dependencies]
-openssl = "0.10"
 tempfile = "3.10"
 criterion = "0.5.1"
 rand_chacha = "0.10.0"
 rand_core = "0.10.1"
+num-bigint = { version = "0.5.1", default-features = false }
 
 [[bench]]
 name = "preprocess"

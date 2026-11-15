@@ -1,4 +1,4 @@
-//! The pure-Rust SHA-1 used for the PBO trailer gives the same bytes as OpenSSL did.
+//! The pure-Rust SHA-1 used for the PBO trailer gives the standard SHA-1 bytes.
 use std::fs;
 use std::io::Cursor;
 use std::path::Path;
@@ -20,20 +20,6 @@ fn fixture_pbos() -> Vec<std::path::PathBuf> {
         out.extend(names);
     }
     out
-}
-
-#[cfg(feature = "sign")]
-/// Deterministic noise (xorshift, fixed seed).
-fn noise(len: usize) -> Vec<u8> {
-    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
-    (0..len)
-        .map(|_| {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            x.to_le_bytes()[0]
-        })
-        .collect()
 }
 
 #[test]
@@ -58,21 +44,23 @@ fn pbo_trailer_is_unchanged() {
     assert!(accepted >= 2, "the signing fixtures must be read");
 }
 
-#[cfg(feature = "sign")]
 #[test]
-fn sha1_matches_openssl_on_padding_boundaries() {
-    let mut inputs: Vec<Vec<u8>> = [0usize, 1, 55, 56, 63, 64, 65, 119, 120, 128]
-        .iter()
-        .map(|&n| noise(n))
-        .collect();
-    inputs.push(noise(1 << 20));
-    for data in inputs {
-        let theirs = openssl::hash::hash(openssl::hash::MessageDigest::sha1(), &data).unwrap();
-        assert_eq!(
-            Sha1::digest(&data).as_slice(),
-            &*theirs,
-            "len {}",
-            data.len()
-        );
-    }
+fn sha1_matches_the_fips_180_vectors() {
+    let hex = |data: &[u8]| -> String {
+        use std::fmt::Write;
+        Sha1::digest(data).iter().fold(String::new(), |mut out, b| {
+            write!(out, "{b:02x}").unwrap();
+            out
+        })
+    };
+    assert_eq!(hex(b""), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    assert_eq!(hex(b"abc"), "a9993e364706816aba3e25717850c26c9cd0d89d");
+    assert_eq!(
+        hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+        "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+    );
+    assert_eq!(
+        hex(&vec![b'a'; 1_000_000]),
+        "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+    );
 }

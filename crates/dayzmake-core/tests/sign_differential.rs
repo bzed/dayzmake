@@ -2,7 +2,7 @@
 //! implementation, so a change of the RSA backend can be measured.
 //!
 //! dayzmake signs with the `rsa` crate; the test computes the signatures independently with `OpenSSL`'s
-//! `BigNum::mod_exp` (the roles were the other way round before the switch to `rsa`). Keys are generated here
+//! `BigUint::modpow` (the roles were the other way round before the switch to `rsa`). Keys are generated here
 //! from fixed seeds; no key material is committed except the throwaway `armk` fixture key.
 #![cfg(feature = "sign")]
 #![expect(
@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign, BISignVersion};
-use openssl::bn::{BigNum, BigNumContext};
+use num_bigint::BigUint;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
@@ -165,9 +165,8 @@ fn le(value: &BoxedUint, size: usize) -> Vec<u8> {
 }
 
 /// Little-endian bytes of `value`, zero-padded to `size`.
-fn le_bn(value: &BigNum, size: usize) -> Vec<u8> {
-    let mut v = value.to_vec();
-    v.reverse();
+fn le_bn(value: &BigUint, size: usize) -> Vec<u8> {
+    let mut v = value.to_bytes_le();
     assert!(v.len() <= size);
     v.resize(size, 0);
     v
@@ -239,13 +238,9 @@ fn seeded_keys_sign_like_an_independent_implementation() {
             let padded = padded_hashes(&pbo, version, size);
             let values = signature_values(&signed);
             for (i, (value, hash)) in values.iter().zip(&padded).enumerate() {
-                let mut ctx = BigNumContext::new().unwrap();
-                let n =
-                    BigNum::from_slice(&key.n().as_ref().to_be_bytes_trimmed_vartime()).unwrap();
-                let d = BigNum::from_slice(&key.d().to_be_bytes_trimmed_vartime()).unwrap();
-                let m = BigNum::from_slice(hash).unwrap();
-                let mut expected = BigNum::new().unwrap();
-                expected.mod_exp(&m, &d, &n, &mut ctx).unwrap();
+                let n = BigUint::from_bytes_be(&key.n().as_ref().to_be_bytes_trimmed_vartime());
+                let d = BigUint::from_bytes_be(&key.d().to_be_bytes_trimmed_vartime());
+                let expected = BigUint::from_bytes_be(hash).modpow(&d, &n);
                 assert_eq!(
                     *value,
                     le_bn(&expected, size),
@@ -253,12 +248,13 @@ fn seeded_keys_sign_like_an_independent_implementation() {
                     i + 1
                 );
                 // the public operation gives the padded hash back
-                let sig =
-                    BigNum::from_slice(&value.iter().rev().copied().collect::<Vec<_>>()).unwrap();
-                let mut back = BigNum::new().unwrap();
-                back.mod_exp(&sig, &BigNum::from_u32(65537).unwrap(), &n, &mut ctx)
-                    .unwrap();
-                assert_eq!(back.to_vec(), hash[1..].to_vec(), "seed {seed} {version:?}");
+                let sig = BigUint::from_bytes_le(value);
+                let back = sig.modpow(&BigUint::from(65537u32), &n);
+                assert_eq!(
+                    back.to_bytes_be(),
+                    hash[1..].to_vec(),
+                    "seed {seed} {version:?}"
+                );
             }
             // and dayzmake verifies its own signature
             let public = bi.to_public_key().unwrap();

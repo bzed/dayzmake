@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign, BISignVersion};
-use openssl::bn::{BigNum, BigNumContext};
+use num_bigint::BigUint;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use rsa::traits::{PrivateKeyParts, PublicKeyParts};
@@ -110,18 +110,11 @@ fn small_key_signatures_verify() {
             let name_len = written.iter().position(|&b| b == 0).unwrap() + 1;
             let size = usize::try_from(bits / 8).unwrap();
             let n_at = name_len + 24;
-            let be = |from: usize| -> BigNum {
-                let mut v = written[from..from + size].to_vec();
-                v.reverse();
-                BigNum::from_slice(&v).unwrap()
-            };
+            let be = |from: usize| BigUint::from_bytes_le(&written[from..from + size]);
             let (n, s1) = (be(n_at), be(n_at + size + 4));
-            let mut ctx = BigNumContext::new().unwrap();
-            let mut back = BigNum::new().unwrap();
-            back.mod_exp(&s1, &BigNum::from_u32(65537).unwrap(), &n, &mut ctx)
-                .unwrap();
+            let back = s1.modpow(&BigUint::from(65537u32), &n);
             // hash 1 is the PBO's SHA-1: it ends the padded block
-            let v = back.to_vec();
+            let v = back.to_bytes_be();
             assert_eq!(v.len(), size - 1, "{bits} bit: 00 is trimmed");
             assert_eq!(v[0], 1);
             assert_eq!(&v[v.len() - 20..], pbo.checksum().unwrap());
@@ -178,16 +171,15 @@ fn a_bad_bisign_header_names_the_signature_file() {
     assert!(err.contains("Invalid signature file"), "{err}");
 }
 
-/// Little-endian bytes of `value` as a `BigNum`, zero-padded to `size`.
-fn le_bn(value: &BigNum, size: usize) -> Vec<u8> {
-    let mut v = value.to_vec();
-    v.reverse();
+/// Little-endian bytes of `value`, zero-padded to `size`.
+fn le_bn(value: &BigUint, size: usize) -> Vec<u8> {
+    let mut v = value.to_bytes_le();
     v.resize(size, 0);
     v
 }
 
-fn bn_le(bytes: &[u8]) -> BigNum {
-    BigNum::from_slice(&bytes.iter().rev().copied().collect::<Vec<_>>()).unwrap()
+fn bn_le(bytes: &[u8]) -> BigUint {
+    BigUint::from_bytes_le(bytes)
 }
 
 #[test]
@@ -210,21 +202,14 @@ fn signatures_of_keys_below_384_bits_still_verify() {
             n_at + 128 + 4 + 2 * 128 + 12,
         ]
     };
-    let mut ctx = BigNumContext::new().unwrap();
     let n_big = bn_le(&bytes[values[0] - 132..values[0] - 4]);
     let hashes: Vec<Vec<u8>> = values
         .iter()
         .map(|&at| {
-            let mut block = BigNum::new().unwrap();
-            block
-                .mod_exp(
-                    &bn_le(&bytes[at..at + 128]),
-                    &BigNum::from_u32(65537).unwrap(),
-                    &n_big,
-                    &mut ctx,
-                )
-                .unwrap();
-            block.to_vec()[block.to_vec().len() - 20..].to_vec()
+            let block = bn_le(&bytes[at..at + 128])
+                .modpow(&BigUint::from(65537u32), &n_big)
+                .to_bytes_be();
+            block[block.len() - 20..].to_vec()
         })
         .collect();
 
@@ -250,9 +235,7 @@ fn signatures_of_keys_below_384_bits_still_verify() {
         for hash in &hashes {
             let block = pad(hash);
             assert_eq!(block.len(), size);
-            let mut sig = BigNum::new().unwrap();
-            sig.mod_exp(&BigNum::from_slice(&block).unwrap(), &d, &n, &mut ctx)
-                .unwrap();
+            let sig = BigUint::from_bytes_be(&block).modpow(&d, &n);
             sigs.push(le_bn(&sig, size));
         }
 
