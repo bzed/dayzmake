@@ -513,10 +513,9 @@ fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
             }
         }
         // an unopenable file (gone meanwhile, no permission) is not the same file
-        match (&e.id, id.get_or_insert_with(|| FileId::of(path))) {
-            (Some(own), Some(this)) => own == this,
-            _ => false,
-        }
+        // opened lazily: only when there is an identity to compare with
+        e.id.as_ref()
+            .is_some_and(|own| id.get_or_insert_with(|| FileId::of(path)).as_ref() == Some(own))
     })
 }
 

@@ -6,8 +6,30 @@ use std::path::Path;
 ///
 /// Two ids are equal when the paths they were taken from name the same file: through a hard link, a symlink, a
 /// different case on a case-insensitive file system, or a relative and an absolute spelling.
-#[derive(Debug, PartialEq, Eq)]
+///
+/// A `FileId` holds an open handle to the file. On Windows the identity is valid only while that handle is open,
+/// so keep the `FileId` alive for as long as it is compared. Creating many ids at once holds many open files.
+///
+/// `same-file` compares a 32-bit volume serial number and a 64-bit file index, but `ReFS` (Dev Drive) file ids are
+/// 128 bits, so two different files could compare equal there. Two ids therefore also have to agree on the file
+/// length to be equal; a pair of different files of the same length on `ReFS` is the one case left undetected.
+#[derive(Debug)]
 pub struct FileId(same_file::Handle);
+
+impl FileId {
+    fn len(&self) -> Option<u64> {
+        self.0.as_file().metadata().ok().map(|m| m.len())
+    }
+}
+
+impl PartialEq for FileId {
+    fn eq(&self, other: &FileId) -> bool {
+        // the length is read now, not at creation: the same file always has one length at one moment
+        self.0 == other.0 && self.len().is_some() && self.len() == other.len()
+    }
+}
+
+impl Eq for FileId {}
 
 impl FileId {
     /// The identity of the file at `path` (symlinks are followed), or `None` when it cannot be opened (missing,
@@ -58,6 +80,20 @@ mod tests {
         assert!(FileId::of(&gone).is_none());
         assert!(!is_same_file(&a, &gone));
         assert!(!is_same_file(&gone, &gone));
+    }
+
+    #[test]
+    fn different_files_of_different_length_never_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "xyz").unwrap();
+        assert!(!is_same_file(&a, &b));
+        // the same file stays the same while it grows
+        let before = FileId::of(&a).unwrap();
+        std::fs::write(&a, "longer").unwrap();
+        assert_eq!(before, FileId::of(&a).unwrap());
     }
 
     #[cfg(unix)]
