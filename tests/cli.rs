@@ -1348,3 +1348,14 @@ fn build_warns_when_config_cpp_and_config_bin_collide() {
         "{err}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn pack_names_a_dangling_symlink_in_the_error() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    std::os::unix::fs::symlink("nowhere", modf.join("dangling")).unwrap();
+    let (code, _, err) = dayzmake(&["pack", ".", "../out.pbo"], &modf);
+    assert_ne!(code, 0);
+    assert!(err.contains("dangling"), "{err}");
+}

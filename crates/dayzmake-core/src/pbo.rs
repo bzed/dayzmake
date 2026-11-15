@@ -940,7 +940,8 @@ impl PBO {
             seen_names.insert(name.to_lowercase(), name.clone());
             let is_binarizable = BINARIZABLE_RE.is_match(&name);
 
-            let mut file = File::open(&path)?;
+            let mut file =
+                File::open(&path).prepend_error(format!("Failed to open \"{shown}\":"))?;
 
             let prebinarized_as = if binarize && is_binarizable {
                 binarize::binarized_description(&path)?
@@ -974,14 +975,16 @@ impl PBO {
 
             if name == "$PBOPREFIX$" || name == "$PREFIX$" {
                 let mut content = String::new();
-                file.read_to_string(&mut content)?;
+                file.read_to_string(&mut content)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
                 parse_prefix_file(&content, &mut header_extensions, true, warnings);
             } else if binarize
                 && ["cpp", "rvmat"]
                     .contains(&path.extension().and_then(|e| e.to_str()).unwrap_or(""))
             {
                 let mut buffer: Vec<u8> = Vec::new();
-                file.read_to_end(&mut buffer)?;
+                file.read_to_end(&mut buffer)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
 
                 if is_rapified(&buffer) {
                     warnings.warn(
@@ -1030,7 +1033,8 @@ impl PBO {
                 }
 
                 let mut buffer: Vec<u8> = Vec::new();
-                file.read_to_end(&mut buffer)?;
+                file.read_to_end(&mut buffer)
+                    .prepend_error(format!("Failed to read \"{shown}\":"))?;
 
                 name = P3DO_RE.replace_all(&name, ".p3d").to_string();
 
