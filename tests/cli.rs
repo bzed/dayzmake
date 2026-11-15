@@ -782,6 +782,39 @@ fn build_writes_to_a_windows_device_name_directly() {
     assert_eq!(left, ["m"], "no temp file or NUL file is left");
 }
 
+/// A regular file reached under a device name through a verbatim path (`\\?\C:\tmp\NUL`).
+#[cfg(windows)]
+fn verbatim_nul_file(dir: &std::path::Path) -> String {
+    let verbatim = format!(r"\\?\{}\NUL", dir.display());
+    std::fs::write(&verbatim, vec![b'x'; 100_000]).unwrap();
+    verbatim
+}
+
+#[cfg(windows)]
+#[test]
+fn build_refuses_a_regular_file_with_a_device_name_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let (code, _, err) = dayzmake(&["build", "m", &target], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(std::fs::read(&target).unwrap(), vec![b'x'; 100_000]);
+}
+
+#[cfg(windows)]
+#[test]
+fn build_force_replaces_and_truncates_a_regular_file_with_a_device_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let (code, _, err) = dayzmake(&["build", "--force", "m", &target], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let written = std::fs::read(&target).unwrap();
+    assert!(!written.is_empty());
+    assert!(written.len() < 100_000, "the old tail is gone");
+}
+
 #[cfg(unix)]
 #[test]
 fn build_force_replaces_a_read_only_target_and_keeps_it_read_only() {

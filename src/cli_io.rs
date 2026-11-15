@@ -190,6 +190,19 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
     Ok(target)
 }
 
+/// Whether an open file is a file on a disk. On Windows `Metadata::is_file` is also true for `NUL` and `CON`,
+/// so the handle's type (`GetFileType`) decides.
+#[cfg(windows)]
+fn is_disk_file(file: &File) -> bool {
+    // an unanswerable handle is treated as a device: it is written in place, as before
+    winapi_util::file::typ(file).is_ok_and(|t| t.is_disk())
+}
+
+#[cfg(not(windows))]
+fn is_disk_file(file: &File) -> bool {
+    file.metadata().is_ok_and(|m| m.is_file())
+}
+
 impl AtomicTarget {
     /// The target as given, its resolved path and the temp file next to it (a device or FIFO: just the path).
     #[must_use]
@@ -222,13 +235,27 @@ impl AtomicTarget {
         private: bool,
         failure: &str,
     ) -> io::Result<AtomicTarget> {
-        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name.
-        let windows_device = cfg!(windows)
+        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name. Opened
+        // write-only without truncation, which would corrupt a regular file that merely has such a name (a
+        // verbatim `\\?\C:\out\NUL`): the opened handle says what it is, and a disk file takes the checked path.
+        let mut device = None;
+        if cfg!(windows)
             && path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(dayzmake_core::pbo::is_device_name);
-        if !force && !windows_device && path.exists() {
+                .is_some_and(dayzmake_core::pbo::is_device_name)
+            && !path.is_dir()
+        {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .prepend_error(failure)?;
+            if !is_disk_file(&file) {
+                device = Some(file);
+            }
+            // a disk file: the handle is dropped unwritten and the normal path below applies
+        }
+        if !force && device.is_none() && path.exists() {
             return Err(error!(
                 "Target file \"{}\" already exists. Use --force to overwrite.",
                 path.display()
@@ -238,12 +265,15 @@ impl AtomicTarget {
             return Err(error!("Target \"{}\" is a directory.", path.display()));
         }
         // `metadata` follows links, so `/dev/stdout` onto a pipe is found too
-        if windows_device || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
+        if device.is_some() || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
             // no truncate: a device or FIFO has nothing to truncate
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .prepend_error(failure)?;
+            let file = match device {
+                Some(file) => file,
+                None => std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .prepend_error(failure)?,
+            };
             return Ok(AtomicTarget {
                 path: path.to_path_buf(),
                 given: path.to_path_buf(),
