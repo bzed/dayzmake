@@ -43,7 +43,7 @@ pub fn cmd_img2paa(
     input_path: &Path,
     output_path: &Path,
     paa_type: &str,
-    compress: bool,
+    _compress: bool,
     force: bool,
 ) -> Result<(), Error> {
     if !force && output_path.exists() {
@@ -56,8 +56,7 @@ pub fn cmd_img2paa(
     let img = image::open(input_path)
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to open input image file:")?;
-    // -c did nothing before the API change and still does nothing; the flag stays for scripts
-    let _ = compress;
+    // `_compress`: -c did nothing before the API change and still does nothing; the flag stays for scripts
     let paa = paa_type
         .parse::<PaaFormat>()
         .and_then(|format| Paa::from_dynamic_image(&img, format))

@@ -1,5 +1,4 @@
 //! The PAA conversion API: formats, accessors and the bytes the CLI writes.
-#![expect(clippy::expect_used, reason = "tests fail by panicking")]
 use std::io::Cursor;
 
 use dayzmake_core::image::{DynamicImage, Rgba, RgbaImage};
@@ -17,6 +16,7 @@ fn gradient() -> DynamicImage {
     }))
 }
 
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
 fn to_bytes(paa: &Paa) -> Vec<u8> {
     let mut bytes = Vec::new();
     paa.write(&mut bytes).expect("writing to a Vec works");
