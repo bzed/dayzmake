@@ -572,8 +572,8 @@ impl ConfigClass {
 
     /// Looks up an entry by name, ASCII case-insensitively like the game.
     ///
-    /// Returns the first entry with that name; configs that define a name twice are rejected by
-    /// BI's tools, use [`entries`](Self::entries) to see every entry. A `delete X;` entry comes back
+    /// Returns the first entry with that name; use [`entries`](Self::entries) to see every entry
+    /// when a config defines a name twice. A `delete X;` entry comes back
     /// as [`ConfigEntry::ClassEntry`] with [`is_deletion`](Self::is_deletion) `true`.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ConfigEntry> {

@@ -20,7 +20,7 @@ fn build_write_and_read_back_a_model() {
     face.texture = String::from("a\\b_co.paa");
     lod.faces = vec![face];
     lod.face_normals.push((0.0, 0.0, 1.0));
-    lod.taggs.push(Tagg::new(1, "body", vec![0; 3]));
+    lod.taggs.push(Tagg::new(1, "body", vec![0; 4]));
 
     let mut model = P3D::new(0x101);
     model.lods.push(lod);

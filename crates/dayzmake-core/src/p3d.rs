@@ -247,6 +247,10 @@ impl Face {
 
 impl Tagg {
     /// Creates a tagg; a selection when `name` does not start with `#`.
+    ///
+    /// For a selection, `data` holds one weight byte per point followed by one per face of the
+    /// LOD (`points + faces` bytes). For `#Property#` it is the 128 byte name/value pair (see
+    /// [`property`](Self::property)); other taggs carry their format's raw payload.
     #[must_use]
     pub fn new(active: u8, name: impl Into<String>, data: Vec<u8>) -> Tagg {
         Tagg {
