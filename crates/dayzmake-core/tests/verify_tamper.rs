@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use dayzmake_core::pbo::PBO;
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign, BISignVersion};
+use sha1::{Digest, Sha1};
 
 fn sign_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/sign")
@@ -146,4 +147,41 @@ fn a_modified_pbo_has_no_computed_checksum() {
     pbo.insert_entry("new.txt", b"x".to_vec()).unwrap();
     assert!(pbo.computed_checksum().is_none());
     assert!(pbo.checksum().is_none());
+}
+
+#[test]
+fn a_tampered_pbo_with_a_recomputed_trailer_fails_hash_1() {
+    let original = fs::read(sign_dir().join("testsig.pbo")).unwrap();
+    let sig =
+        BISign::read(&mut fs::File::open(sign_dir().join("testsig.pbo.armk.bisign")).unwrap())
+            .unwrap();
+    let name = "data\\x.rvmat";
+    let mut bytes = tampered(entry_offset(&original, name));
+    // the trailer is the SHA-1 of everything before the 0 byte that precedes it
+    let end = bytes.len() - 21;
+    let digest = Sha1::digest(&bytes[..end]);
+    let trailer = bytes.len() - 20;
+    bytes[trailer..].copy_from_slice(&digest);
+    let pbo = read_pbo(&bytes);
+    assert_eq!(pbo.checksum(), pbo.computed_checksum());
+    let error = public().verify(&pbo, &sig).unwrap_err().to_string();
+    assert!(error.starts_with("Hash 1 doesn't match\n"), "{error}");
+}
+
+#[test]
+fn a_signature_of_another_version_fails_hash_3() {
+    let pbo = read_pbo(&fs::read(sign_dir().join("testsig.pbo")).unwrap());
+    let mut bytes = fs::read(sign_dir().join("testsig.pbo.armk.bisign")).unwrap();
+    // the version follows the name, 24 header bytes, n, the length field and sig1
+    let name_len = bytes.iter().position(|&b| b == 0).unwrap() + 1;
+    let length = usize::try_from(u32::from_le_bytes(
+        bytes[name_len + 16..name_len + 20].try_into().unwrap(),
+    ))
+    .unwrap();
+    let at = name_len + 24 + length / 8 + 4 + length / 8;
+    assert_eq!(bytes[at..at + 4], 3u32.to_le_bytes());
+    bytes[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+    let sig = BISign::read(&mut Cursor::new(bytes)).unwrap();
+    let error = public().verify(&pbo, &sig).unwrap_err().to_string();
+    assert!(error.starts_with("Hash 3 doesn't match\n"), "{error}");
 }

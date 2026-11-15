@@ -497,7 +497,7 @@ fn verify_ok() {
 }
 
 #[test]
-fn verify_tampered() {
+fn verify_stale_trailer() {
     let e = setup();
     e.build();
     assert_eq!(
@@ -506,17 +506,17 @@ fn verify_tampered() {
     );
     let path = e.base().join("out.pbo");
     let mut data = fs::read(&path).unwrap();
-    // Version 3 signatures only hash some file types (.hpp yes, .txt and .bin no).
+    // The change keeps the stored SHA-1 trailer, so verify reports the checksum mismatch.
     let needle = b"#define SCALE";
     let at = data
         .windows(needle.len())
         .position(|w| w == needle)
         .unwrap();
-    data[at + 1] ^= 0x01; // flips one bit of the hashed .hpp
+    data[at + 1] ^= 0x01; // flips one bit of an entry
     fs::write(&path, data).unwrap();
     let r = e.run(&["verify", "../armk.bikey", "../out.pbo"]);
     assert_eq!(r.code, 1);
-    snap_run("verify_tampered", &r);
+    snap_run("verify_stale_trailer", &r);
 }
 
 fn img2paa(e: &Env, ty: Option<&str>, alpha: bool) -> (Run, Vec<u8>) {
