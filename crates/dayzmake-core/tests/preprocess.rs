@@ -294,7 +294,7 @@ fn parse_error_inside_an_included_file_names_it() {
         .write_all(b"a = 1;\nb = \"open;\n")
         .unwrap();
     File::create(dir.path().join("in.cpp")).unwrap();
-    let msg = dayzmake_core::config::Config::from_string(
+    let msg = preprocess(
         "#include \"inc.hpp\"\n".to_string(),
         Some(dir.path().join("in.cpp")),
         &Vec::new(),

@@ -617,6 +617,24 @@ fn unknown_packing_method_survives_a_rewrite() {
 }
 
 #[test]
+fn replacing_an_unknown_method_entry_stores_it_with_method_0() {
+    const ENCR: u32 = 0x456e_6372;
+    let mut pbo = read(&support::raw_pbo_with_headers(
+        &[("b.bin", b"0123456789", ENCR, 10)],
+        &[],
+    ));
+    pbo.insert_entry("b.bin", b"new".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.bin")
+        .unwrap();
+    assert_eq!(header.packing_method, 0);
+    assert_eq!(back.file_data("b.bin").unwrap().unwrap(), b"new");
+}
+
+#[test]
 fn modifying_a_read_pbo_keeps_untouched_compressed_entries() {
     let mut pbo = read(&with_compressed_entry());
     pbo.insert_entry("c.txt", b"new".to_vec()).unwrap();
