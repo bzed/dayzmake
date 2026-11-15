@@ -1844,6 +1844,15 @@ fn closed_stderr_pipe_still_fails() {
 
 #[cfg(unix)]
 #[test]
+fn closed_stderr_pipe_with_a_usage_error_still_exits_1() {
+    // docopt's own error exit would panic on the closed pipe
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(run_with_closed_stderr(&["--bogus"], dir.path()), Some(1));
+    assert_eq!(run_with_closed_stderr(&["build"], dir.path()), Some(1));
+}
+
+#[cfg(unix)]
+#[test]
 fn closed_stderr_pipe_does_not_fail_a_command_with_warnings() {
     // an unpacked entry with a leading separator makes unpack warn (leading-separator)
     let dir = tempfile::tempdir().unwrap();
@@ -1860,6 +1869,7 @@ fn closed_stderr_pipe_does_not_fail_a_command_with_warnings() {
 #[test]
 fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
     use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
 
     let dir = tempfile::tempdir().unwrap();
     big_pbo(dir.path());
@@ -1874,11 +1884,32 @@ fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
     isolate(&mut cmd, home.path());
-    let child = cmd.spawn().unwrap();
-    // read a little, then close the read end while the child still has data to write
-    let mut reader = std::fs::File::open(&fifo).unwrap();
+    let mut child = cmd.spawn().unwrap();
+    // open the read end without blocking, retrying until the child has opened its end; a child that
+    // failed first ends the wait instead of blocking forever
+    // O_NONBLOCK: 0o4000 on Linux, 4 on the BSDs and macOS
+    let o_nonblock = if cfg!(target_os = "linux") { 0o4000 } else { 4 };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(o_nonblock)
+        .open(&fifo)
+        .unwrap();
     let mut first = [0u8; 16];
-    reader.read_exact(&mut first).unwrap();
+    loop {
+        match reader.read(&mut first) {
+            Ok(n) if n > 0 => break,
+            // no writer yet (0) or no data yet (WouldBlock): retry unless the child is gone or time is up
+            Ok(_) | Err(_) => {
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "the child ended before writing"
+                );
+                assert!(std::time::Instant::now() < deadline, "timed out");
+                std::thread::yield_now();
+            }
+        }
+    }
     drop(reader);
     let out = child.wait_with_output().unwrap();
     assert_eq!(
