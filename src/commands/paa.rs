@@ -36,7 +36,7 @@ pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result
         .map_err(|e| error!("{}", e))
         .prepend_error("Failed to save output image:")?;
     let mut file =
-        AtomicTarget::create(output_path, true).prepend_error("Failed to save output image:")?;
+        AtomicTarget::create_with(output_path, true, false, "Failed to save output image:")?;
     file.write_all(encoded.get_ref())
         .prepend_error("Failed to save output image:")?;
     file.commit()?;
@@ -72,8 +72,12 @@ pub fn cmd_img2paa(
         .and_then(|format| Paa::from_dynamic_image(&img, format))
         .prepend_error("Failed to convert image to PAA:")?;
 
-    let mut file = AtomicTarget::create(output_path, true)
-        .prepend_error("Failed to create output PAA file:")?;
+    let mut file = AtomicTarget::create_with(
+        output_path,
+        true,
+        false,
+        "Failed to create output PAA file:",
+    )?;
     paa.write(&mut file)
         .prepend_error("Failed to write PAA file:")?;
     file.commit()?;

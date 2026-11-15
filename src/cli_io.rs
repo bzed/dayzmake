@@ -78,7 +78,9 @@ impl Output {
 /// [`commit`](AtomicTarget::commit) renames over `path`; dropped without `commit`, the temp file is removed.
 ///
 /// `std::fs::rename` replaces an existing file on every platform (on Windows it uses `MoveFileExW` with
-/// `MOVEFILE_REPLACE_EXISTING`).
+/// `MOVEFILE_REPLACE_EXISTING`). An existing target keeps its permissions; a symlink target is written
+/// through (the link stays, the file it points to is replaced). Hard links to the target are detached:
+/// they keep the old content.
 pub struct AtomicTarget {
     path: PathBuf,
     temp: PathBuf,
@@ -86,45 +88,91 @@ pub struct AtomicTarget {
     done: bool,
 }
 
+/// Where a write to `path` really lands: `path` itself, or what a symlink there points to.
+fn resolve_link(path: &Path) -> PathBuf {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if !is_link {
+        return path.to_path_buf();
+    }
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    // a dangling link: its target, relative to the link's directory
+    match std::fs::read_link(path) {
+        Ok(link) => path
+            .parent()
+            .map_or_else(|| link.clone(), |p| p.join(&link)),
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 impl AtomicTarget {
     /// Prepares the target: an existing file is an error unless `force`; nothing at `path` is touched.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file exists without `force` or the temp file cannot be created.
+    /// Returns an error if the file exists without `force`, is a directory, or the temp file cannot be created.
     pub fn create(path: &Path, force: bool) -> io::Result<AtomicTarget> {
+        Self::create_with(path, force, false, "Failed to open output file:")
+    }
+
+    /// Like [`create`](AtomicTarget::create), with the message that starts an open failure and, with
+    /// `private`, the file created owner-only (`0600` on unix, also over an existing file).
+    ///
+    /// # Errors
+    ///
+    /// As [`create`](AtomicTarget::create).
+    pub fn create_with(
+        path: &Path,
+        force: bool,
+        private: bool,
+        failure: &str,
+    ) -> io::Result<AtomicTarget> {
         if !force && path.exists() {
             return Err(error!(
                 "Target file \"{}\" already exists. Use --force to overwrite.",
                 path.display()
             ));
         }
-        let name = path
+        if path.is_dir() {
+            return Err(error!("Target \"{}\" is a directory.", path.display()));
+        }
+        let real = resolve_link(path);
+        let name = real
             .file_name()
             .ok_or_else(|| error!("Invalid output file \"{}\"", path.display()))?
-            .to_string_lossy();
+            .to_string_lossy()
+            .into_owned();
         let pid = std::process::id();
         for n in 0_u32..1000 {
-            let temp = path.with_file_name(format!(".{name}.dayzmake-tmp-{pid}-{n}"));
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-            {
+            let temp = real.with_file_name(format!(".{name}.dayzmake-tmp-{pid}-{n}"));
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            if private {
+                std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            }
+            match options.open(&temp) {
                 Ok(file) => {
-                    return Ok(AtomicTarget {
-                        path: path.to_path_buf(),
+                    let target = AtomicTarget {
+                        path: real,
                         temp,
                         file: Some(file),
                         done: false,
-                    });
+                    };
+                    if !private && let Ok(meta) = std::fs::metadata(&target.path) {
+                        // on error `target` is dropped, which removes the temp file
+                        std::fs::set_permissions(&target.temp, meta.permissions())
+                            .prepend_error(failure)?;
+                    }
+                    return Ok(target);
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => return Err(e).prepend_error("Failed to open output file:"),
+                Err(e) => return Err(e).prepend_error(failure),
             }
         }
         Err(error!(
-            "Failed to open output file: no free temp file name next to \"{}\"",
+            "{failure} no free temp file name next to \"{}\"",
             path.display()
         ))
     }
@@ -140,8 +188,10 @@ impl AtomicTarget {
                 .prepend_error("Failed to write output file:")?;
             // closed before the rename, which Windows needs
             drop(file);
-            std::fs::rename(&self.temp, &self.path)
-                .prepend_error("Failed to replace output file:")?;
+            std::fs::rename(&self.temp, &self.path).prepend_error(format!(
+                "Failed to replace output file \"{}\":",
+                self.path.display()
+            ))?;
             self.done = true;
         }
         Ok(())

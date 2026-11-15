@@ -42,8 +42,12 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             private_key_path.display()
         ));
     }
-    let mut private_file = AtomicTarget::create(&private_key_path, true)
-        .prepend_error("Failed to create private key:")?;
+    let mut private_file = AtomicTarget::create_with(
+        &private_key_path,
+        true,
+        false,
+        "Failed to create private key:",
+    )?;
     private_key
         .write(&mut private_file)
         .prepend_error("Failed to write private key:")?;
@@ -56,13 +60,21 @@ pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
             public_key_path.display()
         ));
     }
-    let mut public_file = AtomicTarget::create(&public_key_path, true)
-        .prepend_error("Failed to create public key:")?;
+    let mut public_file = AtomicTarget::create_with(
+        &public_key_path,
+        true,
+        false,
+        "Failed to create public key:",
+    )?;
     public_key
         .write(&mut public_file)
         .prepend_error("Failed to write public key:")?;
-    private_file.commit()?;
+    // the public key first: a failure of the second rename never leaves a new public key without its private key
     public_file.commit()?;
+    private_file.commit().prepend_error(format!(
+        "The public key \"{}\" was already replaced:",
+        public_key_path.display()
+    ))?;
 
     Ok(())
 }
@@ -103,7 +115,7 @@ pub fn cmd_sign(
     }
     let sig = privatekey.sign(&pbo, version)?;
     let mut file =
-        AtomicTarget::create(&sig_path, true).prepend_error("Failed to open signature file:")?;
+        AtomicTarget::create_with(&sig_path, true, false, "Failed to open signature file:")?;
     sig.write(&mut file)
         .prepend_error("Failed to write signature:")?;
     file.commit()?;

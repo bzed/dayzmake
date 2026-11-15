@@ -750,3 +750,95 @@ fn failed_rapify_keeps_the_existing_target() {
     );
     assert_eq!(names(dir.path()), ["bad.cpp", "c.bin"]);
 }
+
+#[cfg(unix)]
+#[test]
+fn build_keeps_the_permissions_of_the_existing_target() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    let out = dir.path().join("out.pbo");
+    std::fs::write(&out, b"old").unwrap();
+    std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        std::fs::metadata(&out).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_symlinked_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::fs::write(dir.path().join("real/out.pbo"), b"old").unwrap();
+    std::os::unix::fs::symlink("real/out.pbo", dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        std::fs::symlink_metadata(dir.path().join("out.pbo"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    let real = std::fs::read(dir.path().join("real/out.pbo")).unwrap();
+    assert!(real.windows(5).any(|w| w == b"hello"));
+    assert_eq!(names(&dir.path().join("real")), ["out.pbo"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn build_writes_through_a_dangling_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("real")).unwrap();
+    std::os::unix::fs::symlink("real/out.pbo", dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(dir.path().join("real/out.pbo").is_file());
+}
+
+#[test]
+fn a_directory_target_is_rejected_up_front() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/a.txt", "hello");
+    std::fs::create_dir(dir.path().join("out.pbo")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "-f", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 1);
+    assert!(err.contains("is a directory"), "{err}");
+}
+
+#[test]
+fn atomic_target_commit_failure_removes_the_temp_file() {
+    use dayzmake::cli_io::AtomicTarget;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pbo");
+    let mut t = AtomicTarget::create(&target, false).unwrap();
+    t.write_all(b"data").unwrap();
+    // a directory appears at the target before the rename
+    std::fs::create_dir(&target).unwrap();
+    let err = t.commit().unwrap_err().to_string();
+    assert!(err.contains("out.pbo"), "{err}");
+    assert_eq!(names(dir.path()), ["out.pbo"]);
+}
+
+#[test]
+fn atomic_target_skips_an_existing_temp_name() {
+    use dayzmake::cli_io::AtomicTarget;
+    use std::io::Write;
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.pbo");
+    let taken = dir
+        .path()
+        .join(format!(".out.pbo.dayzmake-tmp-{}-0", std::process::id()));
+    std::fs::write(&taken, b"foreign").unwrap();
+    let mut t = AtomicTarget::create(&target, false).unwrap();
+    t.write_all(b"data").unwrap();
+    t.commit().unwrap();
+    assert_eq!(std::fs::read(&taken).unwrap(), b"foreign");
+    assert_eq!(std::fs::read(&target).unwrap(), b"data");
+}

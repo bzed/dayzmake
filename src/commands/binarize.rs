@@ -38,8 +38,7 @@ pub fn cmd_binarize(
             .in_file(input.to_string_lossy()),
         );
         let mut source = crate::cli_io::open_input(&input, "input file")?;
-        let mut file =
-            AtomicTarget::create(output, true).prepend_error("Failed to open output:")?;
+        let mut file = AtomicTarget::create_with(output, true, false, "Failed to open output:")?;
         std::io::copy(&mut source, &mut file).prepend_error("Failed to write result to file:")?;
         file.commit()?;
         return Ok(());
@@ -62,7 +61,7 @@ pub fn cmd_binarize(
     let closed = binarizer.close(warnings);
     let data = result?;
     closed?;
-    let mut file = AtomicTarget::create(output, true).prepend_error("Failed to open output:")?;
+    let mut file = AtomicTarget::create_with(output, true, false, "Failed to open output:")?;
     file.write_all(&data)
         .prepend_error("Failed to write result to file:")?;
     file.commit()?;
