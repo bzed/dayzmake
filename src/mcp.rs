@@ -17,16 +17,12 @@ use serde_json::{Map, Value, json};
 use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
-use dayzmake_core::binarize;
-use dayzmake_core::config;
+use crate::cli_io::create_target;
+use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
-use dayzmake_core::io::create_target;
-use dayzmake_core::p3d;
-use dayzmake_core::paa;
-use dayzmake_core::pbo;
-use dayzmake_core::preprocess;
-use dayzmake_core::sign;
+use dayzmake_core::p3d::model_magic;
+use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::{WarningSink, Warnings};
 
 /// Longest request line accepted; a longer one is answered with an error and skipped.
@@ -788,7 +784,7 @@ fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         "config_preprocess" => {
             let source = path_arg(args, "source")?;
             let mut out = Vec::new();
-            preprocess::cmd_preprocess(
+            config::cmd_preprocess(
                 &mut open(&source)?,
                 &mut out,
                 Some(source),
@@ -827,9 +823,9 @@ fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         }
         "pbo_sign" => {
             let version = if bool_arg(args, "v2")? {
-                sign::BISignVersion::V2
+                BISignVersion::V2
             } else {
-                sign::BISignVersion::V3
+                BISignVersion::V3
             };
             sign::cmd_sign(
                 path_arg(args, "private_key")?,
@@ -952,7 +948,7 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
 fn pbo_inspect(path: &Path) -> Result<String, Error> {
     let mut file = open(path)?;
     let mut out = Vec::new();
-    if p3d::model_magic(&mut file)?.is_some() {
+    if model_magic(&mut file)?.is_some() {
         p3d::cmd_inspect(&mut file, &mut out)?;
     } else {
         pbo::cmd_inspect(&mut file, &mut out)?;
@@ -991,7 +987,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         let mut binarizer = crate::run::platform_binarizer(bool_arg(args, "proton_binarize")?)?;
         let mut file = create_target(&target, force)?;
         pbo::cmd_build(
-            source,
+            &source,
             &mut file,
             &headerext,
             &exclude,
@@ -1001,10 +997,10 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
         )?;
     } else {
         let mut file = create_target(&target, force)?;
-        pbo::cmd_pack(source, &mut file, &headerext, &exclude, warnings)?;
+        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, warnings)?;
     }
     if let Some(key) = key {
-        sign::cmd_sign(key, target.clone(), None, sign::BISignVersion::V3, force)?;
+        sign::cmd_sign(key, target.clone(), None, BISignVersion::V3, force)?;
         return Ok(format!("wrote and signed {}", target.display()));
     }
     Ok(format!("wrote {}", target.display()))

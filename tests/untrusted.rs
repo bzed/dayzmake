@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use dayzmake_core::config::Config;
 use dayzmake_core::p3d::{self, P3D};
 use dayzmake_core::paa::Paa;
-use dayzmake_core::pbo::PBO;
+use dayzmake_core::pbo::{PBO, PackOptions};
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
 use dayzmake_core::warning::Warnings;
 
@@ -277,7 +277,8 @@ fn paa_lzo_expansion_is_bounded_in_total() {
 /// separator in it the signature used to be written below a directory the key file picked.
 #[test]
 fn sign_rejects_a_key_name_with_a_path_separator() {
-    use dayzmake_core::sign::{BISignVersion, cmd_sign};
+    use dayzmake::commands::sign::cmd_sign;
+    use dayzmake_core::sign::BISignVersion;
 
     let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
     let key = fs::read(fixtures.join("armk.biprivatekey")).expect("fixture");
@@ -307,15 +308,8 @@ fn sign_rejects_a_key_name_with_a_path_separator() {
 /// A PBO with the given entry names and header extensions, built through the library.
 fn crafted_pbo(names: &[&str], extensions: &[(&str, &str)]) -> Vec<u8> {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut pbo = PBO::from_directory(
-        dir.path().to_path_buf(),
-        false,
-        &[],
-        &[],
-        None,
-        &mut Warnings::new(),
-    )
-    .expect("pbo");
+    let mut pbo = PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
+        .expect("pbo");
     pbo.files.clear();
     for name in names {
         pbo.files.insert(

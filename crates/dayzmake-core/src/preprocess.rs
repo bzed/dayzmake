@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::env::current_dir;
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
-use std::io::{Error, Read, Write};
+use std::io::{Error, Read};
 use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
@@ -14,7 +14,7 @@ use crate::warning::{Warning, WarningSink};
 
 peg::parser! {
     /// PEG grammar for the preprocessor: directives, macros, comments and tokens.
-    pub grammar preprocess_grammar() for str {
+    pub(crate) grammar preprocess_grammar() for str {
         rule newline() = "\r\n" / "\n"
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
@@ -126,7 +126,7 @@ peg::parser! {
 
 /// Macro definition
 #[derive(Clone, Debug)]
-pub struct Definition {
+pub(crate) struct Definition {
     name: String,
     parameters: Option<Vec<String>>,
     value: Vec<Token>,
@@ -135,7 +135,11 @@ pub struct Definition {
 
 /// Preprocessor directive
 #[derive(Debug)]
-pub enum Directive {
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the variants are named after the directives they stand for"
+)]
+pub(crate) enum Directive {
     /// `#include` directive containing the given path
     IncludeDirective(String),
     /// `#define` directive containing the definition
@@ -154,7 +158,7 @@ pub enum Directive {
 
 /// Potential macro invocation
 #[derive(Debug)]
-pub struct Macro {
+pub(crate) struct Macro {
     name: String,
     arguments: Option<Vec<String>>,
     original: String,
@@ -163,7 +167,11 @@ pub struct Macro {
 
 /// Preprocessor token
 #[derive(Debug)]
-pub enum Token {
+#[expect(
+    clippy::enum_variant_names,
+    reason = "the variants are named after the tokens they stand for"
+)]
+pub(crate) enum Token {
     /// Non-macro token
     RegularToken(String),
     /// Non-macro token that contains a number of newlines
@@ -178,7 +186,7 @@ pub enum Token {
 
 /// Preprocessor line
 #[derive(Debug)]
-pub enum Line {
+pub(crate) enum Line {
     /// Directive line
     DirectiveLine(Directive, u32),
     /// Non-directive line of tokens
@@ -192,8 +200,18 @@ pub struct PreprocessInfo {
     /// For every line in the output, `line_origins` contains a line number (starting at 1) and a
     /// `PathBuf` to the file where the line was found. The path may be `None` if the line was in the
     /// original input to `preprocess` and `origin` was not given.
-    pub line_origins: Vec<(u32, Option<PathBuf>)>,
+    pub(crate) line_origins: Vec<(u32, Option<PathBuf>)>,
     import_stack: Vec<PathBuf>,
+}
+
+impl PreprocessInfo {
+    /// For every line in the output, a line number (starting at 1) and the file where the line was
+    /// found. The path is `None` if the line was in the original input to `preprocess` and no
+    /// path was given.
+    #[must_use]
+    pub fn line_origins(&self) -> &[(u32, Option<PathBuf>)] {
+        &self.line_origins
+    }
 }
 
 thread_local! {
@@ -454,7 +472,7 @@ fn read_prefix(prefix_path: &Path) -> Result<String, Error> {
 
 /// Returns the path seperator used on the current operating system
 #[must_use]
-pub fn pathsep() -> &'static str {
+pub(crate) fn pathsep() -> &'static str {
     if cfg!(windows) { "\\" } else { "/" }
 }
 
@@ -962,36 +980,6 @@ pub fn preprocess(
         Ok(result) => Ok((result, info)),
         Err(e) => Err(e),
     }
-}
-
-/// Reads input, preprocesses it and writes to output.
-///
-/// `path` is the `path` to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
-///
-/// # Errors
-///
-/// Returns an error on preprocessing or I/O failure.
-pub fn cmd_preprocess<I: Read, O: Write>(
-    input: &mut I,
-    output: &mut O,
-    path: Option<PathBuf>,
-    includefolders: &[PathBuf],
-    warnings: &mut dyn WarningSink,
-) -> Result<(), Error> {
-    let mut buffer = String::new();
-    input
-        .read_to_string(&mut buffer)
-        .prepend_error("Failed to read input file")?;
-
-    let (result, _) = preprocess(buffer, path, includefolders, warnings)?;
-
-    output
-        .write_all(result.as_bytes())
-        .prepend_error("Failed to write output")?;
-
-    Ok(())
 }
 
 #[cfg(test)]

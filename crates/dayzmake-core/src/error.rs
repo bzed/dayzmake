@@ -37,7 +37,7 @@ impl<T> ErrorExt<T> for Result<T, Error> {
 }
 
 /// Formats parse errors from the preprocessor with file/line context.
-pub trait PreprocessParseErrorExt<T> {
+pub(crate) trait PreprocessParseErrorExt<T> {
     /// Formats a preprocess parse error, showing the offending input line.
     ///
     /// # Errors
@@ -72,7 +72,7 @@ impl<T> PreprocessParseErrorExt<T> for Result<T, ParseError<LineCol>> {
 }
 
 /// Formats parse errors from the config parser with file/line context.
-pub trait ConfigParseErrorExt<T> {
+pub(crate) trait ConfigParseErrorExt<T> {
     /// Formats a config parse error, showing the offending input line.
     ///
     /// # Errors

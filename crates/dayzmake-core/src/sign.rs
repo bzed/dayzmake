@@ -1,6 +1,5 @@
 //! Functions for creating and working with BI keys and signatures
 
-use std::fs::File;
 use std::io::{Cursor, Error, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -9,7 +8,6 @@ use openssl::bn::{BigNum, BigNumContext, BigNumRef};
 use openssl::hash::{DigestBytes, Hasher, MessageDigest};
 use openssl::rsa::Rsa;
 
-use crate::error::ErrorExt;
 use crate::io::{ReadExt, WriteExt};
 use crate::pbo::PBO;
 
@@ -106,7 +104,7 @@ fn check_key_length(length: u32) -> Result<(), Error> {
 ///
 /// Returns an error if the key name is empty or contains a path separator, `:` or a control
 /// character.
-fn default_signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error> {
+pub fn default_signature_path(pbo_path: &Path, key_name: &str) -> Result<PathBuf, Error> {
     if key_name.is_empty()
         || key_name
             .chars()
@@ -293,6 +291,12 @@ fn display_hashes(signed: &BigNum, real: &BigNum) -> Result<(String, String), Er
 }
 
 impl BIPrivateKey {
+    /// The key name, as stored in the key file.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Reads a private key from the given input.
     ///
     /// # Errors
@@ -459,6 +463,12 @@ impl BIPrivateKey {
 }
 
 impl BIPublicKey {
+    /// The key name, as stored in the key file.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     /// Reads a public key from the given input.
     ///
     /// # Errors
@@ -659,135 +669,4 @@ impl BISign {
         write_bignum(output, &self.sig3, (self.length / 8) as usize)?;
         Ok(())
     }
-}
-
-/// Generates a key pair with the given name.
-///
-/// The output paths are created by appending extensions to the keyname.
-///
-/// # Errors
-///
-/// Returns an error if the key cannot be generated or a target file exists without `force`.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "public API: callers pass owned paths"
-)]
-pub fn cmd_keygen(keyname: PathBuf, force: bool) -> Result<(), Error> {
-    let file_name = keyname
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| {
-            error!(
-                "Invalid key name \"{}\" (must be a UTF-8 file name).",
-                keyname.display()
-            )
-        })?;
-    let private_key = BIPrivateKey::generate(1024, file_name.to_string())?;
-    let public_key = private_key.to_public_key()?;
-    let name = file_name;
-
-    let mut private_key_path = keyname.clone();
-    private_key_path.set_file_name(format!("{name}.biprivatekey"));
-    if !force && private_key_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            private_key_path.display()
-        ));
-    }
-    private_key
-        .write(&mut File::create(&private_key_path).prepend_error("Failed to create private key:")?)
-        .prepend_error("Failed to write private key:")?;
-
-    let mut public_key_path = keyname.clone();
-    public_key_path.set_file_name(format!("{name}.bikey"));
-    if !force && public_key_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            public_key_path.display()
-        ));
-    }
-    public_key
-        .write(&mut File::create(&public_key_path).prepend_error("Failed to create public key:")?)
-        .prepend_error("Failed to write public key:")?;
-
-    Ok(())
-}
-
-/// Signs a PBO with the given private key.
-///
-/// If the signature path is not given it is inferred from the PBO path.
-///
-/// # Errors
-///
-/// Returns an error if the key, PBO or signature file cannot be handled.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "public API: callers pass owned paths"
-)]
-pub fn cmd_sign(
-    privatekey_path: PathBuf,
-    pbo_path: PathBuf,
-    signature_path: Option<PathBuf>,
-    version: BISignVersion,
-    force: bool,
-) -> Result<(), Error> {
-    let privatekey = BIPrivateKey::read(
-        &mut File::open(&privatekey_path).prepend_error("Failed to open private key:")?,
-    )
-    .prepend_error("Failed to read private key:")?;
-    let pbo = PBO::read(&mut File::open(&pbo_path).prepend_error("Failed to open PBO:")?)
-        .prepend_error("Failed to read PBO:")?;
-
-    let sig_path = if let Some(path) = signature_path {
-        path
-    } else {
-        default_signature_path(&pbo_path, &privatekey.name)?
-    };
-
-    if !force && sig_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            sig_path.display()
-        ));
-    }
-    let sig = privatekey.sign(&pbo, version)?;
-    sig.write(&mut File::create(&sig_path).prepend_error("Failed to open signature file:")?)
-        .prepend_error("Failed to write signature:")?;
-
-    Ok(())
-}
-
-/// Verifies a signature for a pbo against a given public key.
-///
-/// If the signature path is not given it is inferred from the PBO path.
-///
-/// # Errors
-///
-/// Returns an error if the key, PBO or signature file cannot be read, or a hash doesn't match.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "public API: callers pass owned paths"
-)]
-pub fn cmd_verify(
-    publickey_path: PathBuf,
-    pbo_path: PathBuf,
-    signature_path: Option<PathBuf>,
-) -> Result<(), Error> {
-    let publickey = BIPublicKey::read(
-        &mut File::open(&publickey_path).prepend_error("Failed to open public key:")?,
-    )
-    .prepend_error("Failed to read public key:")?;
-    let pbo = PBO::read(&mut File::open(&pbo_path).prepend_error("Failed to open PBO:")?)
-        .prepend_error("Failed to read PBO:")?;
-
-    let sig_path = if let Some(path) = signature_path {
-        path
-    } else {
-        default_signature_path(&pbo_path, &publickey.name)?
-    };
-
-    let sig = BISign::read(&mut File::open(&sig_path).prepend_error("Failed to open signature:")?)
-        .prepend_error("Failed to read signature:")?;
-
-    publickey.verify(&pbo, &sig)
 }

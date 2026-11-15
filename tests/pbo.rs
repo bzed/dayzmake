@@ -2,8 +2,9 @@
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
-use dayzmake_core::pbo::PBO;
-use dayzmake_core::sign::{BISignVersion, cmd_sign, cmd_verify};
+use dayzmake::commands::sign::{cmd_sign, cmd_verify};
+use dayzmake_core::pbo::{PBO, PackOptions};
+use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::Warnings;
 
 #[expect(clippy::unwrap_used, reason = "test helper")]
@@ -100,7 +101,7 @@ fn prefix_of(content: &str) -> PBO {
     let root = dir.path().join("mod");
     fs::create_dir_all(&root).unwrap();
     fs::write(root.join("$PBOPREFIX$"), content).unwrap();
-    PBO::from_directory(root, false, &[], &[], None, &mut Warnings::new()).unwrap()
+    PBO::from_directory(&root, &PackOptions::pack(), None, &mut Warnings::new()).unwrap()
 }
 
 #[test]
@@ -167,15 +168,8 @@ fn garbage_is_an_error_not_a_panic() {
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn crafted_pbo(entries: &[(&str, &[u8])], prefix: Option<&str>) -> Vec<u8> {
     let dir = tempfile::tempdir().unwrap();
-    let mut pbo = PBO::from_directory(
-        dir.path().to_path_buf(),
-        false,
-        &[],
-        &[],
-        None,
-        &mut Warnings::new(),
-    )
-    .unwrap();
+    let mut pbo =
+        PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new()).unwrap();
     pbo.files.clear();
     for (name, data) in entries {
         pbo.files.insert(
@@ -373,14 +367,14 @@ fn cat_missing_entry_fails() {
 fn inspect_and_cat_write_to_the_given_writer() {
     let pbo = crafted_pbo(&[("a.txt", b"hello")], Some("pre"));
     let mut out = Vec::new();
-    dayzmake_core::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
+    dayzmake::commands::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out).unwrap();
     let text = String::from_utf8(out).unwrap();
     assert!(
         text.contains("- prefix=pre") && text.contains("a.txt"),
         "{text}"
     );
     let mut out = Vec::new();
-    dayzmake_core::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
+    dayzmake::commands::pbo::cmd_cat(&mut std::io::Cursor::new(&pbo), &mut out, "a.txt").unwrap();
     assert_eq!(out, b"hello");
 }
 
@@ -517,18 +511,11 @@ fn ordered_extension_folder() -> tempfile::TempDir {
 fn header_extensions_keep_file_order_and_bytes_are_stable() {
     let dir = ordered_extension_folder();
     let build = || {
-        PBO::from_directory(
-            dir.path().to_path_buf(),
-            false,
-            &[],
-            &[],
-            None,
-            &mut Warnings::new(),
-        )
-        .unwrap()
-        .to_cursor()
-        .unwrap()
-        .into_inner()
+        PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
+            .unwrap()
+            .to_cursor()
+            .unwrap()
+            .into_inner()
     };
     let first = build();
     for _ in 0..7 {
@@ -542,18 +529,11 @@ fn header_extensions_keep_file_order_and_bytes_are_stable() {
 #[test]
 fn unpack_writes_prefix_file_in_original_order() {
     let dir = ordered_extension_folder();
-    let bytes = PBO::from_directory(
-        dir.path().to_path_buf(),
-        false,
-        &[],
-        &[],
-        None,
-        &mut Warnings::new(),
-    )
-    .unwrap()
-    .to_cursor()
-    .unwrap()
-    .into_inner();
+    let bytes = PBO::from_directory(dir.path(), &PackOptions::pack(), None, &mut Warnings::new())
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner();
     let tmp = tempfile::tempdir().unwrap();
     fs::write(tmp.path().join("in.pbo"), bytes).unwrap();
     let (code, err) = run_dayzmake(&["unpack", "in.pbo", "out"], tmp.path());

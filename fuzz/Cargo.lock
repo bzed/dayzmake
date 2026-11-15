@@ -146,6 +146,7 @@ dependencies = [
  "colored",
  "dayzmake-core",
  "docopt",
+ "image",
  "openssl",
  "regex",
  "serde",

@@ -5,17 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
+use crate::cli_io::{Input, Output, create_target};
 use crate::cli_warnings::{PrintError, PrintWarnings};
-use dayzmake_core::binarize;
-use dayzmake_core::config;
+use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
-use dayzmake_core::io::{Input, Output};
-use dayzmake_core::p3d;
-use dayzmake_core::paa;
-use dayzmake_core::pbo;
-use dayzmake_core::preprocess;
-use dayzmake_core::sign;
+use dayzmake_core::p3d::model_magic;
+use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::WarningSink;
 
 use serde::Deserialize;
@@ -200,7 +196,7 @@ fn get_input(args: &Args) -> Result<Input, Error> {
 
 fn get_output(args: &Args) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
-        Ok(Output::File(dayzmake_core::io::create_target(
+        Ok(Output::File(create_target(
             Path::new(target),
             args.flag_force,
         )?))
@@ -236,7 +232,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
     } else if args.cmd_derapify {
         config::cmd_derapify(&mut get_input(args)?, &mut get_output(args)?)
     } else if args.cmd_preprocess {
-        preprocess::cmd_preprocess(
+        config::cmd_preprocess(
             &mut get_input(args)?,
             &mut get_output(args)?,
             args.arg_source.as_ref().map(PathBuf::from),
@@ -255,7 +251,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             // dropped at the end of this block, removing the Proton sandbox before any exit
             let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
             pbo::cmd_build(
-                PathBuf::from(&args.arg_sourcefolder),
+                Path::new(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
@@ -265,7 +261,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             )?;
         } else {
             pbo::cmd_pack(
-                PathBuf::from(&args.arg_sourcefolder),
+                Path::new(&args.arg_sourcefolder),
                 &mut get_output(args)?,
                 &args.flag_headerext,
                 &args.flag_exclude,
@@ -279,7 +275,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
                 pkey,
                 target,
                 flag_signature,
-                sign::BISignVersion::V3,
+                BISignVersion::V3,
                 args.flag_force,
             )?;
         }
@@ -287,7 +283,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         Ok(())
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
-        if p3d::model_magic(&mut input)?.is_some() {
+        if model_magic(&mut input)?.is_some() {
             p3d::cmd_inspect(&mut input, &mut stdout())
         } else {
             pbo::cmd_inspect(&mut input, &mut stdout())
@@ -310,9 +306,9 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
     } else if args.cmd_sign {
         let version = if args.flag_v2 {
-            sign::BISignVersion::V2
+            BISignVersion::V2
         } else {
-            sign::BISignVersion::V3
+            BISignVersion::V3
         };
         sign::cmd_sign(
             PathBuf::from(&args.arg_privatekey),
@@ -452,14 +448,16 @@ fn required_target(args: &Args) -> Result<PathBuf, Error> {
 /// # Errors
 ///
 /// Returns an error if the backend cannot be created.
-pub fn platform_binarizer(proton: bool) -> Result<Option<binarize::Binarizer>, Error> {
+pub fn platform_binarizer(
+    proton: bool,
+) -> Result<Option<dayzmake_core::binarize::Binarizer>, Error> {
     if cfg!(windows) {
-        Ok(Some(binarize::Binarizer::new(
-            binarize::BinarizeBackend::Native,
+        Ok(Some(dayzmake_core::binarize::Binarizer::new(
+            dayzmake_core::binarize::BinarizeBackend::Native,
         )?))
     } else if proton {
-        Ok(Some(binarize::Binarizer::new(
-            binarize::BinarizeBackend::Proton,
+        Ok(Some(dayzmake_core::binarize::Binarizer::new(
+            dayzmake_core::binarize::BinarizeBackend::Proton,
         )?))
     } else {
         Ok(None)

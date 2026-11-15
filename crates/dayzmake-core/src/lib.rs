@@ -8,9 +8,9 @@ pub mod config;
 /// Error types and the `error!` macro.
 pub mod error;
 /// Evaluator for config `__EVAL` / `__EXEC` expressions.
-pub mod eval;
+pub(crate) mod eval;
 /// I/O helpers for the binary formats.
-pub mod io;
+pub(crate) mod io;
 /// P3D model reading and inspection.
 pub mod p3d;
 /// PAA texture conversion.

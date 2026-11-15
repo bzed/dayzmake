@@ -1723,7 +1723,7 @@ mod from_pbo {
     use dayzmake::api::model::{ApiIndex, INDEX_FORMAT};
     use dayzmake::api::source::{ModSpec, parse_mods, resolve_mod};
     use dayzmake::api::steam::Branch;
-    use dayzmake_core::pbo::PBO;
+    use dayzmake_core::pbo::{PBO, PackOptions};
     use dayzmake_core::warning::Warnings;
 
     use super::fixture;
@@ -1754,10 +1754,8 @@ mod from_pbo {
             fs::write(work.path().join("$PBOPREFIX$"), p).expect("prefix");
         }
         let pbo = PBO::from_directory(
-            work.path().to_path_buf(),
-            false,
-            &[],
-            &[],
+            work.path(),
+            &PackOptions::pack(),
             None,
             &mut Warnings::new(),
         )

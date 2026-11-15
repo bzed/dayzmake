@@ -1,60 +1,8 @@
-use crate::error::ErrorExt;
-use std::fs::File;
 use std::io;
-use std::io::{Cursor, Read, Seek, Stdout, Write};
-
-/// Input source: a file, or an in-memory buffer (stdin).
-pub enum Input {
-    /// A file on disk.
-    File(File),
-    /// An in-memory buffer.
-    Cursor(Cursor<Box<[u8]>>),
-}
-
-/// Output sink: a file, or stdout.
-pub enum Output {
-    /// A file on disk.
-    File(File),
-    /// Standard output.
-    Standard(Stdout),
-}
-
-impl Read for Input {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match *self {
-            Input::File(ref mut f) => f.read(buf),
-            Input::Cursor(ref mut c) => c.read(buf),
-        }
-    }
-}
-
-impl Seek for Input {
-    fn seek(&mut self, pos: io::SeekFrom) -> io::Result<u64> {
-        match *self {
-            Input::File(ref mut f) => f.seek(pos),
-            Input::Cursor(ref mut c) => c.seek(pos),
-        }
-    }
-}
-
-impl Write for Output {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match *self {
-            Output::File(ref mut f) => f.write(buf),
-            Output::Standard(ref mut s) => s.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match *self {
-            Output::File(ref mut f) => f.flush(),
-            Output::Standard(ref mut s) => s.flush(),
-        }
-    }
-}
+use std::io::{Read, Write};
 
 /// Extensions on `Read` for the binary formats dayzmake reads.
-pub trait ReadExt: Read {
+pub(crate) trait ReadExt: Read {
     /// Reads a NUL-terminated string, decoded as UTF-8.
     ///
     /// # Errors
@@ -117,7 +65,7 @@ impl<T: Read> ReadExt for T {
 }
 
 /// Extensions on `Write` for the binary formats dayzmake writes.
-pub trait WriteExt: Write {
+pub(crate) trait WriteExt: Write {
     /// Writes a NUL-terminated string.
     ///
     /// # Errors
@@ -164,7 +112,7 @@ impl<T: Write> WriteExt for T {
 
 /// Number of bytes `write_compressed_int` writes for `x`.
 #[must_use]
-pub fn compressed_int_len(x: u32) -> usize {
+pub(crate) fn compressed_int_len(x: u32) -> usize {
     let mut temp = x;
     let mut len = 0;
 
@@ -175,19 +123,4 @@ pub fn compressed_int_len(x: u32) -> usize {
     }
 
     len + 1
-}
-
-/// Creates the target file of a command; an existing file is an error unless `force`.
-///
-/// # Errors
-///
-/// Returns an error if the file exists without `force` or cannot be created.
-pub fn create_target(path: &std::path::Path, force: bool) -> io::Result<File> {
-    if !force && path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            path.display()
-        ));
-    }
-    File::create(path).prepend_error("Failed to open output file:")
 }

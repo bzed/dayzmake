@@ -33,6 +33,20 @@ struct PBOHeader {
     data_size: u32,
 }
 
+/// What a PBO's header says about one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct EntryHeader {
+    /// The entry name.
+    pub name: String,
+    /// The packing method (0 is stored, `0x43707273` is compressed).
+    pub packing_method: u32,
+    /// The size once decompressed.
+    pub original_size: u32,
+    /// The size as stored in the PBO.
+    pub data_size: u32,
+}
+
 /// Longest entry name or header extension string `PBO::read_headers` accepts.
 const MAX_HEADER_STRING: usize = 4096;
 /// Most entries `PBO::read_headers` accepts.
@@ -133,10 +147,10 @@ fn parse_prefix_file(
 /// # Examples
 ///
 /// ```
-/// # use std::path::PathBuf;
-/// # use dayzmake_core::pbo::PBO;
+/// # use std::path::Path;
+/// # use dayzmake_core::pbo::{PBO, PackOptions};
 /// # use dayzmake_core::warning::Warnings;
-/// let pbo = PBO::from_directory(PathBuf::from("src"), false, &Vec::new(), &Vec::new(), None, &mut Warnings::new()).expect("Failed to create PBO");
+/// let pbo = PBO::from_directory(Path::new("src"), &PackOptions::pack(), None, &mut Warnings::new()).expect("Failed to create PBO");
 ///
 /// assert!(pbo.files.iter().any(|(name, _data)| name == "lib.rs"));
 ///
@@ -364,7 +378,53 @@ fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
     true
 }
 
+/// What [`PBO::from_directory`] does with a folder.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct PackOptions {
+    /// Binarize models and rapify configs (`build`) instead of packing the files as they are.
+    pub build: bool,
+    /// Glob patterns of files left out of the PBO.
+    pub exclude: Vec<String>,
+    /// Folders searched for absolute includes in configs and model dependencies.
+    pub include_folders: Vec<PathBuf>,
+    /// Header extensions (`key`, `value`) set after `$PBOPREFIX$` was read; they win on a clash.
+    pub header_extensions: Vec<(String, String)>,
+}
+
+impl PackOptions {
+    /// Options for packing a folder as it is.
+    #[must_use]
+    pub fn pack() -> PackOptions {
+        PackOptions::default()
+    }
+
+    /// Options for building a folder: binarize and rapify where needed.
+    #[must_use]
+    pub fn build() -> PackOptions {
+        PackOptions {
+            build: true,
+            ..PackOptions::default()
+        }
+    }
+}
+
 impl PBO {
+    /// The entry headers of a PBO that was read, in header order (empty for one made by
+    /// [`PBO::from_directory`]).
+    #[must_use]
+    pub fn entry_headers(&self) -> Vec<EntryHeader> {
+        self.headers
+            .iter()
+            .map(|h| EntryHeader {
+                name: h.filename.clone(),
+                packing_method: h.packing_method,
+                original_size: h.original_size,
+                data_size: h.data_size,
+            })
+            .collect()
+    }
+
     /// Returns the bytes an entry name is stored as in the PBO header.
     #[must_use]
     pub fn name_bytes(&self, name: &str) -> Vec<u8> {
@@ -507,11 +567,13 @@ impl PBO {
         })
     }
 
-    /// Constructs a PBO from a directory with optional binarization.
+    /// Constructs a PBO from a directory, binarizing and rapifying where `options.build` is set.
     ///
-    /// `exclude_patterns` contains glob patterns to exclude from the PBO, `includefolders` contain
-    /// paths to search for absolute includes and should generally include the current working
-    /// directory.
+    /// `options.exclude` contains glob patterns to exclude from the PBO, `options.include_folders`
+    /// the paths to search for absolute includes (generally including the current working
+    /// directory). `options.header_extensions` are applied after `$PBOPREFIX$`; for the same key
+    /// the option wins. A `$NOBIN$` file in the directory turns `build` off. Models are only
+    /// binarized when a `binarizer` is given; without one they are copied as-is with a warning.
     ///
     /// # Errors
     ///
@@ -520,19 +582,16 @@ impl PBO {
         clippy::too_many_lines,
         reason = "one branch per file kind keeps the packing loop readable"
     )]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "public API: callers pass an owned directory path"
-    )]
     pub fn from_directory(
-        directory: PathBuf,
-        mut binarize: bool,
-        exclude_patterns: &[String],
-        includefolders: &[PathBuf],
+        directory: &Path,
+        options: &PackOptions,
         mut binarizer: Option<&mut Binarizer>,
         warnings: &mut dyn WarningSink,
     ) -> Result<PBO, Error> {
-        let file_list = list_files(&directory)?;
+        let mut binarize = options.build;
+        let exclude_patterns = &options.exclude;
+        let includefolders = &options.include_folders;
+        let file_list = list_files(directory)?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 
@@ -557,13 +616,13 @@ impl PBO {
 
         let addon_files: HashSet<String> = file_list
             .iter()
-            .filter_map(|p| p.strip_prefix(&directory).ok())
+            .filter_map(|p| p.strip_prefix(directory).ok())
             .filter_map(|p| p.to_str())
             .map(|p| p.replace('/', "\\").to_lowercase())
             .collect();
 
         for path in file_list {
-            let Ok(mut relative) = path.strip_prefix(&directory).map(Path::to_path_buf) else {
+            let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
             };
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
@@ -644,7 +703,7 @@ impl PBO {
                 binarize && is_binarizable && !prebinarized,
             ) {
                 let data = b
-                    .binarize(&path, &directory, &prefix, warnings)
+                    .binarize(&path, directory, &prefix, warnings)
                     .prepend_error(format!("Failed to binarize {}:", relative.display()))?;
 
                 files.insert(name, Cursor::new(data.into_boxed_slice()));
@@ -674,6 +733,10 @@ impl PBO {
                 .map(|n| n.to_string_lossy().into_owned())
                 .ok_or_else(|| error!("Invalid addon directory \"{}\".", directory.display()))?;
             header_extensions.insert("prefix".to_string(), prefix);
+        }
+
+        for (key, value) in &options.header_extensions {
+            set_extension(&mut header_extensions, key, value.clone());
         }
 
         Ok(PBO {
@@ -801,7 +864,7 @@ impl PBO {
     }
 }
 
-fn list_files(directory: &PathBuf) -> Result<Vec<PathBuf>, Error> {
+fn list_files(directory: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut files: Vec<PathBuf> = Vec::new();
 
     // read_dir order depends on the file system; sort by file name so warnings come in a fixed order
@@ -821,67 +884,6 @@ fn list_files(directory: &PathBuf) -> Result<Vec<PathBuf>, Error> {
     }
 
     Ok(files)
-}
-
-/// Writes what is in a PBO to the output: header extensions and the entry list.
-///
-/// # Errors
-///
-/// Returns an error if the PBO cannot be read or the output cannot be written.
-pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
-    let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
-
-    if !pbo.header_extensions.is_empty() {
-        writeln!(output, "Header extensions:")?;
-        for (key, value) in &pbo.header_extensions {
-            writeln!(output, "- {}={}", printable(key), printable(value))?;
-        }
-        writeln!(output)?;
-    }
-
-    writeln!(output, "# Files: {}\n", pbo.files.len())?;
-
-    writeln!(
-        output,
-        "Path                                                  Method  Original    Packed"
-    )?;
-    writeln!(
-        output,
-        "                                                                  Size      Size"
-    )?;
-    writeln!(
-        output,
-        "================================================================================"
-    )?;
-    for header in pbo.headers {
-        writeln!(
-            output,
-            "{:50} {:9} {:9} {:9}",
-            printable(&header.filename),
-            header.packing_method,
-            header.original_size,
-            header.data_size
-        )?;
-    }
-
-    Ok(())
-}
-
-/// Writes the named entry of the PBO to the output.
-///
-/// # Errors
-///
-/// Returns an error if the PBO cannot be read, the entry does not exist, or the output cannot be
-/// written.
-pub fn cmd_cat<I: Read, O: Write>(input: &mut I, output: &mut O, name: &str) -> Result<(), Error> {
-    let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
-
-    match pbo.file_data(name)? {
-        Some(data) => output
-            .write_all(&data)
-            .prepend_error("Failed to write output:"),
-        None => Err(error!("File \"{}\" not found in PBO.", printable(name))),
-    }
 }
 
 /// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
@@ -1014,24 +1016,35 @@ fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Er
     }
 }
 
-/// Unpacks a PBO into the output folder.
+/// How [`unpack`] treats existing files and the PBO prefix.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct UnpackOptions {
+    /// Overwrite existing files instead of failing.
+    pub force: bool,
+    /// Extract into `<target>/<prefix>/` instead of `<target>/`.
+    pub use_prefix: bool,
+}
+
+/// Unpacks a PBO into the target folder.
 ///
 /// Entry names and the prefix come from the (untrusted) PBO: entries whose name does not map to a
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
-/// with an entry already written in this run are skipped with a warning. With `use_prefix` the
-/// files are extracted into `<output>/<prefix>/`; an empty prefix means no prefix.
+/// with an entry already written in this run are skipped with a warning. With `options.use_prefix`
+/// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix.
 ///
 /// # Errors
 ///
 /// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
-/// file exists without `force`.
-pub fn cmd_unpack<I: Read>(
+/// file exists without `options.force`.
+pub fn unpack<I: Read>(
     input: &mut I,
-    output: &Path,
-    force: bool,
-    use_prefix: bool,
+    target: &Path,
+    options: &UnpackOptions,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
+    let UnpackOptions { force, use_prefix } = *options;
+    let output = target;
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     let base = unpack_base(&pbo, output, use_prefix)?;
@@ -1113,64 +1126,6 @@ pub fn cmd_unpack<I: Read>(
             ));
         }
     }
-
-    Ok(())
-}
-
-/// Packs a folder into a PBO without any binarization or rapification.
-///
-/// # Errors
-///
-/// Returns an error if the folder cannot be read or the PBO cannot be written.
-pub fn cmd_pack<O: Write>(
-    input: PathBuf,
-    output: &mut O,
-    headerext: &[String],
-    excludes: &[String],
-    warnings: &mut dyn WarningSink,
-) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, false, excludes, &Vec::new(), None, warnings)?;
-
-    for h in headerext {
-        let Some((key, value)) = h.split_once('=') else {
-            return Err(error!(
-                "Invalid header extension \"{h}\" (expected key=value)."
-            ));
-        };
-        set_extension(&mut pbo.header_extensions, key, value.to_string());
-    }
-
-    pbo.write(output).prepend_error("Failed to write PBO:")?;
-
-    Ok(())
-}
-
-/// Builds a PBO from a folder, binarizing and rapifying where needed.
-///
-/// # Errors
-///
-/// Returns an error if a file cannot be read, binarized or written.
-pub fn cmd_build<O: Write>(
-    input: PathBuf,
-    output: &mut O,
-    headerext: &[String],
-    excludes: &[String],
-    includefolders: &[PathBuf],
-    binarizer: Option<&mut Binarizer>,
-    warnings: &mut dyn WarningSink,
-) -> Result<(), Error> {
-    let mut pbo = PBO::from_directory(input, true, excludes, includefolders, binarizer, warnings)?;
-
-    for h in headerext {
-        let Some((key, value)) = h.split_once('=') else {
-            return Err(error!(
-                "Invalid header extension \"{h}\" (expected key=value)."
-            ));
-        };
-        set_extension(&mut pbo.header_extensions, key, value.to_string());
-    }
-
-    pbo.write(output).prepend_error("Failed to write PBO:")?;
 
     Ok(())
 }

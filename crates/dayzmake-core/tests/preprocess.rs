@@ -119,8 +119,8 @@ bar_foo\n",
     .unwrap();
 
     assert_eq!("bar_foo\n\nfoo_bar", output.trim());
-    assert_eq!((2, Some(includepath)), info.line_origins[0]);
-    assert_eq!((2, Some(PathBuf::from("myfile"))), info.line_origins[2]);
+    assert_eq!((2, Some(includepath)), info.line_origins()[0]);
+    assert_eq!((2, Some(PathBuf::from("myfile"))), info.line_origins()[2]);
 }
 
 #[test]
@@ -148,8 +148,8 @@ class test\\
     );
 
     let (_, info) = preprocess(input, None, &Vec::new(), &mut Warnings::new()).unwrap();
-    assert_eq!(5, info.line_origins.len());
-    assert_eq!(8, info.line_origins[2].0);
+    assert_eq!(5, info.line_origins().len());
+    assert_eq!(8, info.line_origins()[2].0);
 }
 
 #[test]

@@ -15,11 +15,8 @@
 //! u16 x3 zero terminator
 //! ```
 
-use std::fs::File;
 use std::io::{Error, Read, Seek, SeekFrom, Write};
-use std::path::Path;
 
-use crate::error::ErrorExt;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use image::{DynamicImage, ImageBuffer, Rgba};
 use linked_hash_map::LinkedHashMap;
@@ -591,62 +588,4 @@ impl Paa {
 
         Ok(())
     }
-}
-
-/// Converts a PAA file to a standard image format.
-///
-/// # Errors
-///
-/// Returns an error if the input cannot be read or converted, or the target exists.
-pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result<(), Error> {
-    if !force && output_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            output_path.display()
-        ));
-    }
-
-    let mut file = File::open(input_path).prepend_error("Failed to open input PAA file:")?;
-    let paa = Paa::read(&mut file).prepend_error("Failed to read PAA file:")?;
-    let img = paa
-        .to_dynamic_image()
-        .prepend_error("Failed to convert PAA to image:")?;
-
-    img.save(output_path)
-        .map_err(|e| error!("{}", e))
-        .prepend_error("Failed to save output image:")?;
-
-    Ok(())
-}
-
-/// Converts a standard image file to PAA.
-///
-/// # Errors
-///
-/// Returns an error if the input cannot be read or converted, or the target exists.
-pub fn cmd_img2paa(
-    input_path: &Path,
-    output_path: &Path,
-    paa_type: &str,
-    compress: bool,
-    force: bool,
-) -> Result<(), Error> {
-    if !force && output_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            output_path.display()
-        ));
-    }
-
-    let img = image::open(input_path)
-        .map_err(|e| error!("{}", e))
-        .prepend_error("Failed to open input image file:")?;
-    let paa = Paa::from_dynamic_image(&img, paa_type, compress)
-        .prepend_error("Failed to convert image to PAA:")?;
-
-    let mut file = File::create(output_path).prepend_error("Failed to create output PAA file:")?;
-    paa.write(&mut file)
-        .prepend_error("Failed to write PAA file:")?;
-
-    Ok(())
 }
