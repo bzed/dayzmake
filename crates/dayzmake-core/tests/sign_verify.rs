@@ -177,3 +177,116 @@ fn a_bad_bisign_header_names_the_signature_file() {
         .to_string();
     assert!(err.contains("Invalid signature file"), "{err}");
 }
+
+/// Little-endian bytes of `value` as a `BigNum`, zero-padded to `size`.
+fn le_bn(value: &BigNum, size: usize) -> Vec<u8> {
+    let mut v = value.to_vec();
+    v.reverse();
+    v.resize(size, 0);
+    v
+}
+
+fn bn_le(bytes: &[u8]) -> BigNum {
+    BigNum::from_slice(&bytes.iter().rev().copied().collect::<Vec<_>>()).unwrap()
+}
+
+#[test]
+fn signatures_of_keys_below_384_bits_still_verify() {
+    let pbo = PBO::read(&mut Cursor::new(
+        fs::read(sign_dir().join("testsig.pbo")).unwrap(),
+    ))
+    .unwrap();
+    // The three SHA-1 hashes of the PBO: the last 20 bytes of the padded blocks that a 1024-bit key signs.
+    let big = BIPrivateKey::read(&mut Cursor::new(key_bytes(15, 1024))).unwrap();
+    let signed = big.sign(&pbo, BISignVersion::V2).unwrap();
+    let mut bytes = Vec::new();
+    signed.write(&mut bytes).unwrap();
+    let values = {
+        let name_len = bytes.iter().position(|&b| b == 0).unwrap() + 1;
+        let n_at = name_len + 24;
+        [
+            n_at + 128 + 4,
+            n_at + 128 + 4 + 128 + 8,
+            n_at + 128 + 4 + 2 * 128 + 12,
+        ]
+    };
+    let mut ctx = BigNumContext::new().unwrap();
+    let n_big = bn_le(&bytes[values[0] - 132..values[0] - 4]);
+    let hashes: Vec<Vec<u8>> = values
+        .iter()
+        .map(|&at| {
+            let mut block = BigNum::new().unwrap();
+            block
+                .mod_exp(
+                    &bn_le(&bytes[at..at + 128]),
+                    &BigNum::from_u32(65537).unwrap(),
+                    &n_big,
+                    &mut ctx,
+                )
+                .unwrap();
+            block.to_vec()[block.to_vec().len() - 20..].to_vec()
+        })
+        .collect();
+
+    for (seed, bits) in [(31u64, 288u32), (32, 304), (33, 368)] {
+        let key = key_bytes(seed, bits);
+        let size = usize::try_from(bits / 8).unwrap();
+        let name_len = key.iter().position(|&b| b == 0).unwrap() + 1;
+        let n_at = name_len + 24;
+        let n_le = &key[n_at..n_at + size];
+        let d_le = &key[n_at + size + 5 * size / 2..n_at + 2 * size + 5 * size / 2];
+        let (n, d) = (bn_le(n_le), bn_le(d_le));
+
+        // BI's padding as `pad_hash` writes it: 00 01, then ff up to `size - 36` bytes (the resize cuts the
+        // block when that is below 2), then 00 30 21 ... and the hash. 288 bits: 00 30 21 ...; 304: 00 01 00 30 ...
+        let pad = |hash: &[u8]| {
+            let mut v = vec![0u8, 1];
+            v.resize(size - 36, 255);
+            v.extend(b"\x00\x30\x21\x30\x09\x06\x05\x2b\x0e\x03\x02\x1a\x05\x00\x04\x14");
+            v.extend(hash);
+            v
+        };
+        let mut sigs = Vec::new();
+        for hash in &hashes {
+            let block = pad(hash);
+            assert_eq!(block.len(), size);
+            let mut sig = BigNum::new().unwrap();
+            sig.mod_exp(&BigNum::from_slice(&block).unwrap(), &d, &n, &mut ctx)
+                .unwrap();
+            sigs.push(le_bn(&sig, size));
+        }
+
+        let mut bisign = b"small\0".to_vec();
+        bisign.extend((bits / 8 + 20).to_le_bytes());
+        bisign.extend(b"\x06\x02\x00\x00\x00\x24\x00\x00RSA1");
+        bisign.extend(bits.to_le_bytes());
+        bisign.extend(65537u32.to_le_bytes());
+        bisign.extend(n_le);
+        let size32 = u32::try_from(size).unwrap().to_le_bytes();
+        bisign.extend(size32);
+        bisign.extend(&sigs[0]);
+        bisign.extend(2u32.to_le_bytes());
+        bisign.extend(size32);
+        bisign.extend(&sigs[1]);
+        bisign.extend(size32);
+        bisign.extend(&sigs[2]);
+
+        let public = BIPrivateKey::read(&mut Cursor::new(&key))
+            .unwrap()
+            .to_public_key()
+            .unwrap();
+        let read = BISign::read(&mut Cursor::new(&bisign)).unwrap();
+        public
+            .verify(&pbo, &read)
+            .unwrap_or_else(|e| panic!("{bits} bits: {e}"));
+
+        let mut bad = bisign.clone();
+        let sig1_at = name_len + 24 + size + 4;
+        bad[sig1_at] ^= 1;
+        let bad = BISign::read(&mut Cursor::new(&bad)).unwrap();
+        assert!(
+            public.verify(&pbo, &bad).is_err(),
+            "{bits} bits: flipped bit"
+        );
+    }
+}
