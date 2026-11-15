@@ -1211,7 +1211,8 @@ fn dayzmake_with_deadline(args: &[&str], cwd: &Path) -> (i32, String) {
             let _ = child.wait();
             panic!("build hung: killed {args:?} after 20 s");
         }
-        std::thread::sleep(Duration::from_millis(10)); // polling interval of the deadline loop
+        // a watchdog poll for the deadline, not a wait for state: the child's exit ends the loop
+        std::thread::sleep(Duration::from_millis(10));
     };
     (
         status.code().unwrap_or(-1),
@@ -1365,6 +1366,35 @@ fn build_warns_when_config_cpp_and_config_bin_collide() {
         err.contains("config.cpp") && err.contains("config.bin"),
         "{err}"
     );
+}
+
+#[test]
+fn build_prefers_the_compiled_config_cpp_over_a_stale_config_bin() {
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class CfgPatches{class A{units[]={};};};"),
+        ("mod/config.bin", "stale"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(err.contains("Skipping \"config.bin\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "config.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(!out.contains("stale"), "{out}");
+    assert!(out.contains("CfgPatches"), "{out}");
+}
+
+#[test]
+fn build_prefers_the_p3do_over_a_plain_p3d() {
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/m.p3d"), b"plain-p3d").unwrap();
+    std::fs::write(dir.path().join("m/m.p3do"), b"from-p3do").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("Skipping \"m.p3d\""), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "from-p3do");
 }
 
 #[cfg(unix)]

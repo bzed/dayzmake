@@ -12,7 +12,6 @@ use crate::error;
 use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
-
 use crate::preprocess::preprocess;
 use crate::warning::{Warning, WarningSink};
 

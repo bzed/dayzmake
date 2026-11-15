@@ -891,15 +891,18 @@ impl PBO {
             .collect();
 
         let addon_roots = addon_roots(directory);
-        let mut seen_names: HashMap<String, String> = HashMap::new();
+        // lower-cased entry name -> (entry name, shown source path, generated from source)
+        let mut seen_names: HashMap<String, (String, String, bool)> = HashMap::new();
 
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
             };
             let shown = printable(&relative.to_string_lossy());
+            let mut generated = false;
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
                 relative = relative.with_file_name("config.bin");
+                generated = true;
             }
 
             let mut name: String = relative.to_string_lossy().replace('/', "\\");
@@ -915,7 +918,7 @@ impl PBO {
                         Some("unsupported-file"),
                         "Skipping a file that is not a regular file (FIFO, device or socket).",
                     )
-                    .in_file(shown),
+                    .in_file(relative.to_string_lossy()),
                 );
                 continue;
             }
@@ -930,19 +933,34 @@ impl PBO {
             let is_binarizable = BINARIZABLE_RE.is_match(&name);
             if P3DO_RE.is_match(&name) {
                 name = P3DO_RE.replace(&name, ".p3d").into_owned();
+                generated = true;
             }
-            // entry names compare case-insensitively; the first file in walk order wins
-            if let Some(first) = seen_names.get(&name.to_lowercase()) {
-                warnings.warn(Warning::new(
-                    Some("duplicate-entry"),
-                    format!(
-                        "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
-                        printable(first)
-                    ),
-                ));
-                continue;
+            // entry names compare case-insensitively; the first file in walk order wins, except
+            // that an entry generated from source (the rapified config.cpp, a .p3do packed as
+            // .p3d) replaces a plain file of the same name
+            let key = name.to_lowercase();
+            if let Some((first, first_shown, first_generated)) = seen_names.get(&key) {
+                if generated && !first_generated {
+                    warnings.warn(Warning::new(
+                        Some("duplicate-entry"),
+                        format!(
+                            "Skipping \"{first_shown}\": the entry \"{}\" is generated from \"{shown}\".",
+                            printable(first)
+                        ),
+                    ));
+                    files.remove(first);
+                } else {
+                    warnings.warn(Warning::new(
+                        Some("duplicate-entry"),
+                        format!(
+                            "Skipping \"{shown}\": an entry named \"{}\" was already packed.",
+                            printable(first)
+                        ),
+                    ));
+                    continue;
+                }
             }
-            seen_names.insert(name.to_lowercase(), name.clone());
+            seen_names.insert(key, (name.clone(), shown.clone(), generated));
 
             let mut file =
                 File::open(&path).prepend_error(format!("Failed to open \"{shown}\":"))?;
