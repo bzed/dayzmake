@@ -20,9 +20,9 @@ if [ "$#" -ne 3 ]; then
     echo "usage: $0 <old-dayzmake> <new-dayzmake> <dayz-dir>" >&2
     exit 2
 fi
-OLD_BIN=$(realpath -- "$1")
-NEW_BIN=$(realpath -- "$2")
-DAYZ=$(realpath -- "$3")
+OLD_BIN=$(realpath -- "$1") || { echo "no such file: $1" >&2; exit 2; }
+NEW_BIN=$(realpath -- "$2") || { echo "no such file: $2" >&2; exit 2; }
+DAYZ=$(realpath -- "$3") || { echo "no such folder: $3" >&2; exit 2; }
 HERE=$(dirname -- "$(realpath -- "$0")")
 REPO=$(dirname -- "$HERE")
 GOLDEN="$REPO/tests/fixtures/golden/mod"
@@ -35,8 +35,6 @@ done
 [ -d "$GOLDEN" ] || { echo "missing golden fixture: $GOLDEN" >&2; exit 2; }
 
 WORK=$(mktemp -d /var/tmp/dayzmake-compare.XXXXXX)
-# The work folder never lies inside the DayZ install (mktemp puts it under /var/tmp, check anyway).
-case "$WORK/" in "$DAYZ"/*) echo "work folder inside the DayZ install" >&2; exit 2 ;; esac
 cleanup() {
     if [ "${KEEP:-0}" = 1 ]; then
         echo "kept work folder: $WORK"
@@ -45,6 +43,8 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+# The work folder never lies inside the DayZ install (mktemp puts it under /var/tmp, check anyway).
+case "$WORK/" in "$DAYZ"/*) echo "work folder inside the DayZ install" >&2; exit 2 ;; esac
 
 # shellcheck disable=SC2034  # read through indirect expansion in both()
 BIN_old=$OLD_BIN
@@ -54,7 +54,7 @@ mkdir -p "$WORK/old" "$WORK/new" "$WORK/diffs"
 
 declare -A TOTAL=() SAME=() DIFFER=()
 DIFFS=()
-CATEGORIES=(pbo config p3d golden)
+CATEGORIES=(pbo config p3d golden raw)
 
 # run_side <side> <outprefix> <cwd> <stdin-file> <command...>: runs the command with a clean environment
 # and stores <outprefix>.out, <outprefix>.err (paths normalised) and <outprefix>.code.
@@ -86,7 +86,8 @@ record() {
 }
 
 # tree_diff <old-tree> <new-tree> <report-file> <parts-array-name>: compares two folders file by file.
-# A text file whose lines are the same in another order counts as "files(order-only)".
+# Only `$PBOPREFIX$` (the header extensions) may differ in line order, "files(order-only)"; every other
+# file must be byte-identical.
 tree_diff() {
     local ta=$1 tb=$2 report=$3 rel real=0 order=0
     local -n out=$4
@@ -97,7 +98,7 @@ tree_diff() {
     while IFS= read -r rel; do
         [ -f "$tb/$rel" ] || continue
         cmp -s "$ta/$rel" "$tb/$rel" && continue
-        if cmp -s <(sort "$ta/$rel") <(sort "$tb/$rel"); then
+        if [ "$rel" = './$PBOPREFIX$' ] && cmp -s <(sort "$ta/$rel") <(sort "$tb/$rel"); then
             order=1
             echo "order-only: $rel" >>"$report"
             { echo "  old:"; head -c 600 "$ta/$rel"; echo "  new:"; head -c 600 "$tb/$rel"; } >>"$report"
@@ -111,25 +112,54 @@ tree_diff() {
     [ -s "$report" ] || rm -f -- "$report"
 }
 
+# header_split <file> <block-out> <rest-out>: the `Header extensions:` block of an `inspect` output (from the
+# title line to the first blank line) and everything else.
+header_split() {
+    awk -v blk="$2" -v rest="$3" '
+        BEGIN { inblk = 0 }
+        /^Header extensions:$/ && !inblk && !done { inblk = 1 }
+        { if (inblk) { print > blk; if ($0 == "") { inblk = 0; done = 1 } } else print > rest }
+    ' "$1"
+    touch "$2" "$3"
+}
+
+# classify <category> <out|err|code> <old-file> <new-file>: names a difference. Allowed, expected kinds:
+#   out(header-ext-order-only)  only the header extension block of `inspect` has the same lines in another
+#                               order (pbo and golden); the rest of the output is byte-identical
+#   err(order-only)             warnings in another order (golden only, build-related commands)
+#   err(suppression-summary-only)  the new "were suppressed" line (golden only)
+# Everything else (including any reordering in the config and p3d categories) is the bare part name.
+classify() {
+    local cat=$1 part=$2 a=$3 b=$4 t
+    t=$(mktemp -d "$WORK/cls.XXXXXX")
+    case "$cat:$part" in
+        pbo:out | golden:out)
+            header_split "$a" "$t/ab" "$t/ar"
+            header_split "$b" "$t/bb" "$t/br"
+            if [ -s "$t/ab" ] && cmp -s "$t/ar" "$t/br" && cmp -s <(sort "$t/ab") <(sort "$t/bb"); then
+                rm -rf -- "$t"; echo "out(header-ext-order-only)"; return
+            fi ;;
+        golden:err)
+            if cmp -s <(sort "$a") <(sort "$b"); then
+                rm -rf -- "$t"; echo "err(order-only)"; return
+            fi
+            if cmp -s <(sort "$a") <(grep -v 'were suppressed to prevent spam' "$b" | sort); then
+                rm -rf -- "$t"; echo "err(suppression-summary-only)"; return
+            fi ;;
+    esac
+    rm -rf -- "$t"
+    echo "$part"
+}
+
 # compare_pair <category> <id> <old-prefix> <new-prefix> [<old-tree> <new-tree>]
 compare_pair() {
     local cat=$1 id=$2 a=$3 b=$4 ta=${5:-} tb=${6:-} parts=() n
     n=$(printf '%s' "$cat-$id" | tr -c 'A-Za-z0-9._-' '_')
     for part in out err code; do
-        if ! cmp -s "$a.$part" "$b.$part"; then
-            # Same lines in another order is reported as such (warning order, header extension order).
-            if cmp -s <(sort "$a.$part") <(sort "$b.$part"); then
-                parts+=("$part(order-only)")
-            elif [ "$part" = err ] && cmp -s <(sort "$a.$part") <(grep -v 'were suppressed to prevent spam' "$b.$part" | sort); then
-                parts+=("err(suppression-summary-only)")
-            elif [ "$part" = err ] && cmp -s <(sort "$a.$part" | grep -vx '') <(grep -v 'were suppressed to prevent spam' "$b.$part" | sort | grep -vx ''); then
-                parts+=("err(suppression-summary-only)")
-            else
-                parts+=("$part")
-            fi
-            { echo "--- old $part"; head -c 1500 "$a.$part"; echo "--- new $part"; head -c 1500 "$b.$part"; } \
-                >>"$WORK/diffs/$n.$part.txt" 2>/dev/null || true
-        fi
+        cmp -s "$a.$part" "$b.$part" && continue
+        parts+=("$(classify "$cat" "$part" "$a.$part" "$b.$part")")
+        { echo "--- old $part"; head -c 1500 "$a.$part"; echo "--- new $part"; head -c 1500 "$b.$part"; } \
+            >>"$WORK/diffs/$n.$part.txt" 2>/dev/null || true
     done
     if [ -n "$ta" ]; then
         if [ -d "$ta" ] && [ -d "$tb" ]; then
@@ -165,6 +195,45 @@ both() {
     fi
 }
 
+# raw_header <pbo>: the header extensions as `key=value` lines in the order of the file (own tiny reader:
+# 21 bytes of the first entry, then NUL-terminated key/value pairs up to an empty key).
+raw_header() {
+    python3 -I - "$1" <<'PY'
+import sys
+d = open(sys.argv[1], "rb").read(1 << 20)
+if d[:1] != b"\0" or d[1:5] != b"sreV":
+    sys.exit(0)  # no header extensions
+i, out = 21, sys.stdout.buffer
+while i < len(d) and d[i] != 0:
+    j = d.index(b"\0", i)
+    k = d[i:j]
+    e = d.index(b"\0", j + 1)
+    out.write(k + b"=" + d[j + 1:e] + b"\n")
+    i = e + 1
+PY
+}
+
+# check_raw_order <pbo> <id>: the NEW binary's header extension order (`inspect` and the unpacked
+# `$PBOPREFIX$`) must equal the order in the PBO file. Counted in category "raw".
+check_raw_order() {
+    local pbo=$1 id=$2 n parts=() t
+    n=$(printf '%s' "raw-$id" | tr -c 'A-Za-z0-9._-' '_')
+    t=$(mktemp -d "$WORK/raw.XXXXXX")
+    raw_header "$pbo" >"$t/raw"
+    header_split "$WORK/new/res-pbo-inspect_$id.out" "$t/blk" "$t/rest"
+    { sed -n 's/^- //p' "$t/blk"; } >"$t/inspect"
+    cmp -s "$t/raw" "$t/inspect" || parts+=("inspect-order-not-file-order")
+    if [ -f "$WORK/new/unpack/$id/\$PBOPREFIX\$" ]; then
+        tr -d '\r' <"$WORK/new/unpack/$id/\$PBOPREFIX\$" | sed '/^$/d' >"$t/pfx"
+        cmp -s "$t/raw" "$t/pfx" || parts+=("PBOPREFIX-order-not-file-order")
+    elif [ -s "$t/raw" ]; then
+        parts+=("PBOPREFIX-missing")
+    fi
+    [ "${#parts[@]}" -eq 0 ] || { echo "raw $id: ${parts[*]}" >"$WORK/diffs/$n.raw.txt"; cat "$t/raw" "$t/inspect" >>"$WORK/diffs/$n.raw.txt"; }
+    rm -rf -- "$t"
+    record raw "$id" "${parts[@]}"
+}
+
 # ---------------------------------------------------------------- addons: pbo, config, p3d
 P3D_LEFT=50
 shopt -s nullglob
@@ -177,6 +246,7 @@ for pbo in "${PBOS[@]}"; do
     echo "== $id" >&2
     both pbo "inspect/$id" /dev/null . "" "{B}" inspect "$pbo"
     both pbo "unpack/$id" /dev/null . "unpack/$id" "{B}" unpack -f "$pbo" "{R}/unpack/$id"
+    check_raw_order "$pbo" "$id"
     # derapify of every config.bin (list taken from the old tree; a different file set shows as a files difference)
     if [ -d "$WORK/old/unpack/$id" ]; then
         while IFS= read -r -d '' cfg; do
@@ -241,7 +311,6 @@ golden() {
     done
     both golden "$id" /dev/null "g/$id/mod" "g/$id" bash -c \
         'B=$1; run() { "$B" "$@"; echo "exit=$?"; }; eval "$2"' _ "{B}" "$script"
-    # drop the png copies from the comparison (identical on both sides) to keep the trees small
 }
 
 golden help 'run --help'
@@ -318,6 +387,9 @@ for cat in "${CATEGORIES[@]}"; do
     all_same=$((all_same + s))
     all_diff=$((all_diff + d))
 done
+echo "(raw = the new binary's header extension order equals the order in the PBO file, per PBO)"
+echo "(a released dayzmake before the order fix writes header extensions in a random order per run, so the"
+echo " number of identical pbo comparisons varies from run to run)"
 echo "total   $((all_same + all_diff)) compared: $all_same identical, $all_diff different"
 if [ "$all_diff" -gt 0 ]; then
     echo

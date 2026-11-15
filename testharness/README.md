@@ -64,17 +64,23 @@ check that a refactor changed no CLI behaviour. `<dayz-dir>` (a DayZ server or c
 ```sh
 git worktree add /var/tmp/dayzmake-v2/src v2.0.0
 CARGO_TARGET_DIR=/var/tmp/dayzmake-v2/target cargo build --release --locked --manifest-path /var/tmp/dayzmake-v2/src/Cargo.toml
-cargo build --release --locked
+CARGO_TARGET_DIR=/var/tmp/dayzmake-target cargo build --release --locked
 testharness/compare-release.sh /var/tmp/dayzmake-v2/target/release/dayzmake \
     /var/tmp/dayzmake-target/release/dayzmake ~/.steam/steam/steamapps/common/DayZServer
-git worktree remove /var/tmp/dayzmake-v2/src
+git worktree remove --force /var/tmp/dayzmake-v2/src   # also after a failed run
+rm -rf /var/tmp/dayzmake-v2
 ```
 
 It compares, per `addons/*.pbo`: `inspect` and `unpack`; `derapify` of every unpacked `config.bin`; `inspect`
 of the first 50 `.p3d`; and every command of `tests/golden_cli.rs` on `tests/fixtures/golden/mod`, plus
 `img2paa` of 1024x1024 gradient and noise PNGs. The work folder (`mktemp -d /var/tmp/dayzmake-compare.XXXXXX`)
 is removed unless `KEEP=1`. The summary lists `N identical, M different` per category; a difference that is
-only the same lines in another order is marked `order-only`. Exit status 1 when anything differs.
+only the header extension block of `inspect`/`$PBOPREFIX$` in another order, or build warnings in another
+order (golden commands only), is marked `order-only`; every other byte must match, so a reordered entry list or
+config member is a plain difference. The `raw` category checks, per PBO, that the new binary lists header
+extensions in the order of the PBO file. A released dayzmake that predates the order fix writes them in a random
+order per run, so the number of identical `pbo` comparisons varies between runs. Exit status 1 when anything
+differs.
 
 Against v2.0.0 the expected differences are: header extension order (file order now, random before), warning
 order (sorted file order now), suppression summary lines on stderr, and PBO bytes when more than one `-e` header
