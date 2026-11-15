@@ -812,13 +812,10 @@ impl PBO {
                 parse_prefix_file(&content, &mut pre_extensions, false, warnings);
             }
         }
-        let prefix: String = pre_extensions.get("prefix").cloned().unwrap_or_else(|| {
-            directory
-                .canonicalize()
-                .ok()
-                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .unwrap_or_default()
-        });
+        let prefix: String = pre_extensions
+            .get("prefix")
+            .cloned()
+            .unwrap_or_else(|| default_prefix(directory).unwrap_or_default());
 
         let addon_files: HashSet<String> = file_list
             .iter()
@@ -943,17 +940,12 @@ impl PBO {
         }
 
         if !header_extensions.contains_key("prefix") {
-            // "." and ".." have no file name of their own, the real folder does
-            let prefix: String = directory
-                .canonicalize()
-                .ok()
-                .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-                .ok_or_else(|| {
-                    error!(
-                        "Invalid addon directory \"{}\".",
-                        printable(&directory.display().to_string())
-                    )
-                })?;
+            let prefix: String = default_prefix(directory).ok_or_else(|| {
+                error!(
+                    "Invalid addon directory \"{}\".",
+                    printable(&directory.display().to_string())
+                )
+            })?;
             header_extensions.insert("prefix".to_string(), prefix);
         }
 
@@ -1179,6 +1171,13 @@ fn crosses_symlink(base: &Path, relative: &Path) -> bool {
         }
     }
     false
+}
+
+/// The prefix of an addon folder without `$PBOPREFIX$`: its own name (a symlink keeps the name it is
+/// reached by), or for `.`, `./` and `..` the name of the real folder.
+fn default_prefix(directory: &Path) -> Option<String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    name(directory).or_else(|| directory.canonicalize().ok().and_then(|d| name(&d)))
 }
 
 /// Replaces control characters (line breaks included) with a space.

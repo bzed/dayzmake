@@ -554,8 +554,7 @@ fn build_warning_path_is_relative_to_the_addon() {
         "{err}"
     );
 
-    // "." has no folder name to derive a prefix from
-    write(dir.path(), "mod/$PBOPREFIX$", "mod\n");
+    // "." builds without $PBOPREFIX$ too
     let (code, _, err) = dayzmake(&["build", ".", "../out2.pbo"], &dir.path().join("mod"));
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("In file config.cpp:2: "), "{err}");
@@ -906,6 +905,14 @@ fn keygen_creates_the_private_key_owner_only() {
     assert_eq!(mode("k.biprivatekey"), 0o600);
 }
 
+/// The `prefix` header extension of the PBO at `path`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn pbo_prefix(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).unwrap();
+    let pbo = dayzmake_core::pbo::PBO::read(&mut f).unwrap();
+    pbo.header_extension("prefix").map(str::to_string)
+}
+
 #[test]
 fn build_dot_uses_the_folder_name_as_prefix() {
     let dir = tempfile::tempdir().unwrap();
@@ -920,8 +927,22 @@ fn build_dot_uses_the_folder_name_as_prefix() {
     let a = std::fs::read(dir.path().join("a.pbo")).unwrap();
     assert_eq!(a, std::fs::read(dir.path().join("b.pbo")).unwrap());
     assert_eq!(a, std::fs::read(dir.path().join("c.pbo")).unwrap());
-    assert!(
-        a.windows(b"mymod".len()).any(|w| w == b"mymod"),
-        "prefix mymod missing"
+    assert_eq!(
+        pbo_prefix(&dir.path().join("a.pbo")).as_deref(),
+        Some("mymod")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn build_through_a_symlink_keeps_the_link_name_as_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "real/config.cpp", "class A {};\n");
+    std::os::unix::fs::symlink("real", dir.path().join("mylink")).unwrap();
+    let (code, _, err) = dayzmake(&["build", "mylink", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        pbo_prefix(&dir.path().join("out.pbo")).as_deref(),
+        Some("mylink")
     );
 }
