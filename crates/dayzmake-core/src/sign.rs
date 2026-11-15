@@ -35,6 +35,7 @@ pub struct BIPublicKey {
 
 /// BI signature version
 #[derive(Copy, Clone)]
+#[non_exhaustive]
 pub enum BISignVersion {
     /// Version 2
     V2,
