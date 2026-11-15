@@ -105,6 +105,14 @@ pub fn cmd_unpack<I: Read>(
     unpack(input, output, &options, warnings)
 }
 
+/// Fails with the folder's name when it cannot be read (the library error does not name it).
+fn check_source_folder(input: &Path) -> Result<(), Error> {
+    std::fs::read_dir(input).map(drop).prepend_error(format!(
+        "Failed to read source folder \"{}\":",
+        printable(&input.display().to_string())
+    ))
+}
+
 /// Packs a folder into a PBO without any binarization or rapification.
 ///
 /// # Errors
@@ -120,6 +128,7 @@ pub fn cmd_pack<O: Write>(
     let mut options = PackOptions::pack();
     options.exclude = excludes.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
+    check_source_folder(input)?;
     let pbo = PBO::from_directory(input, &options, None, warnings)?;
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;
@@ -145,6 +154,7 @@ pub fn cmd_build<O: Write>(
     options.exclude = excludes.to_vec();
     options.include_folders = includefolders.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
+    check_source_folder(input)?;
     let pbo = PBO::from_directory(input, &options, binarizer, warnings)?;
 
     pbo.write(output).prepend_error("Failed to write PBO:")?;

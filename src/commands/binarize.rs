@@ -27,6 +27,8 @@ pub fn cmd_binarize(
         ));
     }
 
+    // fail with the file's name before the library opens it
+    crate::cli_io::open_input(&input, "input file")?;
     if let Some(description) = binarized_description(&input)? {
         warnings.warn(
             Warning::new(

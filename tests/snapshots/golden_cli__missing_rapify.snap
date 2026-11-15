@@ -2,5 +2,5 @@
 source: tests/golden_cli.rs
 expression: r.err()
 ---
-error: Failed to open input file:
+error: Failed to open input file "nope.cpp":
 No such file or directory (os error 2)

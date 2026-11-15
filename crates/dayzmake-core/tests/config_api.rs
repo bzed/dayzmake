@@ -27,7 +27,7 @@ fn strings(elements: &[ConfigArrayElement]) -> Vec<&str> {
         .collect()
 }
 
-/// The assertions both reading paths share. Avoids `delete Obsolete;` (issue #3).
+/// The assertions both reading paths share.
 #[expect(clippy::unwrap_used, clippy::panic, reason = "tests fail by panicking")]
 fn check(config: &Config) {
     let root = config.root();
@@ -69,24 +69,16 @@ fn check(config: &Config) {
         panic!("Parent is not a class");
     };
     assert_eq!(parent.parent(), None);
+    let Some(ConfigEntry::ClassEntry(obsolete)) = child.get("Obsolete") else {
+        panic!("Obsolete is not a class entry");
+    };
+    assert!(obsolete.is_deletion());
 }
 
 #[test]
 fn read_values_from_a_parsed_config() {
     let config = golden();
     check(&config);
-
-    // parsed path only: the rapified reader mishandles deletions (issue #3)
-    let Some(ConfigEntry::ClassEntry(golden)) = config.root().get("CfgGolden") else {
-        panic!("CfgGolden is not a class");
-    };
-    let Some(ConfigEntry::ClassEntry(child)) = golden.get("Child") else {
-        panic!("Child is not a class");
-    };
-    let Some(ConfigEntry::ClassEntry(obsolete)) = child.get("Obsolete") else {
-        panic!("Obsolete is not a class entry");
-    };
-    assert!(obsolete.is_deletion());
 }
 
 #[test]

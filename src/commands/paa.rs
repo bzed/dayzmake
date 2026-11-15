@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Error;
 use std::path::Path;
 
+use crate::cli_io::{open_failure, open_input};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::paa::{Paa, PaaFormat};
@@ -21,7 +22,7 @@ pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result
         ));
     }
 
-    let mut file = File::open(input_path).prepend_error("Failed to open input PAA file:")?;
+    let mut file = open_input(input_path, "input PAA file")?;
     let paa = Paa::read(&mut file).prepend_error("Failed to read PAA file:")?;
     let img = paa
         .to_dynamic_image()
@@ -56,7 +57,7 @@ pub fn cmd_img2paa(
 
     let img = image::open(input_path)
         .map_err(|e| error!("{}", e))
-        .prepend_error("Failed to open input image file:")?;
+        .prepend_error(open_failure(input_path, "input image file"))?;
     let paa = paa_type
         .parse::<PaaFormat>()
         .and_then(|format| Paa::from_dynamic_image(&img, format))

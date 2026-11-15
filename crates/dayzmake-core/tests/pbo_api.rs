@@ -78,6 +78,7 @@ fn build_option_rapifies_config_cpp() {
 #[test]
 fn unpack_refuses_existing_files_without_force() {
     let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
     let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
     let target = tmp.path().join("out");
     let options = UnpackOptions::default();
@@ -95,7 +96,13 @@ fn unpack_refuses_existing_files_without_force() {
         &mut Warnings::new(),
     )
     .unwrap_err();
-    assert!(err.to_string().contains("already exists"), "{err}");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.",
+            target.display()
+        )
+    );
 
     let mut force = UnpackOptions::default();
     force.force = true;
@@ -349,4 +356,297 @@ fn private_key_debug_has_no_key_material() {
     for field in ["dmp1", "dmq1", "iqmp", "d:", "p:", "q:"] {
         assert!(!text.contains(field), "{text}");
     }
+}
+
+#[test]
+fn unpack_conflict_writes_nothing() {
+    let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    fs::create_dir_all(&target).unwrap();
+    // b.c is the last entry written, so a write-as-you-go check would already have written the
+    // prefix file and a.txt
+    fs::write(target.join("b.c"), "old").unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"b.c\"). Use --force to overwrite.",
+            target.display()
+        )
+    );
+    assert_eq!(fs::read_to_string(target.join("b.c")).unwrap(), "old");
+    assert_eq!(walk(&target), 1, "files or folders were created");
+}
+
+/// Counts the files and folders below `dir`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn walk(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .unwrap()
+        .map(|e| {
+            let p = e.unwrap().path();
+            1 + if p.is_dir() { walk(&p) } else { 0 }
+        })
+        .sum()
+}
+
+#[test]
+fn unpack_force_overwrites() {
+    let tmp = addon();
+    fs::write(tmp.path().join("addon").join("$PBOPREFIX$"), "prefix=a\n").unwrap();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut warnings,
+    )
+    .unwrap();
+    fs::write(target.join("a.txt"), "old").unwrap();
+    fs::write(target.join("$PBOPREFIX$"), "prefix=other\n").unwrap();
+    let mut force = UnpackOptions::default();
+    force.force = true;
+    unpack(&mut Cursor::new(&bytes), &target, &force, &mut warnings).unwrap();
+    assert_eq!(fs::read_to_string(target.join("a.txt")).unwrap(), "a");
+    assert_eq!(fs::read_to_string(target.join("b.c")).unwrap(), "b");
+    assert_eq!(
+        fs::read_to_string(target.join("$PBOPREFIX$")).unwrap(),
+        "prefix=a\n"
+    );
+}
+
+/// Unpacks twice into `target` and returns the conflict message of the second run.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn conflict_message_for_folder(name: &str) -> String {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join(name);
+    let options = UnpackOptions::default();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string()
+}
+
+#[test]
+fn unpack_conflict_message_escapes_c1_control_characters() {
+    // U+009B is a control character but a valid file name character on every platform.
+    let err = conflict_message_for_folder("o\u{9b}ut");
+    assert!(err.contains("o\\u{9b}ut"), "{err}");
+    assert!(!err.contains('\u{9b}'), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unpack_conflict_message_escapes_control_characters() {
+    // NTFS rejects characters 1 to 31 in names, so this one is Unix only.
+    let err = conflict_message_for_folder("o\x1but");
+    assert!(err.contains("o\\u{1b}ut"), "{err}");
+    assert!(!err.contains('\x1b'), "{err}");
+}
+
+#[test]
+fn unpack_conflict_message_escapes_c1_control_characters_in_entry_names() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bytes = support::raw_pbo_with_headers(&[("a\u{9b}b.txt", b"x", 0, 1)], &[]);
+    let target = tmp.path().join("out");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("a\u{9b}b.txt"), "old").unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("a\\u{9b}b.txt"), "{err}");
+    assert!(!err.contains('\u{9b}'), "{err}");
+}
+
+#[test]
+fn unpack_conflict_with_use_prefix_names_the_prefix_folder() {
+    let tmp = addon();
+    fs::write(
+        tmp.path().join("addon").join("$PBOPREFIX$"),
+        "prefix=x\\y\n",
+    )
+    .unwrap();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    let mut options = UnpackOptions::default();
+    options.use_prefix = true;
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let err = unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.",
+            target.join("x").join("y").display()
+        )
+    );
+}
+
+#[test]
+fn unpack_into_a_non_empty_folder_without_conflicts_works() {
+    let tmp = addon();
+    let bytes = pack_to_bytes(&tmp.path().join("addon"), &PackOptions::pack());
+    let target = tmp.path().join("out");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("unrelated.txt"), "x").unwrap();
+    unpack(
+        &mut Cursor::new(&bytes),
+        &target,
+        &UnpackOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(target.join("unrelated.txt").exists());
+    assert!(target.join("a.txt").exists());
+}
+
+const SECOND: &[u8] = b"compressed content, long enough for two groups";
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn with_compressed_entry() -> Vec<u8> {
+    let stored = support::lzss_literals(SECOND);
+    support::raw_pbo_with_headers(
+        &[
+            ("a.txt", b"plain", 0, 5),
+            (
+                "b.txt",
+                &stored,
+                support::CPRS,
+                u32::try_from(SECOND.len()).unwrap(),
+            ),
+        ],
+        &[],
+    )
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn rewritten(pbo: &PBO) -> Vec<u8> {
+    let mut out = Vec::new();
+    pbo.write(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn writing_a_read_pbo_keeps_compressed_entries() {
+    let pbo = read(&with_compressed_entry());
+    assert_eq!(pbo.file_data("b.txt").unwrap().unwrap(), SECOND);
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), SECOND);
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"plain");
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.txt")
+        .unwrap();
+    assert_eq!(header.packing_method, support::CPRS);
+    assert_eq!(header.original_size as usize, SECOND.len());
+}
+
+#[test]
+fn modifying_a_read_pbo_keeps_untouched_compressed_entries() {
+    let mut pbo = read(&with_compressed_entry());
+    pbo.insert_entry("c.txt", b"new".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), SECOND);
+    assert_eq!(back.file_data("c.txt").unwrap().unwrap(), b"new");
+}
+
+#[test]
+fn replacing_a_compressed_entry_stores_it_uncompressed() {
+    let mut pbo = read(&with_compressed_entry());
+    pbo.insert_entry("b.txt", b"replaced".to_vec()).unwrap();
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("b.txt").unwrap().unwrap(), b"replaced");
+    let header = back
+        .entry_headers()
+        .into_iter()
+        .find(|h| h.name == "b.txt")
+        .unwrap();
+    assert_eq!(header.packing_method, 0);
+}
+
+#[cfg(feature = "sign")]
+#[test]
+fn signature_of_a_rewritten_read_pbo_verifies() {
+    let key = armk();
+    let written = read(&rewritten(&read(&with_compressed_entry())));
+    // The old write kept the compressed bytes under a stored header, so the data read back
+    // was the compressed form, not the original.
+    assert_eq!(written.file_data("b.txt").unwrap().unwrap(), SECOND);
+    let signature = key.sign(&written, BISignVersion::V3).unwrap();
+    key.to_public_key()
+        .unwrap()
+        .verify(&read(&rewritten(&written)), &signature)
+        .unwrap();
+}
+
+#[test]
+fn duplicate_entry_names_use_the_header_of_the_kept_value() {
+    let second = b"second!!";
+    let stored = support::lzss_literals(second);
+    let bytes = support::raw_pbo_with_headers(
+        &[
+            ("a.txt", b"first", 0, 5),
+            ("a.txt", &stored, support::CPRS, 8),
+        ],
+        &[],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(pbo.file_data("a.txt").unwrap().unwrap(), second);
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), second);
+}
+
+#[test]
+fn duplicate_names_compressed_first_stored_last_survive_a_rewrite() {
+    let stored = support::lzss_literals(b"first!!!");
+    let bytes = support::raw_pbo_with_headers(
+        &[
+            ("a.txt", &stored, support::CPRS, 8),
+            ("a.txt", b"second", 0, 6),
+        ],
+        &[],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(pbo.file_data("a.txt").unwrap().unwrap(), b"second");
+    let back = read(&rewritten(&pbo));
+    assert_eq!(back.file_data("a.txt").unwrap().unwrap(), b"second");
 }

@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::Error;
 use std::path::PathBuf;
 
+use crate::cli_io::open_input;
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::pbo::PBO;
@@ -79,12 +80,9 @@ pub fn cmd_sign(
     version: BISignVersion,
     force: bool,
 ) -> Result<(), Error> {
-    let privatekey = BIPrivateKey::read(
-        &mut File::open(&privatekey_path).prepend_error("Failed to open private key:")?,
-    )
-    .prepend_error("Failed to read private key:")?;
-    let pbo = PBO::read(&mut File::open(&pbo_path).prepend_error("Failed to open PBO:")?)
-        .prepend_error("Failed to read PBO:")?;
+    let privatekey = BIPrivateKey::read(&mut open_input(&privatekey_path, "private key")?)
+        .prepend_error("Failed to read private key:")?;
+    let pbo = PBO::read(&mut open_input(&pbo_path, "PBO")?).prepend_error("Failed to read PBO:")?;
 
     let sig_path = if let Some(path) = signature_path {
         path
@@ -121,12 +119,9 @@ pub fn cmd_verify(
     pbo_path: PathBuf,
     signature_path: Option<PathBuf>,
 ) -> Result<(), Error> {
-    let publickey = BIPublicKey::read(
-        &mut File::open(&publickey_path).prepend_error("Failed to open public key:")?,
-    )
-    .prepend_error("Failed to read public key:")?;
-    let pbo = PBO::read(&mut File::open(&pbo_path).prepend_error("Failed to open PBO:")?)
-        .prepend_error("Failed to read PBO:")?;
+    let publickey = BIPublicKey::read(&mut open_input(&publickey_path, "public key")?)
+        .prepend_error("Failed to read public key:")?;
+    let pbo = PBO::read(&mut open_input(&pbo_path, "PBO")?).prepend_error("Failed to read PBO:")?;
 
     let sig_path = if let Some(path) = signature_path {
         path
@@ -134,7 +129,7 @@ pub fn cmd_verify(
         dayzmake_core::sign::signature_path(&pbo_path, publickey.name())?
     };
 
-    let sig = BISign::read(&mut File::open(&sig_path).prepend_error("Failed to open signature:")?)
+    let sig = BISign::read(&mut open_input(&sig_path, "signature")?)
         .prepend_error("Failed to read signature:")?;
 
     publickey.verify(&pbo, &sig)

@@ -540,3 +540,153 @@ fn pack_rejects_a_header_extension_without_equals() {
         "{err}"
     );
 }
+
+#[test]
+fn build_warning_path_is_relative_to_the_addon() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "class A {\n x = foo;\n};\n");
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("In file config.cpp:2: "), "{err}");
+    assert!(
+        !err.contains("./config.cpp")
+            && !err.contains(&Path::new("mod").join("config.cpp").display().to_string()),
+        "{err}"
+    );
+
+    // "." has no folder name to derive a prefix from
+    write(dir.path(), "mod/$PBOPREFIX$", "mod\n");
+    let (code, _, err) = dayzmake(&["build", ".", "../out2.pbo"], &dir.path().join("mod"));
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("In file config.cpp:2: "), "{err}");
+    assert!(!err.contains("./config.cpp"), "{err}");
+}
+
+#[test]
+fn build_warning_in_an_included_file_is_relative_to_the_addon() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "#include \"inc\\a.hpp\"\n");
+    write(dir.path(), "mod/inc/a.hpp", "class A { x = foo; };\n");
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let expected = format!("In file {}:1: ", Path::new("inc").join("a.hpp").display());
+    assert!(err.contains(&expected), "{err}");
+    let root = dir.path().to_string_lossy().into_owned();
+    assert!(!err.contains(&root), "{err}");
+}
+
+#[test]
+fn build_warning_in_an_include_outside_the_addon_keeps_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "mod/config.cpp", "#include \"\\a.hpp\"\n");
+    write(dir.path(), "shared/a.hpp", "class A { x = foo; };\n");
+    let (code, _, err) = dayzmake(&["build", "-i", "shared", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    // recorded on the unfixed code: the canonical absolute path
+    let shared = dir
+        .path()
+        .join("shared")
+        .canonicalize()
+        .unwrap()
+        .join("a.hpp");
+    let expected = format!("In file {}:1: ", shared.display());
+    assert!(err.contains(&expected), "{err}");
+}
+
+#[test]
+fn missing_input_errors_name_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "x.pbo", "");
+    let cases: [(&[&str], &str); 8] = [
+        (&["binarize", "nope.p3d", "o.p3d"], "nope.p3d"),
+        (&["rapify", "nope.cpp", "x"], "nope.cpp"),
+        (&["inspect", "nope.pbo"], "nope.pbo"),
+        (&["unpack", "nope.pbo", "d"], "nope.pbo"),
+        (
+            &["sign", "nokey.biprivatekey", "x.pbo"],
+            "nokey.biprivatekey",
+        ),
+        (&["verify", "nokey.bikey", "x.pbo"], "nokey.bikey"),
+        (&["paa2img", "nope.paa", "o.png"], "nope.paa"),
+        (&["img2paa", "nope.png", "o.paa"], "nope.png"),
+    ];
+    for (args, name) in cases {
+        let (code, _, err) = dayzmake(args, dir.path());
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(err.contains(&format!("\"{name}\":")), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn control_characters_in_a_missing_path_are_escaped() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "a\u{1b}[31mb.cpp", "x"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("a\\u{1b}[31mb.cpp"), "{err}");
+    assert!(!err.contains('\u{1b}'), "{err}");
+}
+
+#[test]
+fn missing_source_folder_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    for cmd in ["build", "pack"] {
+        let (code, _, err) = dayzmake(&[cmd, "nodir", &format!("{cmd}.pbo")], dir.path());
+        assert_eq!(code, 1, "{cmd}: {err}");
+        assert!(
+            err.contains("Failed to read source folder \"nodir\":"),
+            "{cmd}: {err}"
+        );
+    }
+}
+
+#[test]
+fn missing_pbo_and_signature_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _, err) = dayzmake(&["keygen", "k"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    for args in [
+        ["sign", "k.biprivatekey", "gone.pbo"],
+        ["verify", "k.bikey", "gone.pbo"],
+    ] {
+        let (code, _, err) = dayzmake(&args, dir.path());
+        assert_eq!(code, 1, "{args:?}: {err}");
+        assert!(
+            err.contains("Failed to open PBO \"gone.pbo\":"),
+            "{args:?}: {err}"
+        );
+    }
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    write(&src, "a.txt", "a");
+    let (code, _, err) = dayzmake(&["pack", "src", "x.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["verify", "k.bikey", "x.pbo"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("Failed to open signature \""), "{err}");
+}
+
+#[test]
+fn unpack_conflict_message_uses_the_target_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/$PBOPREFIX$", "x\\y");
+    write(dir.path(), "m/data/a.txt", "a");
+    let (code, _, err) = dayzmake(&["pack", "m", "x.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["unpack", "x.pbo", "out"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["unpack", "x.pbo", "out"], dir.path());
+    assert_eq!(code, 1);
+    assert_eq!(
+        err,
+        "error: Target folder \"out\" already contains files of this PBO (first: \"$PBOPREFIX$\"). Use --force to overwrite.\n"
+    );
+}
+
+#[test]
+fn rapify_nbsp_indent_reports_a_parse_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("nbsp.cpp"), b"\xc2\xa0foo = 1;\n").unwrap();
+    let (code, _, err) = dayzmake(&["rapify", "nbsp.cpp", "out.bin"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert!(err.starts_with("error:"), "{err}");
+}

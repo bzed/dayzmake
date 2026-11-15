@@ -1,11 +1,10 @@
-use std::fs::File;
 use std::io::{Cursor, Error, Read, stdin, stdout};
 use std::path::{Path, PathBuf};
 
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
-use crate::cli_io::{Input, Output, create_target};
+use crate::cli_io::{Input, Output, create_target, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
 use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
@@ -182,9 +181,7 @@ pub struct Args {
 
 fn get_input(args: &Args) -> Result<Input, Error> {
     if let Some(ref source) = args.arg_source {
-        Ok(Input::File(
-            File::open(source).prepend_error("Failed to open input file:")?,
-        ))
+        Ok(Input::File(open_input(Path::new(source), "input file")?))
     } else {
         let mut buffer: Vec<u8> = Vec::new();
         stdin()

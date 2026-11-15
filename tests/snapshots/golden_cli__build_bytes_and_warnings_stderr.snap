@@ -2,6 +2,6 @@
 source: tests/golden_cli.rs
 expression: r.err()
 ---
-In file ./config.cpp:18: warning: String value "((2) * (3))" is not quoted properly. [unquoted-string]
-In file ./config.cpp:28: warning: String value "unquotedvalue" is not quoted properly. [unquoted-string]
+In file config.cpp:18: warning: String value "((2) * (3))" is not quoted properly. [unquoted-string]
+In file config.cpp:28: warning: String value "unquotedvalue" is not quoted properly. [unquoted-string]
 In file data/model.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]

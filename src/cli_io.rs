@@ -4,6 +4,7 @@
 use std::fs::File;
 use std::io;
 use std::io::{Cursor, Read, Seek, Stdout, Write};
+use std::path::Path;
 
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -71,4 +72,22 @@ pub fn create_target(path: &std::path::Path, force: bool) -> io::Result<File> {
         ));
     }
     File::create(path).prepend_error("Failed to open output file:")
+}
+
+/// The first line of an open error: `Failed to open <what> "<path>":`, the path made printable.
+#[must_use]
+pub fn open_failure(path: &Path, what: &str) -> String {
+    format!(
+        "Failed to open {what} \"{}\":",
+        dayzmake_core::error::printable(&path.display().to_string())
+    )
+}
+
+/// Opens a user-given input file; the error names the file: `Failed to open <what> "<path>":\n<os error>`.
+///
+/// # Errors
+///
+/// Returns an error if the file cannot be opened.
+pub fn open_input(path: &Path, what: &str) -> io::Result<File> {
+    File::open(path).prepend_error(open_failure(path, what))
 }

@@ -464,6 +464,43 @@ impl Default for PBO {
     }
 }
 
+/// Rewrites `Warning.file` to the path relative to the addon folder when it lies inside it.
+struct AddonRelative<'a> {
+    /// The addon folder as given and canonicalised (includes are reported canonicalised).
+    roots: &'a [PathBuf; 2],
+    inner: &'a mut dyn WarningSink,
+}
+
+/// The addon folder as given and canonicalised, computed once per pack.
+fn addon_roots(directory: &Path) -> [PathBuf; 2] {
+    // canonicalize fails for a missing or unreadable folder; matching against the path as given still
+    // works, so warnings are not lost
+    let canonical = directory
+        .canonicalize()
+        .unwrap_or_else(|_| directory.to_path_buf());
+    [directory.to_path_buf(), canonical]
+}
+
+impl WarningSink for AddonRelative<'_> {
+    fn warn(&mut self, mut warning: Warning) {
+        if let Some(file) = &warning.file {
+            let file = Path::new(file);
+            if let Some(relative) = self
+                .roots
+                .iter()
+                .find_map(|root| file.strip_prefix(root).ok())
+            {
+                warning.file = Some(relative.to_string_lossy().into_owned());
+            }
+        }
+        self.inner.warn(warning);
+    }
+
+    fn is_suppressed(&self, name: Option<&str>) -> bool {
+        self.inner.is_suppressed(name)
+    }
+}
+
 impl PBO {
     /// An empty PBO without entries and header extensions.
     #[must_use]
@@ -790,6 +827,8 @@ impl PBO {
             .map(|p| p.replace('/', "\\").to_lowercase())
             .collect();
 
+        let addon_roots = addon_roots(directory);
+
         for path in file_list {
             let Ok(mut relative) = path.strip_prefix(directory).map(Path::to_path_buf) else {
                 continue;
@@ -858,11 +897,15 @@ impl PBO {
                     );
                     files.insert(name, Cursor::new(buffer.into_boxed_slice()));
                 } else {
+                    let mut addon_warnings = AddonRelative {
+                        roots: &addon_roots,
+                        inner: warnings,
+                    };
                     let config = Config::read(
                         &mut Cursor::new(buffer),
                         Some(path.clone()),
                         includefolders,
-                        warnings,
+                        &mut addon_warnings,
                     )
                     .prepend_error("Failed to parse config:")?;
                     files.insert(name, config.to_cursor()?);
@@ -964,11 +1007,18 @@ impl PBO {
         for (name, cursor) in &files_sorted {
             let size = u32::try_from(cursor.get_ref().len())
                 .map_err(|_| error!("PBO entry \"{name}\" is too large."))?;
+            // an entry that was read and not replaced since keeps its compression: `files`
+            // holds its stored bytes, so the header must still say how to decode them
+            let kept = self
+                .headers
+                .iter()
+                .rfind(|h| h.filename == *name)
+                .filter(|h| h.packing_method == PACKING_COMPRESSED);
             let header = PBOHeader {
                 filename: (*name).to_string(),
                 raw_filename: self.raw_names.get(*name).cloned(),
-                packing_method: 0,
-                original_size: size,
+                packing_method: kept.map_or(0, |h| h.packing_method),
+                original_size: kept.map_or(size, |h| h.original_size),
                 reserved: 0,
                 timestamp: 0,
                 data_size: size,
@@ -1011,7 +1061,8 @@ impl PBO {
             return Ok(None);
         };
 
-        match self.headers.iter().find(|h| h.filename == name) {
+        // duplicate names: `files` kept the last value, so use the last header
+        match self.headers.iter().rfind(|h| h.filename == name) {
             Some(h) if h.packing_method == PACKING_COMPRESSED => {
                 lzss_decompress(cursor.get_ref(), h.original_size as usize)
                     .prepend_error(format!("Failed to decompress \"{}\":", printable(name)))
@@ -1131,7 +1182,6 @@ fn sanitize_header(text: &str) -> String {
 fn write_prefix_file(
     extensions: &LinkedHashMap<String, String>,
     base: &Path,
-    force: bool,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let prefix_path = base.join("$PBOPREFIX$");
@@ -1141,12 +1191,6 @@ fn write_prefix_file(
             "Not writing $PBOPREFIX$: it is a symlink.",
         ));
         return Ok(());
-    }
-    if !force && prefix_path.exists() {
-        return Err(error!(
-            "Target file \"{}\" already exists. Use --force to overwrite.",
-            prefix_path.display()
-        ));
     }
     let mut prefix_file =
         File::create(prefix_path).prepend_error("Failed to create prefix file:")?;
@@ -1207,8 +1251,9 @@ pub struct UnpackOptions {
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
-/// file exists without `options.force`.
+/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or, without
+/// `options.force`, a file of the PBO (or `$PBOPREFIX$`) already exists in the target. That check
+/// covers every file and runs before anything is written, so a conflict leaves the target untouched.
 pub fn unpack<I: Read>(
     input: &mut I,
     target: &Path,
@@ -1221,10 +1266,30 @@ pub fn unpack<I: Read>(
 
     let base = unpack_base(&pbo, output, use_prefix)?;
 
+    if !force {
+        // Check every target before writing anything, so a conflict leaves the folder untouched.
+        let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
+        let first = prefix
+            .into_iter()
+            .chain(pbo.files.keys().map(String::as_str))
+            .find(|name| {
+                safe_relative_path(name).is_some_and(|relative| {
+                    !crosses_symlink(&base, &relative) && base.join(relative).exists()
+                })
+            });
+        if let Some(name) = first {
+            return Err(error!(
+                "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
+                printable(&base.display().to_string()),
+                printable(name)
+            ));
+        }
+    }
+
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
 
     if !pbo.header_extensions.is_empty() {
-        write_prefix_file(&pbo.header_extensions, &base, force, warnings)?;
+        write_prefix_file(&pbo.header_extensions, &base, warnings)?;
     }
 
     let mut written: HashSet<String> = HashSet::new();
@@ -1277,12 +1342,6 @@ pub fn unpack<I: Read>(
             }
         };
         let path = base.join(&relative);
-        if !force && path.exists() {
-            return Err(error!(
-                "Target file \"{}\" already exists. Use --force to overwrite.",
-                path.display()
-            ));
-        }
         written.insert(key);
         let written_ok = create_dir_all(path.parent().unwrap_or(&base))
             .prepend_error("Failed to create output folder:")

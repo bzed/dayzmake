@@ -11,6 +11,7 @@ use dayzmake_core::paa::Paa;
 use dayzmake_core::pbo::PBO;
 #[cfg(feature = "sign")]
 use dayzmake_core::sign::{BIPrivateKey, BIPublicKey, BISign};
+use dayzmake_core::warning::Warnings;
 
 fn seeds(target: &str) -> io::Result<Vec<Vec<u8>>> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -44,6 +45,21 @@ fn pbo_read_seeds() -> io::Result<()> {
 fn config_rapified_seeds() -> io::Result<()> {
     for data in seeds("config_rapified")? {
         let _ = Config::read_rapified(&mut Cursor::new(&data));
+    }
+    Ok(())
+}
+
+#[test]
+fn config_parse_seeds() -> io::Result<()> {
+    for data in seeds("config_parse")? {
+        let input = String::from_utf8_lossy(&data).into_owned();
+        // Same as the fuzz target: includes (also `# include`, `#\tinclude`) read host files, so any
+        // seed containing "include" is skipped.
+        if input.contains("include") {
+            continue;
+        }
+        let mut warnings = Warnings::default();
+        let _ = Config::from_string(input, None, &[], &mut warnings);
     }
     Ok(())
 }

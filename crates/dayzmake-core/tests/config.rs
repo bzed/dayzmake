@@ -218,3 +218,140 @@ fn rapified_shared_class_body_fan_out_is_an_error() {
     assert!(err.contains("shared"), "{err}");
     assert!(started.elapsed().as_secs() < 2);
 }
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn rapify_src(src: &str) -> Vec<u8> {
+    let config = Config::from_string(String::from(src), None, &[], &mut Warnings::new()).unwrap();
+    config.to_cursor().unwrap().into_inner().into_vec()
+}
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn derapify(bytes: Vec<u8>) -> String {
+    read_bytes(bytes).unwrap().to_string().unwrap()
+}
+
+#[test]
+fn derapify_keeps_nested_delete() {
+    let text = derapify(rapify_src("class A { x = 1; delete B; };"));
+    assert!(text.contains("delete B;"), "{text}");
+    assert!(!text.contains("class B"), "{text}");
+}
+
+#[test]
+fn derapify_keeps_top_level_delete() {
+    let text = derapify(rapify_src("delete X;\nclass Y {};"));
+    assert!(text.contains("delete X;"), "{text}");
+}
+
+#[test]
+fn rapified_delete_roundtrips_byte_for_byte() {
+    let bytes1 = rapify_src("class A { x = 1; delete B; };\ndelete X;\nclass Y {};");
+    let bytes2 = read_bytes(bytes1.clone())
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner()
+        .into_vec();
+    assert_eq!(bytes1, bytes2);
+}
+
+fn parse_err(input: &str) -> String {
+    let mut w = Warnings::default();
+    // An unexpected success yields an empty message, which the callers' assertions reject.
+    Config::from_string(input.to_string(), None, &[], &mut w)
+        .err()
+        .map_or_else(String::new, |e| e.to_string())
+}
+
+#[test]
+fn parse_error_with_nbsp_indent_is_an_error() {
+    let msg = parse_err("\u{a0}foo = 1;\n");
+    assert!(msg.contains("Unexpected token"), "{msg}");
+    assert!(msg.contains("\n  ^\n"), "caret at the line start: {msg}");
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_with_ideographic_space_indent_is_an_error() {
+    let msg = parse_err("\u{3000}\u{3000}class A { = 1; };");
+    assert!(msg.contains("Unexpected token"), "{msg}");
+    assert!(msg.contains("\n  ^\n"), "caret at the line start: {msg}");
+    assert!(msg.contains("\"\\u{3000}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_with_multibyte_text_before_the_error_has_the_caret_under_it() {
+    let msg = parse_err("  class A { x = \"\u{e9}\u{3000}\"; ? };\n");
+    let lines: Vec<&str> = msg.lines().collect();
+    let text = lines
+        .iter()
+        .find(|l| l.contains("class A"))
+        .expect("text line");
+    let caret = lines
+        .iter()
+        .find(|l| l.trim_start() == "^")
+        .expect("caret line");
+    let bad = text.chars().position(|c| c == '?').expect("? in text");
+    assert_eq!(caret.chars().position(|c| c == '^'), Some(bad), "{msg}");
+}
+
+#[test]
+fn preprocess_errors_with_multibyte_indent_have_the_caret_in_the_right_place() {
+    for input in [
+        "\u{a0}\"abc\n",
+        "  \u{a0}\"abc\n",
+        "\u{3000}\u{3000}\"abc\n",
+    ] {
+        let mut w = Warnings::default();
+        let err = dayzmake_core::preprocess::preprocess(input.to_string(), None, &[], &mut w).err();
+        let msg = err.map_or_else(String::new, |e| e.to_string());
+        assert!(msg.contains("Unexpected token"), "{input:?}: {msg}");
+        let lines: Vec<&str> = msg.lines().collect();
+        let text = lines.iter().find(|l| l.contains("abc")).expect("text line");
+        let caret = lines
+            .iter()
+            .find(|l| l.trim_start() == "^")
+            .expect("caret line");
+        let caret_at = caret.chars().position(|c| c == '^').expect("caret");
+        let shown = text.chars().position(|c| c == '"').expect("quote");
+        assert!(
+            caret_at == shown + 4,
+            "{input:?}: caret {caret_at}, quote {shown}\n{msg}"
+        );
+    }
+}
+
+#[test]
+fn parse_error_with_nbsp_indent_and_multibyte_letter_has_the_caret_in_column_one() {
+    // The NBSP is two bytes but one character: the old byte arithmetic subtracted 2 from
+    // column 1 and underflowed.
+    let msg = parse_err("\u{a0}\u{e9}x = 1;\n");
+    let lines: Vec<&str> = msg.lines().collect();
+    let text = lines
+        .iter()
+        .position(|l| l.contains('\u{e9}'))
+        .expect("text line");
+    assert_eq!(lines[text], "  \u{e9}x = 1;", "{msg}");
+    assert_eq!(lines[text + 1], "  ^", "{msg}");
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_on_a_line_of_only_invisible_spaces_does_not_panic() {
+    let msg = parse_err("class A {\n\u{a0}\n= 1; };");
+    assert!(msg.contains("In line 2:"), "{msg}");
+    assert!(
+        msg.contains("\n  \n  ^\n"),
+        "empty text line, caret at start: {msg}"
+    );
+    assert!(msg.contains("\"\\u{a0}\""), "visible token: {msg}");
+    let msg = parse_err("class A {\n\u{3000}\n= 1; };");
+    assert!(msg.contains("\"\\u{3000}\""), "visible token: {msg}");
+}
+
+#[test]
+fn parse_error_shows_tabs_in_the_line_unescaped() {
+    let msg = parse_err("class A {\n\tx\t= 1; ?\n};");
+    assert!(msg.contains("x\t= 1; ?"), "real tab in the line: {msg}");
+    assert!(!msg.contains("\\t"), "no escaped tab: {msg}");
+}
