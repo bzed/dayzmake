@@ -895,6 +895,13 @@ impl PBO {
             }
 
             let mut name: String = relative.to_string_lossy().replace('/', "\\");
+            if safe_relative_path(&name).is_none() {
+                warnings.warn(Warning::new(
+                    Some("unsafe-path"),
+                    format!("Skipping \"{}\": unsafe entry name.", printable(&name)),
+                ));
+                continue;
+            }
             let is_binarizable = BINARIZABLE_RE.is_match(&name);
 
             if !file_allowed(&name, exclude_patterns) {

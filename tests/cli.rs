@@ -1170,3 +1170,19 @@ fn stale_temp_is_skipped_but_same_name_in_subfolder_is_packed() {
     assert!(!out.contains("dayzmake-tmp"), "{out}");
     assert!(out.contains("out.pbo"), "{out}");
 }
+
+#[cfg(unix)]
+#[test]
+fn build_skips_file_names_that_are_unsafe_as_entry_names() {
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};"), ("mod/ok.txt", "x")]);
+    let modf = dir.path().join("mod");
+    write(&modf, "a\x1bb.txt", "bad");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(err.contains("a\\u{1b}b.txt"), "{err}");
+    assert!(!err.contains('\x1b'), "{err:?}");
+    let (_, out, _) = dayzmake(&["inspect", "out.pbo"], &modf);
+    assert!(out.contains("ok.txt"), "{out}");
+    assert!(!out.contains("b.txt"), "{out}");
+}

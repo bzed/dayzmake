@@ -2090,12 +2090,21 @@ mod from_pbo {
     #[test]
     fn api_unsafe_entry_name_is_escaped_once() {
         let w = World::new();
+        let pbo_path = w.root.join("steamapps/common/DayZ/dta/scripts.pbo");
+        // build leaves unsafe names out, so patch the name into the finished PBO (same length)
         make_pbo(
             &fixture("vanilla/scripts"),
-            &[("3_Game/a\u{1b}b.c", "class Evil {}\n")],
+            &[("3_Game/a_b.c", "class Evil {}\n")],
             None,
-            &w.root.join("steamapps/common/DayZ/dta/scripts.pbo"),
+            &pbo_path,
         );
+        let mut bytes = fs::read(&pbo_path).expect("read pbo");
+        let at = bytes
+            .windows(12)
+            .position(|w| w == b"3_Game\\a_b.c")
+            .expect("entry name");
+        bytes[at + 8] = 0x1b;
+        fs::write(&pbo_path, bytes).expect("write pbo");
         let (code, _, err) = w.run(&["api", "class", "Base"]);
         assert_eq!(code, 0, "{err}");
         assert!(err.contains("a\\u{1b}b.c"), "{err:?}");
