@@ -1,11 +1,6 @@
 # Stage 1: Build the application
 FROM rust:latest AS builder
 
-# Install build dependencies.
-# - libssl-dev is required for the `openssl` crate.
-# - pkg-config is used by the `openssl` crate's build script.
-RUN apt-get update && apt-get install -y libssl-dev pkg-config
-
 WORKDIR /usr/src/dayzmake
 
 # --- Build the actual application ---

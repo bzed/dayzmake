@@ -25,8 +25,10 @@ is maintained here.
 ## Changes
 
 - Key generation no longer uses OpenSSL: `dayzmake keygen` generates the RSA key pair with the pure-Rust `rsa` crate and the
-  operating system's random number generator. Key files keep their layout. `dayzmake-core` needs OpenSSL only for its
-  tests now. Key components read from a key file are wiped from memory when dropped.
+  operating system's random number generator. Key files keep their layout. Key components read from a key file are
+  wiped from memory when dropped.
+- OpenSSL is gone from the dependency tree, tests included (they use `num-bigint` as the independent check): building
+  and testing need no system libraries, and the CI and the Dockerfile no longer install `libssl-dev` or `pkg-config`.
 - Two misleading errors are fixed: a `.bisign` with a bad header says "Invalid signature file" (not "public key"), and
   verifying with a key other than the one that made the signature says "The signature was made with a different key"
   (names and lengths only) instead of a complaint about the modulus (#56).
@@ -90,7 +92,8 @@ is maintained here.
 
 ## Building
 
-The build requires `cargo`, Rust's package manager and the OpenSSL development libraries.
+The build requires `cargo`, Rust's package manager. No system libraries are needed: everything, including the RSA
+code for `sign` and `keygen`, is pure Rust.
 To compile and run, use:
 
 ```
@@ -102,16 +105,6 @@ To build a release, use:
 ```
 cargo build --release
 ```
-
-In order to build, you'll need to have OpenSSL installed on your system.
-
-On **Linux**, the easiest way is to install OpenSSL via your system's package manager (if it is not installed already). Make sure you also have the development packages of OpenSSL installed. For example, `libssl-dev` on Ubuntu or `openssl-devel` on Fedora.
-
-On **Windows**, the easiest way to get compilation and static linking of OpenSSL to work is to download [pre-compiled OpenSSL binaries](http://slproweb.com/products/Win32OpenSSL.html) (non-light, 64-bit) and set the following environment variables:
-
-- `OPENSSL_DIR=C:\OpenSSL-WIN64`
-- `OPENSSL_STATIC=1`
-- `OPENSSL_LIBS=libssl_static:libcrypto_static`
 
 ## Testing
 
@@ -236,7 +229,7 @@ prints; warnings go to a `WarningSink` you provide, so it is safe to use from ma
 cargo add dayzmake-core
 ```
 
-Features: `sign` (BI keys and signatures, needs OpenSSL) and `image` (PAA from and to images), both on by
+Features: `sign` (BI keys and signatures) and `image` (PAA from and to images), both on by
 default; `default-features = false` builds without them. The
 [API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
 The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
