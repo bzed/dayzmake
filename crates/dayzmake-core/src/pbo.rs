@@ -1163,7 +1163,12 @@ impl PBO {
 
                 files.insert(name, Cursor::new(data.into_boxed_slice()));
             } else {
-                if is_binarizable && !prebinarized && binarizer.is_none() && !cfg!(windows) {
+                if binarize
+                    && is_binarizable
+                    && !prebinarized
+                    && binarizer.is_none()
+                    && !cfg!(windows)
+                {
                     warnings.warn(
                         Warning::new(
                             Some("non-windows-binarization"),

@@ -183,7 +183,7 @@ warning: Entry name "café.txt" is not valid UTF-8; extracting it as windows-125
 
 ## non-windows-binarization
 
-Raised by: `build`, `pack`, `pbo_build`.
+Raised by: `build` and the MCP tool `pbo_build`.
 
 On Linux and macOS, `build` without `--proton-binarize` copies each `.p3d` and `.rtm` as it is.
 

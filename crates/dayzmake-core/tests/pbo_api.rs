@@ -142,8 +142,10 @@ fn unpack_rejects_unsafe_entry_names() {
     assert_eq!(named.len(), 1, "{:?}", warnings.warnings());
 }
 
+/// #72: `pack` never binarizes, so it must not claim that binarization was skipped; `build` without a binarizer
+/// warns outside Windows (there is a native binarize.exe on Windows).
 #[test]
-fn packing_a_model_without_binarizer_warns_only_outside_windows() {
+fn only_build_warns_about_models_that_are_not_binarized() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("addon");
     fs::create_dir_all(&root).unwrap();
@@ -152,14 +154,16 @@ fn packing_a_model_without_binarizer_warns_only_outside_windows() {
         root.join("small.p3d"),
     )
     .unwrap();
-    let mut warnings = Warnings::new();
-    PBO::from_directory(&root, &PackOptions::pack(), None, &mut warnings).unwrap();
-    let warned = warnings
-        .warnings()
-        .iter()
-        .any(|w| w.name == Some("non-windows-binarization"));
-    // Windows has a native binarize.exe, so "non-Windows systems" must not be mentioned there.
-    assert_eq!(warned, !cfg!(windows));
+    let warned = |options: &PackOptions| {
+        let mut warnings = Warnings::new();
+        PBO::from_directory(&root, options, None, &mut warnings).unwrap();
+        warnings
+            .warnings()
+            .iter()
+            .any(|w| w.name == Some("non-windows-binarization"))
+    };
+    assert!(!warned(&PackOptions::pack()), "pack warned");
+    assert_eq!(warned(&PackOptions::build()), !cfg!(windows));
 }
 
 fn sign_dir() -> std::path::PathBuf {

@@ -148,9 +148,6 @@ $ dayzmake pack . ../w.pbo -f
 warning: Removed leading/trailing slashes from prefix "/leading/". [prefix-slash]
 warning: Skipping "data/a.txt": an entry named "data\A.txt" was already packed. [duplicate-entry]
 warning: Skipping "data/bad:name.txt": unsafe entry name. [unsafe-path]
-In file data/broken.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]
-In file data/m.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]
-In file data/odol.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]
 In file data/pipe: warning: Skipping a file that is not a regular file (FIFO, device or socket). [unsupported-file]
 ```
 
