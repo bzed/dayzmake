@@ -390,3 +390,17 @@ fn include_chain_at_the_limit_works() {
     let (out, _) = run_file(&root).unwrap();
     assert!(out.contains("x = 1;"));
 }
+
+/// A -> B -> D and A -> C -> D is not a cycle: D is included twice and its content appears twice.
+/// Pins that the include stack is restored after each include (#53).
+#[test]
+fn diamond_include_is_not_a_cycle() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("a.hpp");
+    std::fs::write(&a, "#include \"b.hpp\"\n#include \"c.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("b.hpp"), "#include \"d.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("c.hpp"), "#include \"d.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("d.hpp"), "from_d = 1;\n").unwrap();
+    let (out, _) = run_file(&a).unwrap();
+    assert_eq!(out.matches("from_d = 1;").count(), 2, "{out}");
+}
