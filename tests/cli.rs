@@ -1919,3 +1919,41 @@ fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// #57: the billion-laughs repro with N=30 (2^30 tokens uncapped) fails fast with an error naming the
+/// macro. It runs in a child with a 2 GiB address-space limit, so a regressed cap fails the test
+/// instead of exhausting the machine's memory.
+#[cfg(unix)]
+#[test]
+fn exponential_macro_expansion_fails_fast() {
+    let mut src = String::from("#define E30 x\n");
+    for i in (0..30).rev() {
+        let next = i + 1;
+        src += &[
+            "#define E",
+            &i.to_string(),
+            " E",
+            &next.to_string(),
+            " E",
+            &next.to_string(),
+            "\n",
+        ]
+        .concat();
+    }
+    src.push_str("a = E0;\n");
+    let dir = tempdir_with(&[("e.cpp", &src)]);
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg("ulimit -v 2097152; exec \"$0\" preprocess e.cpp")
+        .arg(env!("CARGO_BIN_EXE_dayzmake"))
+        .current_dir(dir.path());
+    isolate(&mut cmd, home.path());
+    let start = std::time::Instant::now();
+    let out = cmd.output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
+    assert!(err.contains("\"E"), "{err}");
+    assert!(start.elapsed().as_secs() < 5, "took {:?}", start.elapsed());
+}

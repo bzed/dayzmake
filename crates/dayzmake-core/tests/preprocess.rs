@@ -404,3 +404,87 @@ fn diamond_include_is_not_a_cycle() {
     let (out, _) = run_file(&a).unwrap();
     assert_eq!(out.matches("from_d = 1;").count(), 2, "{out}");
 }
+
+/// The billion-laughs pattern: every level doubles the output of the one below.
+fn laughs(n: usize) -> String {
+    let mut s = ["#define E", &n.to_string(), " x\n"].concat();
+    for i in (0..n).rev() {
+        let next = i + 1;
+        s += &[
+            "#define E",
+            &i.to_string(),
+            " E",
+            &next.to_string(),
+            " E",
+            &next.to_string(),
+            "\n",
+        ]
+        .concat();
+    }
+    s.push_str("a = E0;\n");
+    s
+}
+
+/// #57: exponential expansion stops early. N=21 expands to about 2M tokens (a few hundred MB) even if the
+/// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`). with an error naming the macro.
+#[test]
+fn exponential_macro_expansion_is_capped() {
+    let start = std::time::Instant::now();
+    let err = preprocess(laughs(21), None, &[], &mut Warnings::new()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("expands to more than"), "{msg}");
+    assert!(msg.contains("\"E"), "{msg}");
+    assert!(
+        start.elapsed().as_secs_f64() < 1.0,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// The same through macro arguments, which are copied rather than expanded.
+#[test]
+fn exponential_macro_arguments_are_capped() {
+    let mut s = String::from("#define D(x) x x\n");
+    s.push_str("a = ");
+    s.push_str(&"D(".repeat(24));
+    s.push('1');
+    s.push_str(&")".repeat(24));
+    s.push_str(";\n");
+    let err = preprocess(s, None, &[], &mut Warnings::new()).unwrap_err();
+    assert!(err.to_string().contains("expands to more than"), "{err}");
+}
+
+#[test]
+fn moderate_doubling_still_expands() {
+    let (out, _) = preprocess(laughs(12), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.matches('x').count(), 1 << 12);
+}
+
+/// CBA-style helper macros expand as before.
+#[test]
+fn cba_style_macros_still_expand() {
+    let input = "\
+#define PREFIX tag
+#define COMPONENT main
+#define DOUBLES(var1,var2) var1##_##var2
+#define TRIPLES(var1,var2,var3) var1##_##var2##_##var3
+#define ADDON DOUBLES(PREFIX,COMPONENT)
+#define GVAR(var1) DOUBLES(ADDON,var1)
+#define QUOTE(var1) #var1
+#define QGVAR(var1) QUOTE(GVAR(var1))
+#define QQGVAR(var1) QUOTE(QGVAR(var1))
+#define PATHTOF(var1) \\x\\tag\\addons\\main\\var1
+#define QPATHTOF(var1) QUOTE(PATHTOF(var1))
+#define FUNC(var1) TRIPLES(ADDON,fnc,var1)
+#define QFUNC(var1) QUOTE(FUNC(var1))
+a = QGVAR(foo);
+b = QQGVAR(foo);
+c = QPATHTOF(data\\x.paa);
+d = QFUNC(bar);
+";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert!(out.contains("a = \"tag_main_foo\";"), "{out}");
+    assert!(out.contains("b = \""), "{out}");
+    assert!(out.contains("x\\tag\\addons\\main\\data\\x.paa"), "{out}");
+    assert!(out.contains("d = \"tag_main_fnc_bar\";"), "{out}");
+}

@@ -24,6 +24,10 @@ is maintained here.
 
 ## Changes
 
+- Macro expansion is capped: more than 500,000 tokens from one source line, or 16,000,000 for a file with its
+  includes, is an error naming the macro, so an exponential definition chain (billion laughs) fails at once
+  instead of exhausting memory (#57). The largest real config under the author's DayZ trees needs 888 tokens
+  per line and 749,577 per file.
 - Nesting deeper than 128 levels (macro argument parentheses, config classes, config arrays, `__EVAL`
   parentheses and operator chains) is a parse error, not a stack overflow (#54). Parentheses inside macro
   arguments count even in strings, as the preprocessor reads them.
