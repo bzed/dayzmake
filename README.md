@@ -182,7 +182,7 @@ cargo build --release
 Every release lists `SHA256SUMS` and `SHA512SUMS` of its archives, each with a detached GPG signature
 (`SHA256SUMS.asc`, `SHA512SUMS.asc`). The signing key is
 
-```text
+```
 dayzmake release signing key (https://github.com/bzed/dayzmake)
 ed25519, expires 2029-11-15
 6624 41B3 6A57 85AD 18FB  8667 DF75 3D99 D064 EB7E
@@ -239,7 +239,7 @@ See [testharness/README.md](https://github.com/bzed/dayzmake/blob/main/testharne
 <!-- ANCHOR_END: testing -->
 ## Usage
 
-```text
+```
 dayzmake
 
 Usage:
