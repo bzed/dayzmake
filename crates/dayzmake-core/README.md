@@ -30,7 +30,19 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
-### Unreleased (since 0.2.0)
+### 0.2.0
+
+The first published release.
+
+Stricter checks, so code that relied on the old leniency can now get errors:
+
+- `BIPrivateKey::generate` refuses key lengths that are not a multiple of 16, below 384 bits or above 16384 bits, and
+  `sign` refuses keys below 384 bits.
+- Reading a key or a `.bisign` rejects a wrong key blob header (`RSA1`/`RSA2`) or a modulus that is not exactly as wide as the header
+  length says (a private key's length must also be a multiple of 16).
+- `sign` and `verify` recompute the SHA-1 of the PBO and fail with a checksum-mismatch error when its stored trailer
+  differs; `verify` also rejects a signature value that is not smaller than the modulus.
+- OpenSSL is no longer used: key generation, signing and verification are pure Rust.
 
 New public items: `preprocess::IncludeFolders` (folders searched recursively plus folders that are only checked
 directly), `preprocess::preprocess_in`, `Config::read_in`, `Config::from_string_in` and `PackOptions::direct_include_folders`. The recursive
@@ -48,15 +60,3 @@ config classes and arrays, `__EVAL`); an include cycle or include nesting deeper
 `#include`s per `preprocess` call; macro expansion above 500,000 tokens, 64 MiB or 100,000 macro calls per line, or
 16,000,000 tokens, 512 MiB or 100,000 macro calls per file (per `preprocess` call, includes counted). Lines in a disabled `#ifdef` branch are no longer expanded.
 `pbo::is_device_name` recognises the full list of Windows device names.
-
-### 0.2.0
-
-Stricter checks, so code that relied on the old leniency can now get errors:
-
-- `BIPrivateKey::generate` refuses key lengths that are not a multiple of 16, below 384 bits or above 16384 bits, and
-  `sign` refuses keys below 384 bits.
-- Reading a key or a `.bisign` rejects a wrong key blob header (`RSA1`/`RSA2`) or a modulus that is not exactly as wide as the header
-  length says (a private key's length must also be a multiple of 16).
-- `sign` and `verify` recompute the SHA-1 of the PBO and fail with a checksum-mismatch error when its stored trailer
-  differs; `verify` also rejects a signature value that is not smaller than the modulus.
-- OpenSSL is no longer used: key generation, signing and verification are pure Rust.

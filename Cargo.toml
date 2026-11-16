@@ -30,7 +30,7 @@ float_cmp = "deny"
 
 [package]
 name = "dayzmake"
-version = "2.0.0"
+version = "3.0.0"
 description = "DayZ modding tools"
 license.workspace = true
 keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
