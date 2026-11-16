@@ -892,3 +892,18 @@ fn unpack_conflict_check_only_covers_the_selected_entries() {
         "mine"
     );
 }
+
+#[test]
+fn raw_bytes_and_timestamps_of_a_read_pbo_are_available() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a\xffb.txt", b"x", 1_700_000_000)],
+        &[(b"prefix", b"scripts\n\xff")],
+    );
+    let pbo = read(&bytes);
+    let (key, value) = pbo.header_extensions().next().unwrap();
+    assert_eq!(pbo.extension_bytes(key), b"prefix");
+    assert_eq!(pbo.extension_bytes(value), b"scripts\n\xff");
+    let header = &pbo.entry_headers()[0];
+    assert_eq!(pbo.name_bytes(&header.name), b"a\xffb.txt");
+    assert_eq!(header.timestamp, 1_700_000_000);
+}

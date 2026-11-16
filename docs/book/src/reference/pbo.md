@@ -168,7 +168,7 @@ List what a PBO contains, or describe a model.
 <div class="synopsis">
 
 ```text
-dayzmake inspect [-v] [<source>]
+dayzmake inspect [-v] [--json] [<source>]
 ```
 
 </div>
@@ -180,6 +180,7 @@ dayzmake inspect [-v] [<source>]
 | Option | Default | Meaning |
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
+| `--json` | off | PBOs only: print the header as one JSON object (see below). |
 
 Behaviour:
 
@@ -190,8 +191,22 @@ Behaviour:
   and materials with the number of faces that use them, properties and named selections. For a binarized ODOL
   or BMTR file only the format and version are known.
 - Nothing is written; the command only reads.
+- `--json` prints one JSON object on one line, with the fields in this order:
+  - `header_extensions`: an ordered array of `{key, value, key_hex, value_hex}`;
+  - `prefix` and `prefix_hex`: the prefix, or both `null` when the PBO has none;
+  - `entries`: an array of `{name, name_hex, packing, original_size, data_size, timestamp}` in header order.
+
+  `key`, `value`, `prefix` and `name` are the bytes decoded lossily as UTF-8 and only JSON-escaped (no
+  control-character escaping of the text output); the `*_hex` fields are the lowercase hex of the raw bytes. A
+  parser reads the hex, because the text of a name with a byte that is not UTF-8 has lost it. For a model,
+  `--json` is an error: `--json is only supported for PBOs`.
 
 Examples:
+
+```text
+$ dayzmake inspect --json mymod.pbo
+{"header_extensions":[{"key":"prefix","value":"mymod","key_hex":"707265666978","value_hex":"6d796d6f64"}],"prefix":"mymod","prefix_hex":"6d796d6f64","entries":[{"name":"config.bin","name_hex":"636f6e6669672e62696e","packing":0,"original_size":291,"data_size":291,"timestamp":0}]}
+```
 
 ```text
 $ dayzmake inspect mymod.pbo

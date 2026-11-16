@@ -238,8 +238,10 @@ List the entries of a PBO, or describe a model (P3D: format, LODs, textures, sel
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
 | `path` | string | yes | PBO or P3D file. |
+| `json` | boolean | no | PBOs only: return the header as JSON with the raw bytes of names as hex. |
 
-Result: The text of `dayzmake inspect`: the PBO listing or the model description.
+Result: The text of `dayzmake inspect`: the PBO listing or the model description; with `json`, the object of
+`dayzmake inspect --json` (an error for a model).
 
 ### pbo_cat
 

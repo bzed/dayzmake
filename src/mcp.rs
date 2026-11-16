@@ -532,7 +532,14 @@ fn tools() -> Value {
         tool(
             "pbo_inspect",
             "List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).",
-            &[("path", 's', "PBO or P3D file.")],
+            &[
+                ("path", 's', "PBO or P3D file."),
+                (
+                    "json",
+                    'b',
+                    "PBOs only: return the header as JSON with the raw bytes of names as hex."
+                ),
+            ],
             &["path"],
         ),
         tool(
@@ -770,7 +777,7 @@ fn include_folders(args: &Args) -> Result<IncludeFolders, Error> {
 fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
         n if n.starts_with("api_") => api_tool_call(n, args, warnings),
-        "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?),
+        "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?, bool_arg(args, "json")?),
         "pbo_cat" => pbo_cat(args),
         "pbo_unpack" => {
             let (pbo_path, target) = (path_arg(args, "pbo")?, path_arg(args, "target")?);
@@ -982,11 +989,16 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
     Ok(api::answer(&ctx, &query, max_arg(args)?, json, false, warnings)?.join("\n"))
 }
 
-fn pbo_inspect(path: &Path) -> Result<String, Error> {
+fn pbo_inspect(path: &Path, json: bool) -> Result<String, Error> {
     let mut file = open(path)?;
     let mut out = Vec::new();
     if model_magic(&mut file)?.is_some() {
+        if json {
+            return Err(error!("--json is only supported for PBOs."));
+        }
         p3d::cmd_inspect(&mut file, &mut out)?;
+    } else if json {
+        pbo::cmd_inspect_json(&mut file, &mut out)?;
     } else {
         pbo::cmd_inspect(&mut file, &mut out)?;
     }

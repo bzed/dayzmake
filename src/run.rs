@@ -28,7 +28,7 @@ Usage:
     dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    dayzmake inspect [-v] [<source>]
+    dayzmake inspect [-v] [--json] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
@@ -317,7 +317,12 @@ fn run_command(
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
         if model_magic(&mut input)?.is_some() {
+            if args.flag_json {
+                return Err(error!("--json is only supported for PBOs."));
+            }
             p3d::cmd_inspect(&mut input, &mut stdout.writer())
+        } else if args.flag_json {
+            pbo::cmd_inspect_json(&mut input, &mut stdout.writer())
         } else {
             pbo::cmd_inspect(&mut input, &mut stdout.writer())
         }

@@ -373,6 +373,10 @@ expression: "r.result(2)[\"tools\"]"
     "description": "List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).",
     "inputSchema": {
       "properties": {
+        "json": {
+          "description": "PBOs only: return the header as JSON with the raw bytes of names as hex.",
+          "type": "boolean"
+        },
         "path": {
           "description": "PBO or P3D file.",
           "type": "string"

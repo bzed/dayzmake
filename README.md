@@ -34,6 +34,9 @@ is maintained here.
 - `unpack` takes `-x <pattern>` (leave entries out) and `--only <pattern>` (write only matching entries); `-x`
   wins. The MCP tool `pbo_unpack` has the arguments `exclude` and `only`. `UnpackOptions` gains `exclude` and
   `only`, and `dayzmake_core::pbo::entry_selected` is the shared filter (#86).
+- `inspect --json <file.pbo>` prints the PBO header as one JSON object: the header extensions, the prefix and the
+  entries, each name next to the lowercase hex of its raw bytes, so a prefix with a control character or a byte that
+  is not UTF-8 is unambiguous. The MCP tool `pbo_inspect` takes the argument `json`. A model gives an error (#91).
 
 ### 3.0.2
 
@@ -288,7 +291,7 @@ Usage:
     dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    dayzmake inspect [-v] [<source>]
+    dayzmake inspect [-v] [--json] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>

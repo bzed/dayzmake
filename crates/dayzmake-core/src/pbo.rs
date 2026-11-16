@@ -47,6 +47,8 @@ pub struct EntryHeader {
     pub original_size: u32,
     /// The size as stored in the PBO.
     pub data_size: u32,
+    /// The timestamp field of the entry header (Unix time, usually 0).
+    pub timestamp: u32,
 }
 
 /// The header extensions as `(key, value)` pairs and the entry names, both in file order.
@@ -775,6 +777,7 @@ impl PBO {
                 packing_method: h.packing_method,
                 original_size: h.original_size,
                 data_size: h.data_size,
+                timestamp: h.timestamp,
             })
             .collect()
     }
@@ -788,8 +791,11 @@ impl PBO {
             .unwrap_or_else(|| name.as_bytes().to_vec())
     }
 
-    /// Returns the bytes a header extension key or value is stored as.
-    pub(crate) fn extension_bytes(&self, s: &str) -> Vec<u8> {
+    /// Returns the bytes a header extension key or value (as returned by
+    /// [`PBO::header_extensions`]) is stored as in the PBO header; for a string that is not one of
+    /// them, its UTF-8 bytes.
+    #[must_use]
+    pub fn extension_bytes(&self, s: &str) -> Vec<u8> {
         self.raw_extensions
             .get(s)
             .cloned()

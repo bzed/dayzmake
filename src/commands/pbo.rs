@@ -54,6 +54,101 @@ pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(
     Ok(())
 }
 
+/// Writes the header of a PBO to the output as one JSON object (see `docs/book/src/reference/pbo.md`):
+/// the header extensions, the prefix and the entries, each name with its raw bytes as lowercase hex.
+/// Names are decoded lossily as UTF-8 and only JSON-escaped.
+///
+/// # Errors
+///
+/// Returns an error if the PBO cannot be read or the output cannot be written.
+pub fn cmd_inspect_json<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
+    let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
+    let view = |text: &str| {
+        let raw = pbo.extension_bytes(text);
+        (String::from_utf8_lossy(&raw).into_owned(), hex(&raw))
+    };
+    let header_extensions = pbo
+        .header_extensions()
+        .map(|(key, value)| {
+            let (key, key_hex) = view(key);
+            let (value, value_hex) = view(value);
+            JsonExtension {
+                key,
+                value,
+                key_hex,
+                value_hex,
+            }
+        })
+        .collect();
+    let (prefix, prefix_hex) = match pbo.prefix() {
+        Some(prefix) => {
+            let (text, hex) = view(prefix);
+            (Some(text), Some(hex))
+        }
+        None => (None, None),
+    };
+    let entries = pbo
+        .entry_headers()
+        .into_iter()
+        .map(|header| {
+            let raw = pbo.name_bytes(&header.name);
+            JsonEntry {
+                name: String::from_utf8_lossy(&raw).into_owned(),
+                name_hex: hex(&raw),
+                packing: header.packing_method,
+                original_size: header.original_size,
+                data_size: header.data_size,
+                timestamp: header.timestamp,
+            }
+        })
+        .collect();
+    let json = JsonInspect {
+        header_extensions,
+        prefix,
+        prefix_hex,
+        entries,
+    };
+    serde_json::to_writer(&mut *output, &json).map_err(Error::from)?;
+    writeln!(output)
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        // writing to a String cannot fail
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// `inspect --json`; the fields are in the order of the output.
+#[derive(serde::Serialize)]
+struct JsonInspect {
+    header_extensions: Vec<JsonExtension>,
+    prefix: Option<String>,
+    prefix_hex: Option<String>,
+    entries: Vec<JsonEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonExtension {
+    key: String,
+    value: String,
+    key_hex: String,
+    value_hex: String,
+}
+
+#[derive(serde::Serialize)]
+struct JsonEntry {
+    name: String,
+    name_hex: String,
+    packing: u32,
+    original_size: u32,
+    data_size: u32,
+    timestamp: u32,
+}
+
 /// Writes the named entry of the PBO to the output.
 ///
 /// # Errors
