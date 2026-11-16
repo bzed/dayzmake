@@ -60,7 +60,10 @@ fn dxt1_and_dxt5_roundtrip_dimensions() {
         assert_eq!(read.height(), 64);
         assert_eq!(read.compression(), name);
         assert!(read.mipmap_count() >= 1);
-        assert!(read.tagg("GGATSFFO").is_some());
+        assert!(
+            read.tagg("GGATSFFO").is_none(),
+            "the offset tagg is not exposed"
+        );
         assert!(read.tagg("NOSUCH").is_none());
     }
 }
@@ -110,8 +113,8 @@ fn raw_paa(size: u32, format: PaaFormat) -> (Paa, Vec<u8>) {
 fn first_mipmap_width_field(paa: &[u8]) -> u16 {
     let at = paa
         .windows(8)
-        // a read PAA keeps its offset tagg and the writer adds a fresh one; the last one is right
-        .rposition(|w| w == b"GGATSFFO")
+        // a re-written PAA has exactly one offset tagg
+        .position(|w| w == b"GGATSFFO")
         .expect("offset tagg");
     let offset = u32::from_le_bytes(paa[at + 12..at + 16].try_into().expect("4 bytes")) as usize;
     u16::from_le_bytes([paa[offset], paa[offset + 1]])
@@ -246,4 +249,24 @@ fn compressed_paa_decodes_without_a_round_trip() {
     let direct = paa.to_dynamic_image().expect("decodes in memory");
     let read = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("reads back");
     assert_eq!(direct, read.to_dynamic_image().expect("decodes"));
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn rewritten_paa_has_one_offset_tagg() {
+    let blocks = vec![0u8; 8 * 16 * 16];
+    let input = hand_made_paa(
+        &[(b"GGATCXAM", vec![1, 2, 3, 4]), (b"GGATSFFO", vec![0; 64])],
+        &[(64, 64, blocks)],
+    );
+    let first = Paa::read(&mut Cursor::new(input)).expect("reads");
+    let count = |bytes: &[u8]| bytes.windows(8).filter(|w| *w == b"GGATSFFO").count();
+    let again = to_bytes(&first);
+    assert_eq!(count(&again), 1);
+    let second = Paa::read(&mut Cursor::new(again)).expect("reads again");
+    assert_eq!(second.tagg("GGATCXAM"), Some(&[1u8, 2, 3, 4][..]));
+    assert_eq!(
+        first.to_dynamic_image().expect("decodes"),
+        second.to_dynamic_image().expect("decodes")
+    );
 }

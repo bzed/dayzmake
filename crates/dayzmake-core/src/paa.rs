@@ -227,6 +227,8 @@ impl Paa {
     }
 
     /// The data of the tagg called `name`, if the file has one.
+    ///
+    /// The mipmap offset tagg (`GGATSFFO`) is not exposed: [`Paa::write`] generates it.
     #[must_use]
     pub fn tagg(&self, name: &str) -> Option<&[u8]> {
         self.taggs.get(name).map(Vec::as_slice)
@@ -285,7 +287,10 @@ impl Paa {
 
             let data = read_tagg_data(input, &tagg_name)?;
 
-            taggs.insert(tagg_name, data);
+            // the writer regenerates the offset tagg; keeping it would write it twice
+            if tagg_name != OFFS_TAGG {
+                taggs.insert(tagg_name, data);
+            }
         }
 
         let palette_len = input.read_u16::<LittleEndian>()? as usize;
