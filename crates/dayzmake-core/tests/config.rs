@@ -637,6 +637,22 @@ fn damaged_enum_table_is_no_error() {
 }
 
 #[test]
+fn enum_table_ends_at_the_first_name_that_is_no_identifier() {
+    for bad in [&b"\x01"[..], b"a b", b"a-b", b"a\"b", b"", b"\xff\xfe"] {
+        let mut table = b"\x03\0\0\0ok\0\x05\0\0\0".to_vec();
+        table.extend_from_slice(bad);
+        table.extend_from_slice(b"\0\x01\0\0\0fine\0\x02\0\0\0");
+        let c = Config::read_rapified(&mut Cursor::new(bin_with_table(&table))).unwrap();
+        assert_eq!(c.enum_values(), &[("ok".to_string(), 5)], "{bad:?}");
+        assert_eq!(c.to_string().unwrap(), "enum {\n    ok = 5\n};\n");
+    }
+    // a bad first name leaves no block at all
+    let data = bin_with_table(b"\x01\0\0\0\x01\0\x01\0\0\0");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.to_string().unwrap(), "");
+}
+
+#[test]
 fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
     let c = parse("enum { A = 2147483647 };");
     assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);

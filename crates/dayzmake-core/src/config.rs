@@ -316,7 +316,8 @@ peg::parser! {
 }
 
 /// Reads the enum table at the header's `enum_offset`. The class tree is usable without it, so a bad
-/// offset or a cut-short table gives the values read so far, never an error.
+/// offset, a cut-short table or a name that is not a config identifier gives the values read before
+/// it, never an error.
 fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
     let mut out = Vec::new();
     // an unreadable table is not an error: the values read so far are returned
@@ -329,6 +330,14 @@ fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
         for _ in 0..count {
             let name = input.read_cstring()?;
             let value = input.read_i32::<LittleEndian>()?;
+            // the table ends at the first name the config grammar cannot write
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                break;
+            }
             out.push((name, value));
         }
         Ok(())
@@ -1108,10 +1117,13 @@ impl Config {
         output: &mut O,
         options: &WriteOptions,
     ) -> Result<(), Error> {
+        // check everything before the first byte: a block is never half-written
+        for (name, _) in &self.enums {
+            text_name(name, "Enum")?;
+        }
         if !self.enums.is_empty() {
             output.write_all(b"enum {\n")?;
             for (i, (name, value)) in self.enums.iter().enumerate() {
-                text_name(name, "Enum")?;
                 let comma = if i + 1 < self.enums.len() { "," } else { "" };
                 output
                     .write_all(format!("{}{name} = {value}{comma}\n", options.indent).as_bytes())?;
