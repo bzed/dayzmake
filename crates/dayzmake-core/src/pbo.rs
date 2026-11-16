@@ -1607,28 +1607,54 @@ pub struct UnpackOptions {
     pub force: bool,
     /// Extract into `<target>/<prefix>/` instead of `<target>/`.
     pub use_prefix: bool,
-    /// Glob patterns of entries to leave out; see [`entry_selected`]. An entry that matches one is
+    /// Glob patterns of entries to leave out; see [`EntryFilter`]. An entry that matches one is
     /// never written, even when it matches `only`.
     pub exclude: Vec<String>,
-    /// Glob patterns of the entries to write; see [`entry_selected`]. Empty means every entry.
+    /// Glob patterns of the entries to write; see [`EntryFilter`]. Empty means every entry.
     pub only: Vec<String>,
 }
 
-/// Whether the PBO entry `name` passes the `only` and `exclude` glob patterns: it matches at least one
-/// `only` pattern (or `only` is empty) and no `exclude` pattern.
+/// Selects PBO entries by glob pattern: an entry passes when it matches at least one `only` pattern (or
+/// `only` is empty) and no `exclude` pattern.
 ///
 /// `*` stands for any run of characters, as in the `-x` patterns of `pack`. The name is matched with
-/// `/` separators (`\\` is turned into `/`), without the PBO prefix, and ignoring case, like PBO names.
-#[must_use]
-pub fn entry_selected(name: &str, only: &[String], exclude: &[String]) -> bool {
-    let name = name.replace('\\', "/").to_lowercase();
-    let hit = |pattern: &String| matches_glob(&name, &pattern.replace('\\', "/").to_lowercase());
-    (only.is_empty() || only.iter().any(hit)) && !exclude.iter().any(hit)
+/// `/` separators (a `\` is turned into `/`), without the PBO prefix, and ignoring case, like PBO names.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct EntryFilter {
+    only: Vec<String>,
+    exclude: Vec<String>,
+}
+
+impl EntryFilter {
+    /// A filter for the `only` and `exclude` patterns. The patterns are normalised once (lowercase,
+    /// `\` turned into `/`).
+    #[must_use]
+    pub fn new(only: Vec<String>, exclude: Vec<String>) -> Self {
+        let normalise = |patterns: Vec<String>| {
+            patterns
+                .into_iter()
+                .map(|p| p.replace('\\', "/").to_lowercase())
+                .collect()
+        };
+        Self {
+            only: normalise(only),
+            exclude: normalise(exclude),
+        }
+    }
+
+    /// Whether the entry `name` passes the filter.
+    #[must_use]
+    pub fn matches(&self, name: &str) -> bool {
+        let name = name.replace('\\', "/").to_lowercase();
+        let hit = |pattern: &String| matches_glob(&name, pattern);
+        (self.only.is_empty() || self.only.iter().any(hit)) && !self.exclude.iter().any(hit)
+    }
 }
 
 /// Fails when a selected file of `pbo` (or `$PBOPREFIX$`) already exists below `base`. Runs before anything
 /// is written, so a conflict leaves the target untouched.
-fn check_unpack_conflicts(pbo: &PBO, base: &Path, options: &UnpackOptions) -> Result<(), Error> {
+fn check_unpack_conflicts(pbo: &PBO, base: &Path, filter: &EntryFilter) -> Result<(), Error> {
     let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
     let first = prefix
         .into_iter()
@@ -1636,7 +1662,7 @@ fn check_unpack_conflicts(pbo: &PBO, base: &Path, options: &UnpackOptions) -> Re
             pbo.files
                 .keys()
                 .map(String::as_str)
-                .filter(|name| entry_selected(name, &options.only, &options.exclude)),
+                .filter(|name| filter.matches(name)),
         )
         .find(|name| {
             unpack_relative(name).is_some_and(|(relative, _)| {
@@ -1665,8 +1691,9 @@ fn check_unpack_conflicts(pbo: &PBO, base: &Path, options: &UnpackOptions) -> Re
 /// # Errors
 ///
 /// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or, without
-/// `options.force`, a file of the PBO (or `$PBOPREFIX$`) already exists in the target. That check
-/// covers every file and runs before anything is written, so a conflict leaves the target untouched.
+/// `options.force`, a selected file of the PBO (or `$PBOPREFIX$`) already exists in the target. That
+/// check covers the selected entries plus `$PBOPREFIX$` and runs before anything is written, so a
+/// conflict leaves the target untouched.
 pub fn unpack<I: Read>(
     input: &mut I,
     target: &Path,
@@ -1679,13 +1706,14 @@ pub fn unpack<I: Read>(
         ref exclude,
         ref only,
     } = *options;
+    let filter = EntryFilter::new(only.clone(), exclude.clone());
     let output = target;
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     let base = unpack_base(&pbo, output, use_prefix)?;
 
     if !force {
-        check_unpack_conflicts(&pbo, &base, options)?;
+        check_unpack_conflicts(&pbo, &base, &filter)?;
     }
 
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
@@ -1696,7 +1724,7 @@ pub fn unpack<I: Read>(
 
     let mut written: HashSet<String> = HashSet::new();
     for file_name in pbo.files.keys() {
-        if !entry_selected(file_name, only, exclude) {
+        if !filter.matches(file_name) {
             continue;
         }
         if pbo.raw_names.contains_key(file_name) {

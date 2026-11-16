@@ -1020,3 +1020,14 @@ fn set_header_extension_keeps_the_stored_bytes_of_the_others() {
         ]
     );
 }
+
+#[test]
+fn entry_filter_normalises_patterns_and_names() {
+    use dayzmake_core::pbo::EntryFilter;
+    let filter = EntryFilter::new(vec!["Scripts\\*.C".into()], vec!["*\\skip.c".into()]);
+    assert!(filter.matches("scripts/a.c"));
+    assert!(filter.matches("SCRIPTS\\A.C"));
+    assert!(!filter.matches("scripts/skip.c"));
+    assert!(!filter.matches("data/a.c"));
+    assert!(EntryFilter::default().matches("anything"));
+}

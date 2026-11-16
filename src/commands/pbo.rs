@@ -178,8 +178,8 @@ fn parse_header_extensions(headerext: &[String]) -> Result<Vec<(String, String)>
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
-/// file exists without `force`.
+/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a selected
+/// target file exists without `options.force`.
 pub fn cmd_unpack<I: Read>(
     input: &mut I,
     output: &Path,

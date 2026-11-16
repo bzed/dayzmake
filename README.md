@@ -41,7 +41,7 @@ is maintained here.
   takes `context` and `lines` (#90).
 - `unpack` takes `-x <pattern>` (leave entries out) and `--only <pattern>` (write only matching entries); `-x`
   wins. The MCP tool `pbo_unpack` has the arguments `exclude` and `only`. `UnpackOptions` gains `exclude` and
-  `only`, and `dayzmake_core::pbo::entry_selected` is the shared filter (#86).
+  `only`, and `dayzmake_core::pbo::EntryFilter` is the shared filter (#86).
 - `inspect --json <file.pbo>` prints the PBO header as one JSON object: the header extensions, the prefix and the
   entries, each name next to the lowercase hex of its raw bytes, so a prefix with a control character or a byte that
   is not UTF-8 is unambiguous. The MCP tool `pbo_inspect` takes the argument `json`. A model gives an error (#91).
