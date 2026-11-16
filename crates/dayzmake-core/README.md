@@ -30,6 +30,11 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
+### Unreleased
+
+- `config::WriteOptions` and `Config::write_with` write a config with a chosen indentation (#69). `Config::write`
+  is unchanged (four spaces).
+
 ### 0.2.1
 
 - `PBO::from_directory` with `PackOptions::pack()` no longer raises the `non-windows-binarization` warning for

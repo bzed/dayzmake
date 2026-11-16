@@ -2123,3 +2123,27 @@ fn working_directory_include_is_checked_directly_not_walked() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out.trim(), "a = 2;");
 }
+
+#[test]
+fn derapify_indent_option() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "c.cpp", "class A { x = 1; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, out, err) = dayzmake(&["derapify", "-d", "  ", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("\n  x = 1;"), "{out}");
+    assert!(!out.contains("\n   x = 1;"), "{out}");
+}
+
+#[test]
+fn derapify_rejects_bad_indent() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "c.cpp", "class A { x = 1; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["derapify", "-d", "x", "c.bin", "out.cpp"], dir.path());
+    assert_ne!(code, 0);
+    assert!(err.contains("indent"), "{err}");
+    assert!(!dir.path().join("out.cpp").exists());
+}

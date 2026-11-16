@@ -236,7 +236,11 @@ fn run_command(
         output.commit()
     } else if args.cmd_derapify {
         let mut output = get_output(args, stdout)?;
-        config::cmd_derapify(&mut get_input(args)?, &mut output)?;
+        config::cmd_derapify(
+            &mut get_input(args)?,
+            &mut output,
+            args.flag_indent.as_deref().unwrap_or("    "),
+        )?;
         output.commit()
     } else if args.cmd_preprocess {
         let mut output = get_output(args, stdout)?;

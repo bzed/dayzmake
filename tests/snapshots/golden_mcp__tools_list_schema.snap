@@ -590,6 +590,10 @@ expression: "r.result(2)[\"tools\"]"
           "description": "Overwrite existing target files.",
           "type": "boolean"
         },
+        "indent": {
+          "description": "Indentation per level: spaces and tabs only, default four spaces.",
+          "type": "string"
+        },
         "source": {
           "description": "Rapified config.",
           "type": "string"

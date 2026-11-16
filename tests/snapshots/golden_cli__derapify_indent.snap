@@ -3,25 +3,25 @@ source: tests/golden_cli.rs
 expression: "String::from_utf8_lossy(&e.read(\"out.cpp\"))"
 ---
 class CfgPatches {
-    class golden_addon {
-        units[] = {};
-        weapons[] = {"golden_a", "golden_b"};
-        requiredAddons[] = {"DZ_Data"};
-    };
+	class golden_addon {
+		units[] = {};
+		weapons[] = {"golden_a", "golden_b"};
+		requiredAddons[] = {"DZ_Data"};
+	};
 };
 class Base;
 class CfgGolden {
-    class Parent {
-        scale = "((2) * (3))";
-        sum = 3;
-        ratio = 0.75;
-        offset = -5;
-        name = "parent";
-    };
-    class Child: Parent {
-        name = "child";
-        delete Obsolete;
-        label = "unquotedvalue";
-        mode = 1;
-    };
+	class Parent {
+		scale = "((2) * (3))";
+		sum = 3;
+		ratio = 0.75;
+		offset = -5;
+		name = "parent";
+	};
+	class Child: Parent {
+		name = "child";
+		delete Obsolete;
+		label = "unquotedvalue";
+		mode = 1;
+	};
 };

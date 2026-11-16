@@ -323,6 +323,7 @@ Convert a rapified config back to text.
 | `source` | string | yes | Rapified config. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `target` | string | no | Write the text here; absent: return it. |
+| `indent` | string | no | Indentation per level: spaces and tabs only, at most 64 characters, default four spaces. |
 
 Result: The text of the config, or `wrote <target> (<n> bytes)` with `target`.
 

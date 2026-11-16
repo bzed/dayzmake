@@ -870,3 +870,41 @@ fn mcp_verify_and_sign_reject_a_pbo_with_a_stale_trailer() {
         assert!(text(reply).contains("checksum mismatch"), "{}", text(reply));
     }
 }
+
+#[test]
+fn mcp_config_derapify_indent() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    fs::write(p.join("c.cpp"), "class A { x = 1; };\n").expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "config_rapify",
+                &json!({"source":"c.cpp","target":"c.bin"}),
+            ),
+            call(
+                2,
+                "config_derapify",
+                &json!({"source":"c.bin","indent":"\t"}),
+            ),
+            call(
+                3,
+                "config_derapify",
+                &json!({"source":"c.bin","indent":"x"}),
+            ),
+        ],
+        p,
+    );
+    assert!(
+        text(&r.replies[1]).contains("\n\tx = 1;"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(is_error(&r.replies[2]));
+    assert!(
+        text(&r.replies[2]).contains("indent"),
+        "{}",
+        text(&r.replies[2])
+    );
+}

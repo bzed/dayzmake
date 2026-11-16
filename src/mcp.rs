@@ -591,6 +591,11 @@ fn tools() -> Value {
             &[
                 ("source", 's', "Rapified config."),
                 ("target", 's', "Write the text here; absent: return it."),
+                (
+                    "indent",
+                    's',
+                    "Indentation per level: spaces and tabs only, default four spaces.",
+                ),
                 FORCE_ARG,
             ],
             &["source"],
@@ -789,7 +794,8 @@ fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         }
         "config_derapify" => {
             let mut out = Vec::new();
-            config::cmd_derapify(&mut open(&path_arg(args, "source")?)?, &mut out)?;
+            let indent = opt_str(args, "indent")?.unwrap_or_else(|| "    ".to_string());
+            config::cmd_derapify(&mut open(&path_arg(args, "source")?)?, &mut out, &indent)?;
             text_or_target(args, &out)
         }
         "config_preprocess" => {
