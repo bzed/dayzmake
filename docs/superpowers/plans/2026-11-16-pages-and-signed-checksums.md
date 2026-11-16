@@ -102,6 +102,66 @@ Syntax highlighting: keep mdBook's highlight.js but override the token colours t
 4. A release run where the signing secrets are missing or the key is expired: the job must fail, not publish unsigned checksums.
 5. Checksum files listing themselves or the `.asc` files, or paths with a `dist/` prefix: `sha256sum -c` run inside the download folder must pass.
 
+## Amendment (2026-11-16): real reference documentation, not only the README
+
+The user asked for reference documentation that is better than the README. Task 1 stays as written for the
+pages that really are the README (introduction + history, building, testing, changes). **Task 1b** (after Task 1,
+before Task 2) replaces the README-include chapters for usage, API index, MCP, models and library with
+hand-written guides and a reference section. README stays the short overview; the book is the full manual.
+
+Book structure after Task 1b (`SUMMARY.md`, mdBook part titles with `# ` lines):
+
+- Introduction (README include) · Building from source (README include) · Verifying downloads (Task 4)
+- **Guides** (task-oriented, each a worked example from an empty folder to a result):
+  `guides/first-mod.md` (folder layout, `$PBOPREFIX$`, `config.cpp`, `build`, `keygen`, `sign`/`-k`, `verify`,
+  the Workshop `@mod/addons`+`keys` layout), `guides/configs.md` (preprocess, includes and `-i`, rapify/derapify),
+  `guides/binarize-linux.md` (DayZ Tools under Proton, `--proton-binarize`, the environment variables),
+  `guides/textures.md` (img2paa/paa2img, types, compression, checking model textures with `inspect`),
+  `guides/script-api.md` (the `api` commands, mods, cache, `--json` with `jq` examples),
+  `guides/mcp.md` (registering `dayzmake mcp` in Claude Code and other MCP clients, example prompts)
+- **Reference**:
+  `reference/cli.md` (global synopsis, common options, exit status, stdin/stdout use of `-`/omitted paths if
+  supported) and one page per command group: `reference/config.md` (rapify, preprocess, derapify),
+  `reference/binarize.md`, `reference/pbo.md` (build, pack, inspect, unpack, cat), `reference/signing.md`
+  (keygen, sign, verify; key/signature file formats and v2/v3), `reference/paa.md` (paa2img, img2paa),
+  `reference/api.md` (every `api` subcommand), `reference/mcp.md` (the `mcp` command and **every MCP tool**:
+  purpose, input schema as a table, result shape, an example request/response pair);
+  `reference/environment.md` (every environment variable and path dayzmake reads: `BIOUTPUT`, `STEAM_ROOT`,
+  `HOME`, `DAYZ_TOOLS`, `PROTON`, the API index cache location, Steam library discovery, Windows registry use);
+  `reference/warnings.md` (every warning name usable with `-w`, what triggers it, example);
+  `reference/header-extensions.md` (`-e key=value`, `product=dayz`, prefix handling, exclude globs and defaults);
+  `reference/library.md` (README library include + links to `core/dayzmake_core/index.html` and docs.rs)
+- Testing (README include) · Changes (README include)
+
+Each command section (`## dayzmake <cmd>` / `## dayzmake api <sub>`) has, in this order: one-sentence purpose,
+the synopsis line copied from `USAGE` in a `text` fence wrapped in `<div class="synopsis">`, an arguments table,
+an options table (every option the synopsis line names, with its default), *Behaviour* (what is read, what is
+written, overwrite rules, validation that can reject input), *Examples* (at least one, real output), and
+*See also* links. Facts come from reading `src/run.rs`, `src/commands/`, `src/mcp.rs`, `src/api/` and
+`crates/dayzmake-core/src/`, never from guessing; every example command is run on synthetic input
+(`tests/fixtures/` or files you create) in a `mktemp -d` folder and its real output pasted (shorten long output
+with an explicit `…` line).
+
+Tests (in `tests/book_sources.rs`, written first, red then green):
+- `every_command_has_a_reference_section`: for every `dayzmake <cmd>` / `dayzmake api <sub>` usage line in
+  `dayzmake::run::USAGE`, some `docs/book/src/reference/*.md` has the heading `## dayzmake <cmd>` (resp.
+  `## dayzmake api <sub>`). Message names the missing command.
+- `every_option_is_documented_with_its_command`: every `-x`/`--long` option on a usage line appears (as
+  `` `--long` `` or `` `-x` ``) inside that command's section. Message names command and option.
+- `every_mcp_tool_is_documented`: every tool name the MCP server lists (use the public function in `src/mcp.rs`
+  that builds the `tools/list` result, or drive `tools/list` through the same helper `tests/mcp.rs` uses) has the
+  heading `### <tool_name>` in `reference/mcp.md`.
+- `every_warning_is_documented`: every warning name defined in `dayzmake-core` (find the canonical list; if
+  there is none, read the names from the source in the test and say so in a comment) appears as a heading in
+  `reference/warnings.md`.
+- Replace `every_readme_section_is_in_the_book` with `every_readme_section_is_in_the_book_or_mapped`: each README
+  `## ` heading is either included through an anchor or listed in a `const README_COVERED_BY: &[(&str, &str)]`
+  table (heading → book page) in the test, and that page exists.
+- Keep `summary_entries_exist`, `includes_resolve`, `included_readme_links_are_absolute`.
+
+Commit: `docs: guides and command reference for the HTML documentation`.
+Review Focus addition: 6. A new CLI option or MCP tool added later without docs must fail `make test`.
+
 ---
 
 ### Task 1: Book skeleton, README anchors and the consistency test

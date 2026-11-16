@@ -1,0 +1,13 @@
+[book]
+title = "dayzmake"
+description = "DayZ modding tools: PBO packing, config rapification, model binarization, PAA conversion and signatures."
+authors = ["dayzmake contributors"]
+language = "en"
+src = "src"
+
+[output.html]
+additional-css = ["theme/dayzmake.css"]
+default-theme = "light"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/bzed/dayzmake"
+site-url = "/dayzmake/"
