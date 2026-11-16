@@ -32,6 +32,8 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
+  `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
 - `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per
   LOD, vertex and face counts, textures, materials, proxies, selections and properties. Other versions are an error.
 - `Paa::read` accepts the formats `0x4444` (`"RGBA4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and

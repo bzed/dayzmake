@@ -92,7 +92,9 @@ peg::parser! {
     pub(crate) grammar config_grammar(warnings: &mut ConfigWarnings, ctx: &mut EvalCtx) for str {
         rule whitespace() = quiet!{ [' ' | '\r' | '\n' | '\t']+ }
 
-        rule float() -> f32 = f:$((['-' | '+'])? ['0'..='9']* "." ['0'..='9']+) {?
+        rule exponent() = ['e' | 'E'] ['-' | '+']? ['0'..='9']+
+
+        rule float() -> f32 = f:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) {?
             f.parse::<f32>()
                 .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
         }

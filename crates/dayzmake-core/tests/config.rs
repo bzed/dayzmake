@@ -652,3 +652,80 @@ fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
         .is_err()
     );
 }
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn parse_a(src: &str) -> (Config, Warnings) {
+    let mut w = Warnings::default();
+    let config = Config::from_string(src.to_string(), None, &[], &mut w).unwrap();
+    (config, w)
+}
+
+#[expect(clippy::unwrap_used, clippy::panic, reason = "tests fail by panicking")]
+fn entry_a<'a>(config: &'a Config, name: &str) -> &'a ConfigEntry {
+    let Some(ConfigEntry::ClassEntry(c)) = config.root().get("A") else {
+        panic!("no class A");
+    };
+    c.get(name).unwrap()
+}
+
+#[test]
+fn exponent_floats_are_floats() {
+    let src = "class A { a = 1e-5; b = 1.5E+3; c = -2.5e-7; d = 3.162277e-5; e = 7; f = 1.0; g = 0x10; };";
+    let (config, w) = parse_a(src);
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    for (n, v) in [
+        ("a", 1e-5_f32),
+        ("b", 1500.0),
+        ("c", -2.5e-7),
+        ("d", 3.162_277e-5),
+    ] {
+        assert!(
+            matches!(entry_a(&config, n), ConfigEntry::FloatEntry(f) if f.to_bits() == v.to_bits()),
+            "{n}"
+        );
+    }
+    assert!(matches!(entry_a(&config, "e"), ConfigEntry::IntEntry(7)));
+    assert!(matches!(entry_a(&config, "f"), ConfigEntry::FloatEntry(_)));
+    assert!(matches!(entry_a(&config, "g"), ConfigEntry::IntEntry(16)));
+}
+
+#[test]
+fn exponent_floats_in_arrays_are_floats() {
+    let (config, w) = parse_a("class A { x[] = {1e-5, 1.5E+3, -2.5e-7, 3.162277e-5, 4}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "x") else {
+        panic!("not an array");
+    };
+    let kinds: Vec<bool> = a
+        .elements()
+        .iter()
+        .map(|e| matches!(e, ConfigArrayElement::FloatElement(_)))
+        .collect();
+    assert_eq!(kinds, [true, true, true, true, false]);
+}
+
+#[test]
+fn malformed_exponents_stay_strings() {
+    let (config, _) = parse_a("class A { a = 1e5x; b = e5; c = 1e; d[] = {1e5x, e5, 1e}; };");
+    for n in ["a", "b", "c"] {
+        assert!(
+            matches!(entry_a(&config, n), ConfigEntry::StringEntry(_)),
+            "{n}"
+        );
+    }
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "d") else {
+        panic!("not an array");
+    };
+    assert!(
+        a.elements()
+            .iter()
+            .all(|e| matches!(e, ConfigArrayElement::StringElement(_)))
+    );
+}
+
+#[test]
+fn derapified_exponent_float_roundtrips() {
+    let first = derapify(rapify_src("class A { x = 0.00003162277; };"));
+    let second = derapify(rapify_src(&first));
+    assert_eq!(first, second);
+}
