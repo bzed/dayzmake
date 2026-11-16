@@ -24,6 +24,25 @@ is maintained here.
 
 ## Changes
 
+- Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose
+  expansion is empty (`#define E(x)` with `E(A)E(A)` levels) fails like the others; at most 100,000 macro calls
+  per line, real configs need at most 34 (#59).
+- At most 10,000 `#include`s are processed per `preprocess` call (nested ones and repeated inclusions count), so an
+  exponential include fan-out fails at once; real configs under the author's trees use at most 1 (#60).
+- Lines in a disabled `#ifdef`/`#ifndef` branch are skipped before any macro expansion, so they cannot raise macro
+  errors or cost time (#61).
+- All Windows device names are recognised in PBO entry names and output targets: `COM0`-`COM9` and `LPT0`-`LPT9`
+  also with the superscript digits (`COM¹`), `CONIN$` and `CONOUT$`, in any case, with or without an extension
+  (#62).
+- `pack` and `build` recognise their own output by file identity (device and inode, or volume and file index), so
+  `M\OUT.PBO` over an existing `m\out.pbo` on a case-insensitive file system is never packed into itself (#37).
+- An existing regular file with a device-like name (`NUL`, `COM1`, reached through a verbatim path) is not
+  overwritten in place and needs `--force` like any file (#40); a new target with such a name can still be created
+  (#45).
+- `unpack` warns about a leading separator only for entries it extracts, and `build`'s duplicate-entry warning names
+  the stored entry (`config.bin`, `m.p3d`) it kept (#41).
+- A closed stderr no longer panics: usage and other errors still end with their normal exit status (1, or 0 with
+  only warnings) instead of 101 (#43).
 - Macro expansion is capped: a source line that makes expansion copy more than 500,000 tokens, or a file (with its
   includes) more than 16,000,000, is an error naming the macro, so an exponential definition chain (billion
   laughs) fails at once instead of exhausting memory (#57). The counters measure copying work, re-counted at each

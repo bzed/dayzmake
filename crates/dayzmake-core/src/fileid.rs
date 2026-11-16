@@ -35,8 +35,9 @@ impl PartialEq for FileId {
 }
 
 impl FileId {
-    /// The identity of the file at `path` (symlinks are followed), or `None` when it cannot be opened (missing,
-    /// removed meanwhile, no permission) or is neither a regular file nor a folder (a FIFO or device is never opened). A file without an identity is never the same as another one.
+    /// The identity of the file at `path` (symlinks are followed), or `None` when it cannot be opened
+    /// (missing, removed meanwhile, no permission) or is neither a regular file nor a folder (a FIFO or
+    /// device is never opened). A file without an identity is never the same as another one.
     #[must_use]
     pub fn of(path: &Path) -> Option<FileId> {
         // opening a FIFO or a device can block, so only regular files and folders are opened
