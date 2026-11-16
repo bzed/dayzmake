@@ -1,4 +1,8 @@
 //! Tests that drive the built `dayzmake` binary.
+#[cfg(unix)]
+#[path = "../crates/dayzmake-core/tests/support/mod.rs"]
+mod support;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -782,6 +786,122 @@ fn build_writes_to_a_windows_device_name_directly() {
     assert_eq!(left, ["m"], "no temp file or NUL file is left");
 }
 
+/// #62: a target named like one of the newer device names is written as a device, not as a file.
+#[cfg(windows)]
+#[test]
+fn build_writes_to_a_conout_device_name_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "CONOUT$"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(!dir.path().join("CONOUT$").exists());
+}
+
+/// A regular file reached under a device name through a verbatim path (`\\?\C:\tmp\NUL`).
+#[cfg(windows)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn verbatim_nul_file(dir: &std::path::Path) -> String {
+    let verbatim = format!(r"\\?\{}\NUL", dir.display());
+    std::fs::write(&verbatim, vec![b'x'; 100_000]).unwrap();
+    verbatim
+}
+
+/// Whether `bytes` start like a PBO (an empty first name, then the `sreV` product entry).
+#[cfg(windows)]
+fn looks_like_a_pbo(bytes: &[u8]) -> bool {
+    bytes.windows(4).take(8).any(|w| w == b"sreV")
+}
+
+#[cfg(windows)]
+#[test]
+fn build_refuses_a_regular_file_with_a_device_name_without_force() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let (code, _, err) = dayzmake(&["build", "m", &target], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(std::fs::read(&target).unwrap(), vec![b'x'; 100_000]);
+}
+
+#[cfg(windows)]
+#[test]
+fn build_force_replaces_and_truncates_a_regular_file_with_a_device_name() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let (code, _, err) = dayzmake(&["build", "--force", "m", &target], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let written = std::fs::read(&target).unwrap();
+    assert!(looks_like_a_pbo(&written), "not a PBO");
+    assert!(written.len() < 100_000, "the old tail is gone");
+}
+
+#[cfg(windows)]
+#[test]
+fn build_creates_a_new_target_named_like_a_device() {
+    // does this Windows treat `nul.probe` as a file? (older ones treat reserved names with any extension as devices)
+    let scratch = tempfile::tempdir().unwrap();
+    let names_with_an_extension_are_files = std::fs::File::create(scratch.path().join("nul.probe"))
+        .is_ok()
+        && std::fs::read_dir(scratch.path()).unwrap().count() == 1;
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "aux.pbo"], dir.path());
+    if names_with_an_extension_are_files {
+        assert_eq!(code, 0, "{err}");
+        let bytes = std::fs::read(dir.path().join("aux.pbo")).unwrap();
+        assert!(looks_like_a_pbo(&bytes), "not a PBO");
+    } else if code != 0 {
+        // the device took the name, but the target is not reported as missing
+        let lower = err.to_lowercase();
+        assert!(
+            !lower.contains("not found") && !lower.contains("cannot find"),
+            "{err}"
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn build_writes_to_con_in_place() {
+    // without a console (a CI runner with redirected handles) CON cannot be opened: nothing to test
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open("CONOUT$")
+        .is_err()
+    {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "CON"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let left: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["m"], "no temp file or CON file is left");
+}
+
+#[cfg(windows)]
+#[test]
+fn build_reports_a_read_only_regular_file_with_a_device_name_as_existing() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let target = verbatim_nul_file(dir.path());
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    permissions.set_readonly(true);
+    std::fs::set_permissions(&target, permissions).unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", &target], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("already exists"), "{err}");
+    let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+    #[expect(clippy::permissions_set_readonly_false, reason = "test cleanup")]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(&target, permissions).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn build_force_replaces_a_read_only_target_and_keeps_it_read_only() {
@@ -1471,6 +1591,46 @@ fn build_prefers_the_p3do_over_a_plain_p3d() {
 
 #[cfg(unix)]
 #[test]
+fn build_replace_warning_names_the_generated_entry_not_the_plain_spelling() {
+    // #41: the skipped plain file keeps its spelling, the entry named is the one that is stored
+    let dir = tempdir_with(&[
+        ("mod/config.cpp", "class CfgPatches{class A{units[]={};};};"),
+        ("mod/Config.bin", "stale"),
+        ("mod/M.p3do", "from-p3do"),
+        ("mod/m.P3D", "plain"),
+    ]);
+    let (code, _, err) = dayzmake(&["build", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains(
+            "Skipping \"Config.bin\": the entry \"config.bin\" is generated from \"config.cpp\""
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("Skipping \"m.P3D\": the entry \"M.p3d\" is generated from \"M.p3do\""),
+        "{err}"
+    );
+}
+
+#[test]
+fn build_skips_a_prebinarized_plain_p3d_next_to_a_p3do_without_inspecting_it() {
+    // #41: the plain file is replaced, so it is neither inspected nor reported as pre-binarized
+    let dir = tempdir_with(&[("m/config.cpp", "class A{x=1;};")]);
+    std::fs::write(dir.path().join("m/m.p3d"), b"ODOL\x31\0\0\0 model").unwrap();
+    std::fs::write(dir.path().join("m/m.p3do"), b"from-p3do").unwrap();
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(!err.contains("prebinarized-file"), "{err}");
+    assert!(!err.contains("In file m.p3d"), "{err}");
+    let (code, out, err) = dayzmake(&["cat", "out.pbo", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "from-p3do");
+}
+
+#[cfg(unix)]
+#[test]
 fn pack_names_a_dangling_symlink_in_the_error() {
     let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
     let modf = dir.path().join("mod");
@@ -1530,4 +1690,381 @@ fn build_warns_when_p3d_and_p3do_collide_and_renames_p3do() {
     let (_, out, _) = dayzmake(&["inspect", "out.pbo"], dir.path());
     assert_eq!(out.matches("a.p3d").count(), 1, "{out}");
     assert!(out.contains("b.p3d") && !out.contains("p3do"), "{out}");
+}
+
+#[test]
+fn pack_force_over_the_output_spelled_in_another_case_does_not_pack_the_old_output() {
+    // #37: on a case-insensitive file system (Windows, macOS default) `OUT.PBO` is `out.pbo`; elsewhere the
+    // probe fails and there is nothing to test
+    let dir = tempdir_with(&[("mod/config.cpp", "class A{x=1;};")]);
+    let modf = dir.path().join("mod");
+    let (code, _, err) = dayzmake(&["pack", ".", "out.pbo"], &modf);
+    assert_eq!(code, 0, "{err}");
+    if !modf.join("OUT.PBO").exists() {
+        return;
+    }
+    let (code, _, err) = dayzmake(&["pack", ".", "OUT.PBO", "--force"], &modf);
+    assert_eq!(code, 0, "{err}");
+    let (_, out, _) = dayzmake(&["inspect", "OUT.PBO"], &modf);
+    assert!(out.contains("config.cpp"), "{out}");
+    assert!(!out.to_lowercase().contains("out.pbo"), "{out}");
+}
+
+/// Runs `dayzmake <args>` in `cwd` with stdout redirected to the file `out`, like `dayzmake ... > out`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn dayzmake_to_file(args: &[&str], cwd: &Path, out: &Path) -> i32 {
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(std::fs::File::create(out).unwrap());
+    isolate(&mut cmd, home.path());
+    cmd.status().unwrap().code().unwrap_or(-1)
+}
+
+#[test]
+fn pack_and_build_leave_a_redirected_stdout_out_of_the_pbo() {
+    for cmd in ["pack", "build"] {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("m");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), "hi").unwrap();
+        let out = src.join("out.pbo");
+        assert_eq!(dayzmake_to_file(&[cmd, "m"], dir.path(), &out), 0, "{cmd}");
+        let (code, listing, err) = dayzmake(&["inspect", "m/out.pbo"], dir.path());
+        assert_eq!(code, 0, "{cmd}: {err}");
+        assert!(listing.contains("a.txt"), "{cmd}: {listing}");
+        assert!(!listing.contains("out.pbo"), "{cmd}: {listing}");
+    }
+}
+
+#[test]
+fn pack_with_stdout_to_a_pipe_or_null_packs_every_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("m");
+    std::fs::create_dir(&src).unwrap();
+    std::fs::write(src.join("a.txt"), "hi").unwrap();
+    std::fs::write(src.join("b.txt"), "yo").unwrap();
+    // a pipe: dayzmake_raw captures stdout through one
+    let (code, out, err) = dayzmake_raw(&["pack", "m"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.windows(5).any(|w| w == b"a.txt") && out.windows(5).any(|w| w == b"b.txt"));
+    // /dev/null
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(["pack", "m"])
+        .current_dir(dir.path())
+        .stdout(std::process::Stdio::null());
+    isolate(&mut cmd, home.path());
+    assert_eq!(cmd.status().unwrap().code(), Some(0));
+}
+
+/// Packs a mod with one 1 MiB file (more than a pipe buffer holds) into `pbo`.
+#[cfg(unix)]
+fn big_pbo(dir: &Path) {
+    let big = "x".repeat(1 << 20);
+    write(dir, "mod/big.txt", &big);
+    write(dir, "mod/config.cpp", "class A{x=1;};");
+    let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir);
+    assert_eq!(code, 0, "{err}");
+}
+
+/// Runs `args` with stdout a pipe: reads one chunk, drops the read end while the child still has output to
+/// write, and returns (exit code, stderr). The child blocks on the full pipe until the read end goes away,
+/// so no timing is involved.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn run_with_closed_stdout(args: &[&str], cwd: &Path) -> (i32, String) {
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let mut child = cmd.spawn().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut first = [0u8; 16];
+    stdout.read_exact(&mut first).unwrap();
+    drop(stdout);
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_ends_cat_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    big_pbo(dir.path());
+    let (code, err) = run_with_closed_stdout(&["cat", "out.pbo", "big.txt"], dir.path());
+    assert!(!err.contains("error"), "{err}");
+    assert_eq!(code, 0, "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_ends_inspect_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    // a listing longer than a pipe buffer
+    for i in 0..2000 {
+        write(dir.path(), &format!("mod/{}{i}.txt", "n".repeat(120)), "x");
+    }
+    let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, err) = run_with_closed_stdout(&["inspect", "out.pbo"], dir.path());
+    assert!(!err.contains("error"), "{err}");
+    assert_eq!(code, 0, "{err}");
+}
+
+/// Runs `args` in `cwd` with stdout discarded and stderr a pipe whose read end is already closed.
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn run_with_closed_stderr(args: &[&str], cwd: &Path) -> Option<i32> {
+    use std::process::Stdio;
+
+    let home = tempfile::tempdir().unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(writer);
+    isolate(&mut cmd, home.path());
+    cmd.status().unwrap().code()
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_still_fails() {
+    // the error line cannot be written; the exit status stays 1 and nothing panics
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        run_with_closed_stderr(&["inspect", "nope.pbo"], dir.path()),
+        Some(1)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_with_a_usage_error_still_exits_1() {
+    // docopt's own error exit would panic on the closed pipe
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(run_with_closed_stderr(&["--bogus"], dir.path()), Some(1));
+    assert_eq!(run_with_closed_stderr(&["build"], dir.path()), Some(1));
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stderr_pipe_does_not_fail_a_command_with_warnings() {
+    // an unpacked entry with a leading separator makes unpack warn (leading-separator)
+    let dir = tempfile::tempdir().unwrap();
+    let pbo = support::raw_pbo(&[("\\scripts\\a.c", b"a")], &[]);
+    std::fs::write(dir.path().join("in.pbo"), pbo).unwrap();
+    assert_eq!(
+        run_with_closed_stderr(&["unpack", "in.pbo", "target"], dir.path()),
+        Some(0)
+    );
+    assert!(dir.path().join("target/scripts/a.c").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    big_pbo(dir.path());
+    let fifo = dir.path().join("sink");
+    let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+    assert!(made.success());
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dayzmake"));
+    cmd.args(["pack", "-f", "mod", "sink"])
+        .current_dir(dir.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    isolate(&mut cmd, home.path());
+    let mut child = cmd.spawn().unwrap();
+    // open the read end without blocking, retrying until the child has opened its end; a child that
+    // failed first ends the wait instead of blocking forever
+    // O_NONBLOCK: 0o4000 on Linux, 4 on the BSDs and macOS
+    let o_nonblock = if cfg!(target_os = "linux") { 0o4000 } else { 4 };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(o_nonblock)
+        .open(&fifo)
+        .unwrap();
+    let mut first = [0u8; 16];
+    loop {
+        match reader.read(&mut first) {
+            Ok(n) if n > 0 => break,
+            // no writer yet (0) or no data yet (WouldBlock): retry unless the child is gone or time is up
+            Ok(_) | Err(_) => {
+                assert!(
+                    child.try_wait().unwrap().is_none(),
+                    "the child ended before writing"
+                );
+                assert!(std::time::Instant::now() < deadline, "timed out");
+                std::thread::yield_now();
+            }
+        }
+    }
+    drop(reader);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Runs `dayzmake preprocess e.cpp` on the files in a child with a 2 GiB address-space limit and a 30 s
+/// deadline (`timeout` kills it, exit 124), so a regressed cap fails the test instead of exhausting the
+/// machine. Returns (exit code, stderr); `None` when the platform has no `ulimit -v` or `timeout` (the
+/// child exits 99 before running dayzmake): the test is skipped, never run unlimited.
+#[cfg(unix)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test helper: failures panic, the skip is reported on stderr"
+)]
+fn preprocess_limited(files: &[(&str, &str)]) -> Option<(Option<i32>, String)> {
+    let dir = tempdir_with(files);
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(
+            "ulimit -v 2097152 || exit 99; command -v timeout >/dev/null || exit 99; \
+             exec timeout 30 \"$0\" preprocess e.cpp",
+        )
+        .arg(env!("CARGO_BIN_EXE_dayzmake"))
+        .current_dir(dir.path());
+    isolate(&mut cmd, home.path());
+    let out = cmd.output().unwrap();
+    if out.status.code() == Some(99) {
+        eprintln!("skipped: `ulimit -v` or `timeout` is not available");
+        return None;
+    }
+    Some((
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+/// #57: the billion-laughs repro with N=30 (2^30 tokens uncapped) fails fast with an error naming the
+/// macro.
+#[cfg(unix)]
+#[test]
+fn exponential_macro_expansion_fails_fast() {
+    let mut src = String::from("#define E30 x\n");
+    for i in (0..30).rev() {
+        let next = i + 1;
+        src += &[
+            "#define E",
+            &i.to_string(),
+            " E",
+            &next.to_string(),
+            " E",
+            &next.to_string(),
+            "\n",
+        ]
+        .concat();
+    }
+    src.push_str("a = E0;\n");
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
+    assert!(err.contains("\"E"), "{err}");
+}
+
+/// Stringification collapses an expanded argument into one token, so the bytes double per level while
+/// the token count stays small; the byte cap stops it (L5 needs about 20 GB uncapped).
+#[cfg(unix)]
+#[test]
+fn exponential_stringification_fails_fast() {
+    let mut src = String::from(
+        "#define Q(x) #x\n#define D(x) x x\n#define S1(x) Q(D(x))\n#define L0(x) S1(x)\n",
+    );
+    for i in 1..=5 {
+        let prev = i - 1;
+        src += &[
+            "#define L",
+            &i.to_string(),
+            "(x) L",
+            &prev.to_string(),
+            "(L",
+            &prev.to_string(),
+            "(x))\n",
+        ]
+        .concat();
+    }
+    src.push_str("a = L5(ab);\n");
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
+}
+
+/// #59: exponential expansion that produces no output (the macro drops its argument) is bounded too.
+#[cfg(unix)]
+#[test]
+fn exponential_empty_expansion_fails_fast() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=30 {
+        let prev = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str("A30\n");
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
+}
+
+/// #60: exponential `#include` fan-out (four includes per file, 30 levels) fails fast.
+#[cfg(unix)]
+#[test]
+fn include_fan_out_fails_fast() {
+    let mut files: Vec<(String, String)> = Vec::new();
+    for i in 0..30 {
+        let line = format!("#include \"f{}.h\"\n", i + 1);
+        files.push((format!("f{i}.h"), line.repeat(4)));
+    }
+    files.push(("f30.h".to_string(), String::new()));
+    files.push(("e.cpp".to_string(), "#include \"f0.h\"\n".to_string()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(n, c)| (n.as_str(), c.as_str()))
+        .collect();
+    let Some((code, err)) = preprocess_limited(&refs) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("the limit is"), "{err}");
 }

@@ -1,5 +1,6 @@
 //! Functions for preprocessing Arma configs and scripts
 
+use std::cell::Cell;
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -13,8 +14,9 @@ use crate::error::{ErrorExt, PreprocessParseErrorExt, printable};
 use crate::warning::{Warning, WarningSink};
 
 peg::parser! {
-    /// PEG grammar for the preprocessor: directives, macros, comments and tokens.
-    pub(crate) grammar preprocess_grammar() for str {
+    /// PEG grammar for the preprocessor: directives, macros, comments and tokens. `deep` is set when
+    /// macro argument parentheses nest deeper than [`MAX_NESTING_DEPTH`]; the caller turns that into an error.
+    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>) for str {
         rule newline() = "\r\n" / "\n"
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
@@ -51,9 +53,18 @@ peg::parser! {
             "#" [' ' | '\t']* "else" { Directive::ElseDirective } /
             "#" [' ' | '\t']* "endif" { Directive::EndIfDirective }
 
-        rule arg_rec() = "(" (arg_rec() / "\\\\" / ("\\" newline()) / !['\r' | '\n' | '(' | ')'] [_])* ")"
+        rule nesting_ok(d: usize) = {?
+            if deep.get() || d >= MAX_NESTING_DEPTH {
+                deep.set(true);
+                Err("parentheses nested within the limit")
+            } else {
+                Ok(())
+            }
+        }
 
-        rule argument() -> String = a:$((arg_rec() / "\\\\" / ("\\" newline()) / !['\r' | '\n' | ',' | ')'] [_])*) {
+        rule arg_rec(d: usize) = "(" nesting_ok(d) (arg_rec(d + 1) / "\\\\" / ("\\" newline()) / !['\r' | '\n' | '(' | ')'] [_])* ")"
+
+        rule argument() -> String = a:$((arg_rec(0) / "\\\\" / ("\\" newline()) / !['\r' | '\n' | ',' | ')'] [_])*) {
             a.to_string()
         }
 
@@ -202,6 +213,14 @@ pub struct PreprocessInfo {
     /// original input to `preprocess` and `origin` was not given.
     pub(crate) line_origins: Vec<(u32, Option<PathBuf>)>,
     import_stack: Vec<PathBuf>,
+    /// Number of `#include`s currently being processed (the root file does not count).
+    include_depth: usize,
+    /// Tokens produced by macro expansion so far, over the file and its includes.
+    expanded: usize,
+    /// Bytes of token text copied by macro expansion so far.
+    expanded_bytes: usize,
+    /// `#include`s processed so far, over the file and its includes.
+    includes: usize,
 }
 
 impl PreprocessInfo {
@@ -214,12 +233,122 @@ impl PreprocessInfo {
     }
 }
 
+/// Maximum nesting of brackets in the grammars: macro argument parentheses, config classes, config
+/// arrays and `__EVAL` parentheses and operator chains. Deeper input is a parse error, not a stack
+/// overflow. The generated parsers use up to about 5 KiB of stack per level in a debug build, so this
+/// fits the 1 MiB main-thread stack of Windows (`tests/nesting.rs` runs on such a stack); it equals the
+/// limit of the rapified reader (`MAX_RAPIFIED_DEPTH`), and real configs nest fewer than 20 levels.
+pub(crate) const MAX_NESTING_DEPTH: usize = 128;
+
+/// The error for input nested deeper than [`MAX_NESTING_DEPTH`].
+pub(crate) fn nesting_error() -> Error {
+    error!("Nesting is deeper than {MAX_NESTING_DEPTH} levels")
+}
+
+/// Runs a grammar entry point with a fresh nesting flag; a parse that hit the limit is the nesting
+/// error, whatever the parser reported.
+fn parse_checked<T, E>(
+    parse: impl FnOnce(&Cell<bool>) -> Result<T, E>,
+    on_error: impl FnOnce(E) -> Error,
+) -> Result<T, Error> {
+    let deep = Cell::new(false);
+    let result = parse(&deep);
+    if deep.get() {
+        return Err(nesting_error());
+    }
+    result.map_err(on_error)
+}
+
 /// Maximum nesting of macro expansions; deeper input is an error, not a stack overflow.
 const MAX_EXPANSION_DEPTH: usize = 64;
 
+/// Maximum tokens one source line may produce while its macros expand (every token copied at any level
+/// counts). Real configs stay far below it (see the #57 measurements in the README); an exponential
+/// definition chain hits it after a few milliseconds instead of exhausting memory.
+const MAX_LINE_EXPANSION: usize = 500_000;
+
+/// Maximum tokens all lines of one `preprocess` call (the includes count too) may produce.
+const MAX_FILE_EXPANSION: usize = 16_000_000;
+
+/// Maximum bytes of token text one source line may copy while its macros expand. Stringification
+/// collapses many tokens into one long string, so the token count alone does not bound memory.
+const MAX_LINE_BYTES: usize = 64 << 20;
+
+/// Maximum bytes copied by the lines of one `preprocess` call (the includes count too).
+const MAX_FILE_BYTES: usize = 512 << 20;
+
+/// Maximum macro resolution steps (every call of a defined macro, argument pre-expansion included) of one source line. A step
+/// that produces nothing still costs, so expansion that drops its output cannot run exponentially (#59).
+const MAX_LINE_STEPS: usize = 100_000;
+
+/// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
+struct Budget {
+    tokens: usize,
+    bytes: usize,
+    steps: usize,
+}
+
+impl Budget {
+    fn new() -> Budget {
+        Budget {
+            tokens: 0,
+            bytes: 0,
+            steps: 0,
+        }
+    }
+
+    /// Charges one resolution step of the macro `name`.
+    fn step(&mut self, name: &str) -> Result<(), Error> {
+        self.steps = self.steps.saturating_add(1);
+        if self.steps > MAX_LINE_STEPS {
+            return Err(error!(
+                "Macro \"{}\" expands to more than {MAX_LINE_STEPS} macro calls in one line",
+                printable(name)
+            ));
+        }
+        self.spend(1, name.len().max(1), name)
+    }
+
+    /// Charges `tokens` tokens and `bytes` bytes of text, produced by the expansion of `name`.
+    fn spend(&mut self, tokens: usize, bytes: usize, name: &str) -> Result<(), Error> {
+        self.tokens = self.tokens.saturating_add(tokens);
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.tokens > MAX_LINE_EXPANSION || self.bytes > MAX_LINE_BYTES {
+            return Err(error!(
+                "Macro \"{}\" expands to more than {MAX_LINE_EXPANSION} tokens or {MAX_LINE_BYTES} bytes in one line",
+                printable(name)
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The bytes a token costs: its text, at least 1.
+fn token_bytes(token: &Token) -> usize {
+    match token {
+        Token::RegularToken(s) | Token::NewlineToken(s, _) => s.len().max(1),
+        Token::MacroToken(m) => m.original.len().max(1),
+        Token::CommentToken(_) | Token::ConcatToken => 1,
+    }
+}
+
+/// Maximum nesting of `#include`s; deeper input is an error, not a stack overflow.
+const MAX_INCLUDE_DEPTH: usize = 32;
+
+/// Maximum `#include`s processed by one `preprocess` call, nested includes counted (every inclusion of
+/// the same file counts). Bounds exponential include fan-out (#60), which no token budget sees.
+const MAX_INCLUDES: usize = 10_000;
+
+/// The file as the cycle check compares it: canonical when the file system can say, else as given.
+fn identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 fn parse_macro(input: &str) -> Result<Macro, Error> {
-    let without_original = preprocess_grammar::macro_proper(input)
-        .map_err(|e| error!("Failed to parse macro invocation \"{input}\": {e}"))?;
+    let without_original = parse_checked(
+        |deep| preprocess_grammar::macro_proper(input, deep),
+        |e| error!("Failed to parse macro invocation \"{input}\": {e}"),
+    )?;
 
     Ok(Macro {
         original: String::from(input),
@@ -258,6 +387,7 @@ impl Definition {
         stack: &[Definition],
         depth: usize,
         mismatches: &mut Vec<String>,
+        budget: &mut Budget,
     ) -> Result<Option<Vec<Token>>, Error> {
         let params = self.parameters.clone().unwrap_or_default();
         let args = arguments.unwrap_or(&[]);
@@ -279,7 +409,7 @@ impl Definition {
         stack_new.push(self.clone());
 
         if params.is_empty() {
-            tokens = Macro::resolve_all(&tokens, def_map, &stack_new, depth, mismatches)?;
+            tokens = Macro::resolve_all(&tokens, def_map, &stack_new, depth, mismatches, budget)?;
         } else {
             let mut local_map: HashMap<String, Definition> = HashMap::new();
 
@@ -289,10 +419,12 @@ impl Definition {
 
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
-                let mut tokens = preprocess_grammar::tokens(arg)
-                    .map_err(|e| error!("Failed to parse macro argument: {e}"))?;
+                let mut tokens = parse_checked(
+                    |deep| preprocess_grammar::tokens(arg, deep),
+                    |e| error!("Failed to parse macro argument: {e}"),
+                )?;
                 let stack: Vec<Definition> = Vec::new();
-                tokens = Macro::resolve_all(&tokens, def_map, &stack, depth, mismatches)?;
+                tokens = Macro::resolve_all(&tokens, def_map, &stack, depth, mismatches, budget)?;
 
                 local_map.insert(
                     param.clone(),
@@ -305,7 +437,8 @@ impl Definition {
                 );
             }
 
-            tokens = Macro::resolve_all(&tokens, &local_map, &stack_new, depth, mismatches)?;
+            tokens =
+                Macro::resolve_all(&tokens, &local_map, &stack_new, depth, mismatches, budget)?;
         }
 
         Ok(Some(tokens))
@@ -319,6 +452,7 @@ impl Macro {
         stack: &[Definition],
         depth: usize,
         mismatches: &mut Vec<String>,
+        budget: &mut Budget,
     ) -> Result<Vec<Token>, Error> {
         let mut tokens: Vec<Token> = Vec::new();
         tokens.push(Token::RegularToken(self.name.clone()));
@@ -328,10 +462,12 @@ impl Macro {
         }
 
         let (_, without_name) = self.original.split_at(self.name.len());
-        let mut arg_tokens = preprocess_grammar::tokens(without_name)
-            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
+        let mut arg_tokens = parse_checked(
+            |deep| preprocess_grammar::tokens(without_name, deep),
+            |e| error!("Failed to parse macro arguments: {e}"),
+        )?;
 
-        arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack, depth, mismatches)?;
+        arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack, depth, mismatches, budget)?;
         for t in arg_tokens {
             tokens.push(t);
         }
@@ -345,6 +481,7 @@ impl Macro {
         stack: &[Definition],
         depth: usize,
         mismatches: &mut Vec<String>,
+        budget: &mut Budget,
     ) -> Result<Vec<Token>, Error> {
         // Every recursive path (body, argument pre-expansion, pseudo-arguments, local parameters) goes through
         // here, so this one counter bounds them all; the `stack` check alone is reset by argument pre-expansion.
@@ -357,17 +494,26 @@ impl Macro {
         let depth = depth + 1;
         match def_map.get(&self.name) {
             Some(def) => {
+                budget.step(&self.name)?;
                 if let Some(args) = &self.arguments {
                     if def.parameters.is_none() {
                         // Object-like macro followed by parentheses: expand it, keep the parentheses.
                         let mut tokens = def
-                            .value(None, def_map, stack, depth, mismatches)?
+                            .value(None, def_map, stack, depth, mismatches, budget)?
                             .unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
-                        let mut rest_tokens = preprocess_grammar::tokens(rest)
-                            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
-                        rest_tokens =
-                            Macro::resolve_all(&rest_tokens, def_map, stack, depth, mismatches)?;
+                        let mut rest_tokens = parse_checked(
+                            |deep| preprocess_grammar::tokens(rest, deep),
+                            |e| error!("Failed to parse macro arguments: {e}"),
+                        )?;
+                        rest_tokens = Macro::resolve_all(
+                            &rest_tokens,
+                            def_map,
+                            stack,
+                            depth,
+                            mismatches,
+                            budget,
+                        )?;
                         tokens.extend(rest_tokens);
                         return Ok(tokens);
                     }
@@ -397,8 +543,14 @@ impl Macro {
                     }
                 }
 
-                let value =
-                    def.value(self.arguments.as_deref(), def_map, stack, depth, mismatches)?;
+                let value = def.value(
+                    self.arguments.as_deref(),
+                    def_map,
+                    stack,
+                    depth,
+                    mismatches,
+                    budget,
+                )?;
 
                 if !def.local && self.quoted {
                     // @todo: complain
@@ -406,6 +558,12 @@ impl Macro {
 
                 if let Some(tokens) = value {
                     if self.quoted {
+                        // charge before `concat` allocates the collapsed string
+                        budget.spend(
+                            tokens.len(),
+                            tokens.iter().map(token_bytes).sum(),
+                            &self.name,
+                        )?;
                         let (concatted, newlines) = Token::concat(&tokens);
                         let mut tokens: Vec<Token> = Vec::new();
                         tokens.push(Token::NewlineToken(
@@ -417,10 +575,10 @@ impl Macro {
                         Ok(tokens)
                     }
                 } else {
-                    self.resolve_pseudoargs(def_map, stack, depth, mismatches)
+                    self.resolve_pseudoargs(def_map, stack, depth, mismatches, budget)
                 }
             }
-            None => self.resolve_pseudoargs(def_map, stack, depth, mismatches),
+            None => self.resolve_pseudoargs(def_map, stack, depth, mismatches, budget),
         }
     }
 
@@ -430,20 +588,26 @@ impl Macro {
         stack: &[Definition],
         depth: usize,
         mismatches: &mut Vec<String>,
+        budget: &mut Budget,
     ) -> Result<Vec<Token>, Error> {
         let mut result: Vec<Token> = Vec::new();
 
         for token in tokens {
-            match token {
-                Token::MacroToken(m) => {
-                    let resolved = m.resolve(def_map, stack, depth, mismatches)?;
-                    for t in resolved {
-                        result.push(t);
-                    }
-                }
-                _ => {
-                    result.push(token.clone());
-                }
+            if let Token::MacroToken(m) = token {
+                let resolved = m.resolve(def_map, stack, depth, mismatches, budget)?;
+                budget.spend(
+                    resolved.len(),
+                    resolved.iter().map(token_bytes).sum(),
+                    &m.name,
+                )?;
+                result.extend(resolved);
+            } else {
+                budget.spend(
+                    1,
+                    token_bytes(token),
+                    stack.last().map_or("", |d| d.name.as_str()),
+                )?;
+                result.push(token.clone());
             }
         }
 
@@ -477,6 +641,32 @@ impl Token {
 
         (output, newlines)
     }
+}
+
+/// The newlines of a line that is not expanded: those of its strings and comments, as expansion would
+/// count them (a string inside a macro call is counted once).
+fn skipped_newlines(tokens: &[Token]) -> u32 {
+    let mut total = 0u32;
+    for token in tokens {
+        let n = match token {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) => *n,
+            Token::MacroToken(m) => {
+                let mut in_string = false;
+                let mut count = 0u32;
+                for c in m.original.chars() {
+                    match c {
+                        '"' => in_string = !in_string,
+                        '\n' if in_string => count = count.saturating_add(1),
+                        _ => {}
+                    }
+                }
+                count
+            }
+            Token::RegularToken(_) | Token::ConcatToken => 0,
+        };
+        total = total.saturating_add(n);
+    }
+    total
 }
 
 /// Reads the first line of a `$PBOPREFIX$` file.
@@ -779,8 +969,12 @@ fn preprocess_rec(
 ) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
-    let lines =
-        PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), origin, &input)?;
+    let deep = Cell::new(false);
+    let parsed = preprocess_grammar::file(&input, &deep);
+    if deep.get() {
+        return Err(nesting_error());
+    }
+    let lines = PreprocessParseErrorExt::format_error(parsed, origin, &input)?;
     let mut output = String::new();
     let mut original_lineno = 1;
     let mut level = 0;
@@ -797,12 +991,6 @@ fn preprocess_rec(
                             continue;
                         }
 
-                        //let import_tree = &mut info.import_tree;
-                        //let includer = import_tree.get(&path);
-                        //if let Some(path) = includer {
-                        //    // @todo: complain
-                        //}
-
                         let file_path = find_include_file(
                             &path,
                             origin,
@@ -811,7 +999,34 @@ fn preprocess_rec(
                             warnings,
                         )?;
 
+                        let wanted = identity(&file_path);
+                        if info.import_stack.iter().any(|p| identity(p) == wanted) {
+                            let chain: Vec<String> = info
+                                .import_stack
+                                .iter()
+                                .chain(std::iter::once(&file_path))
+                                .map(|p| printable(&p.display().to_string()))
+                                .collect();
+                            return Err(error!("Include cycle: {}", chain.join(" -> ")));
+                        }
+                        if info.include_depth >= MAX_INCLUDE_DEPTH {
+                            return Err(error!(
+                                "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                                printable(&path)
+                            ));
+                        }
+
+                        info.includes += 1;
+                        if info.includes > MAX_INCLUDES {
+                            return Err(error!(
+                                "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
+                                printable(&path),
+                                info.includes
+                            ));
+                        }
+
                         info.import_stack.push(file_path.clone());
+                        info.include_depth += 1;
 
                         let mut content = String::new();
                         File::open(&file_path)?.read_to_string(&mut content)?;
@@ -829,6 +1044,7 @@ fn preprocess_rec(
                         ))?;
 
                         info.import_stack.pop();
+                        info.include_depth -= 1;
 
                         output += &result;
                     }
@@ -885,12 +1101,31 @@ fn preprocess_rec(
                 }
             }
             Line::TokenLine(tokens) => {
+                if level > level_true {
+                    // A disabled line is never expanded (#61): it can neither error nor cost time.
+                    original_lineno += skipped_newlines(&tokens);
+                    continue;
+                }
                 let stack: Vec<Definition> = Vec::new();
                 let mut mismatches: Vec<String> = Vec::new();
-                let resolved =
-                    Macro::resolve_all(&tokens, definition_map, &stack, 0, &mut mismatches)
-                        .prepend_error("Failed to resolve macros:");
+                let mut budget = Budget::new();
+                let resolved = Macro::resolve_all(
+                    &tokens,
+                    definition_map,
+                    &stack,
+                    0,
+                    &mut mismatches,
+                    &mut budget,
+                )
+                .prepend_error("Failed to resolve macros:");
                 let resolved = resolved?;
+                info.expanded = info.expanded.saturating_add(budget.tokens);
+                info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
+                if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
+                    return Err(error!(
+                        "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
+                    ));
+                }
 
                 let (mut result, newlines) = Token::concat(&resolved);
                 result = result.replace("\r\n", "\n");
@@ -898,10 +1133,6 @@ fn preprocess_rec(
 
                 let before = result.len();
                 result = result.replace("\\\n", "");
-
-                if level > level_true {
-                    continue;
-                }
 
                 let file = origin.map(|p| p.display().to_string());
                 for msg in mismatches {
@@ -986,6 +1217,10 @@ pub fn preprocess(
     let mut info = PreprocessInfo {
         line_origins: Vec::new(),
         import_stack: Vec::new(),
+        include_depth: 0,
+        expanded: 0,
+        expanded_bytes: 0,
+        includes: 0,
     };
 
     if let Some(ref path) = origin {
@@ -1027,12 +1262,12 @@ mod tests {
         let tokens = vec![Token::MacroToken(parse_macro("F(1,2)").unwrap())];
 
         let mut first = Vec::new();
-        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first).unwrap();
+        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new()).unwrap();
         assert_eq!(first.len(), 1);
 
         let plain = vec![Token::RegularToken("x".to_string())];
         let mut second = Vec::new();
-        Macro::resolve_all(&plain, &defs, &[], 0, &mut second).unwrap();
+        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new()).unwrap();
         assert_eq!(second.len(), 0);
     }
 

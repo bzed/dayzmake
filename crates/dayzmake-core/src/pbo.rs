@@ -18,6 +18,7 @@ static P3DO_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\.p3do$").un
 use crate::binarize::{self, Binarizer};
 use crate::config::{Config, is_rapified};
 use crate::error::{ErrorExt, printable};
+use crate::fileid::FileId;
 use crate::io::WriteExt;
 use crate::p3d;
 use crate::warning::{Warning, WarningSink};
@@ -461,6 +462,10 @@ pub struct PackOptions {
     /// Paths the folder walk skips (the output file of a build inside the source folder), compared after
     /// canonicalizing. Hidden temp files of such a target (see [`atomic_temp_prefix`]) next to it are skipped too.
     pub exclude_paths: Vec<PathBuf>,
+    /// Also skip the file this process's standard output is redirected to, when it is a regular file (`dayzmake
+    /// pack m > m/out.pbo` creates the file inside the folder before the walk). A terminal, a pipe, `/dev/null`
+    /// or a closed stdout excludes nothing.
+    pub exclude_stdout: bool,
 }
 
 /// The file-name prefix of the temp files written next to the target `name` before they are renamed into place
@@ -470,15 +475,25 @@ pub fn atomic_temp_prefix(name: &str) -> String {
     format!(".{name}.dayzmake-tmp-")
 }
 
-/// An excluded path split into its canonical folder and file name.
+/// A file the folder walk skips.
 struct Excluded {
+    /// The canonical folder, name and temp prefix of an excluded path; none for standard output, which has no path.
+    by_name: Option<ExcludedName>,
+    /// The identity of the excluded file when it exists, for the comparison that is independent of spelling.
+    id: Option<FileId>,
+}
+
+/// An excluded path split into its canonical folder and file name.
+struct ExcludedName {
     folder: PathBuf,
     name: std::ffi::OsString,
+    /// Lower-cased temp prefix: the temp file does not exist yet, so it is matched by name.
     temp_prefix: String,
 }
 
-fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
-    paths
+fn excluded_paths(options: &PackOptions) -> Vec<Excluded> {
+    let mut list: Vec<Excluded> = options
+        .exclude_paths
         .iter()
         .filter_map(|p| {
             let name = p.file_name()?.to_owned();
@@ -486,37 +501,64 @@ fn excluded_paths(paths: &[PathBuf]) -> Vec<Excluded> {
             // fails open: an exclude whose folder cannot be resolved matches nothing (the folder exists in practice,
             // the temp file was created there)
             let folder = std::fs::canonicalize(parent.unwrap_or(Path::new("."))).ok()?;
-            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy());
+            let temp_prefix = atomic_temp_prefix(&name.to_string_lossy()).to_lowercase();
+            let id = FileId::of(&folder.join(&name));
             Some(Excluded {
-                folder,
-                name,
-                temp_prefix,
+                by_name: Some(ExcludedName {
+                    folder,
+                    name,
+                    temp_prefix,
+                }),
+                id,
             })
         })
-        .collect()
+        .collect();
+    if options.exclude_stdout
+        && let Some(id) = FileId::stdout()
+    {
+        list.push(Excluded {
+            by_name: None,
+            id: Some(id),
+        });
+    }
+    list
 }
 
+/// Whether `path` is the build's own output or a temp file of it.
+///
+/// The output is recognised by file identity when it exists (case-insensitive file systems, hard links and symlinks
+/// name it differently), by exact name in the same folder otherwise. The temp prefix is matched by name, ignoring
+/// case on every platform: the temp file does not exist yet, and a stale hidden `.X.dayzmake-tmp-` file that differs
+/// only in case is never wanted in a PBO.
 fn is_excluded(path: &Path, excluded: &[Excluded]) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
-    let name_str = name.to_string_lossy();
-    // canonicalize only when the name could match
+    let name_lower = name.to_string_lossy().to_lowercase();
+    // canonicalize and open only when needed, once per path
     let mut folder: Option<Option<PathBuf>> = None;
+    let mut id: Option<Option<FileId>> = None;
     excluded.iter().any(|e| {
-        if name != e.name && !name_str.starts_with(&e.temp_prefix) {
-            return false;
+        if let Some(n) = &e.by_name
+            && (name == n.name || name_lower.starts_with(&n.temp_prefix))
+        {
+            let folder = folder.get_or_insert_with(|| {
+                path.parent()
+                    .filter(|d| !d.as_os_str().is_empty())
+                    .map_or_else(
+                        // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
+                        || std::fs::canonicalize(".").ok(),
+                        |d| std::fs::canonicalize(d).ok(),
+                    )
+            });
+            if folder.as_deref() == Some(n.folder.as_path()) {
+                return true;
+            }
         }
-        let folder = folder.get_or_insert_with(|| {
-            path.parent()
-                .filter(|d| !d.as_os_str().is_empty())
-                .map_or_else(
-                    // fails open like `excluded_paths`: an unresolvable folder is never equal to an excluded one
-                    || std::fs::canonicalize(".").ok(),
-                    |d| std::fs::canonicalize(d).ok(),
-                )
-        });
-        folder.as_deref() == Some(e.folder.as_path())
+        // an unopenable file (gone meanwhile, no permission) is not the same file; opened lazily: only when
+        // there is an identity to compare with
+        e.id.as_ref()
+            .is_some_and(|own| id.get_or_insert_with(|| FileId::of(path)).as_ref() == Some(own))
     })
 }
 
@@ -910,7 +952,7 @@ impl PBO {
         let mut binarize = options.build;
         let exclude_patterns = &options.exclude;
         let includefolders = &options.include_folders;
-        let file_list = list_files(directory, &excluded_paths(&options.exclude_paths))?;
+        let file_list = list_files(directory, &excluded_paths(options))?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
 
@@ -949,7 +991,8 @@ impl PBO {
         // Entries generated from source (the rapified config.cpp, a .p3do packed as .p3d) win over a
         // plain file of the same name, so find them first: the plain file is then skipped before it
         // is binarized or read. The gates are the ones of the loop below.
-        let mut generated_names: HashMap<String, String> = HashMap::new();
+        // key -> (source file, stored entry name)
+        let mut generated_names: HashMap<String, (String, String)> = HashMap::new();
         for path in &file_list {
             let Ok(relative) = path.strip_prefix(directory) else {
                 continue;
@@ -965,7 +1008,7 @@ impl PBO {
             }
             generated_names
                 .entry(name.to_lowercase())
-                .or_insert_with(|| printable(&relative.to_string_lossy()));
+                .or_insert_with(|| (printable(&relative.to_string_lossy()), printable(&name)));
         }
 
         for path in file_list {
@@ -973,15 +1016,12 @@ impl PBO {
                 continue;
             };
             let shown = printable(&relative.to_string_lossy());
-            let mut generated = false;
+            let (pre_name, name, generated) = entry_name(&relative, binarize);
             if binarize && relative.file_name() == Some(OsStr::new("config.cpp")) {
                 relative = relative.with_file_name("config.bin");
-                generated = true;
             }
-
-            let mut name: String = relative.to_string_lossy().replace('/', "\\");
             // excluded files are silent, whatever they are
-            if !file_allowed(&name, exclude_patterns) {
+            if !file_allowed(&pre_name, exclude_patterns) {
                 continue;
             }
             // only regular files (or links to them): a FIFO would block the build, a device never
@@ -996,7 +1036,7 @@ impl PBO {
                 );
                 continue;
             }
-            if relative.to_str().is_none() || safe_relative_path(&name).is_none() {
+            if relative.to_str().is_none() || safe_relative_path(&pre_name).is_none() {
                 warnings.warn(Warning::new(
                     Some("unsafe-path"),
                     format!("Skipping \"{shown}\": unsafe entry name."),
@@ -1004,21 +1044,16 @@ impl PBO {
                 continue;
             }
             // a .p3do is packed as .p3d (it is not binarized itself, so decide that first)
-            let is_binarizable = BINARIZABLE_RE.is_match(&name);
-            if P3DO_RE.is_match(&name) {
-                name = P3DO_RE.replace(&name, ".p3d").into_owned();
-                generated = true;
-            }
+            let is_binarizable = BINARIZABLE_RE.is_match(&pre_name);
             // entry names compare case-insensitively; the first file in walk order wins, except
             // that an entry generated from source replaces a plain file of the same name (found
             // by the pre-pass above, so the plain file is skipped before it is processed)
             let key = name.to_lowercase();
-            if !generated && let Some(source) = generated_names.get(&key) {
+            if !generated && let Some((source, stored)) = generated_names.get(&key) {
                 warnings.warn(Warning::new(
                     Some("duplicate-entry"),
                     format!(
-                        "Skipping \"{shown}\": the entry \"{}\" is generated from \"{source}\".",
-                        printable(&name)
+                        "Skipping \"{shown}\": the entry \"{stored}\" is generated from \"{source}\"."
                     ),
                 ));
                 continue;
@@ -1334,8 +1369,8 @@ fn entry_name(relative: &Path, binarize: bool) -> (String, String, bool) {
     (pre, name, generated)
 }
 
-/// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
-/// Windows opens instead of a file whatever the extension.
+/// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, `COM\u{b9}`, `LPT0`, `CONIN$`,
+/// ...), which Windows opens instead of a file whatever the extension and case.
 #[must_use]
 pub fn is_device_name(component: &str) -> bool {
     let stem = component
@@ -1344,11 +1379,18 @@ pub fn is_device_name(component: &str) -> bool {
         .unwrap_or_default()
         .trim_end_matches(' ')
         .to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ["COM", "LPT"].iter().any(|p| {
-            stem.strip_prefix(p)
-                .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|p| {
+        stem.strip_prefix(p).is_some_and(|n| {
+            let mut chars = n.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+            )
         })
+    })
 }
 
 /// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
@@ -1565,9 +1607,6 @@ pub fn unpack<I: Read>(
             ));
             continue;
         };
-        if stripped {
-            warn_leading_separator(file_name, &relative, warnings);
-        }
         let key = relative.to_string_lossy().to_lowercase();
         if written.contains(&key) {
             warnings.warn(Warning::new(
@@ -1600,6 +1639,9 @@ pub fn unpack<I: Read>(
                 continue;
             }
         };
+        if stripped {
+            warn_leading_separator(file_name, &relative, warnings);
+        }
         let path = base.join(&relative);
         written.insert(key);
         let written_ok = create_dir_all(path.parent().unwrap_or(&base))
@@ -1622,6 +1664,59 @@ pub fn unpack<I: Read>(
 
 #[cfg(test)]
 mod tests {
+    /// #62: the full list of Windows device names, in any case, with and without an extension.
+    #[test]
+    fn device_names_are_complete() {
+        for name in [
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM0",
+            "COM1",
+            "COM9",
+            "LPT0",
+            "LPT1",
+            "LPT9",
+            "COM\u{b9}",
+            "COM\u{b2}",
+            "COM\u{b3}",
+            "LPT\u{b9}",
+            "LPT\u{b2}",
+            "LPT\u{b3}",
+            "CONIN$",
+            "CONOUT$",
+        ] {
+            for variant in [
+                name.to_string(),
+                name.to_lowercase(),
+                format!("{name}.txt"),
+                format!("{}.cfg", name.to_lowercase()),
+                format!("{name} .x"),
+            ] {
+                assert!(super::is_device_name(&variant), "{variant}");
+                assert!(
+                    super::safe_relative_path(&format!("a\\{variant}")).is_none(),
+                    "{variant}"
+                );
+            }
+        }
+        for name in [
+            "COM",
+            "COM10",
+            "COM\u{b9}\u{b9}",
+            "CONIN",
+            "CONOUT",
+            "CONIN$$",
+            "LPT",
+            "COMA",
+            "ACON",
+            "x.CON",
+        ] {
+            assert!(!super::is_device_name(name), "{name}");
+        }
+    }
+
     use super::*;
 
     fn p(s: &str) -> Option<PathBuf> {

@@ -1,10 +1,10 @@
-use std::io::{Cursor, Error, Read, stdin, stdout};
+use std::io::{Cursor, Error, Read, Write, stdin};
 use std::path::{Path, PathBuf};
 
 use crate::api;
 use crate::api::query::Query;
 use crate::api::steam::Branch;
-use crate::cli_io::{AtomicTarget, Input, Output, open_input};
+use crate::cli_io::{AtomicTarget, Input, Output, StdoutState, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
 use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
@@ -191,14 +191,14 @@ fn get_input(args: &Args) -> Result<Input, Error> {
     }
 }
 
-fn get_output(args: &Args) -> Result<Output, Error> {
+fn get_output(args: &Args, stdout: &StdoutState) -> Result<Output, Error> {
     if let Some(ref target) = args.arg_target {
         Ok(Output::File(AtomicTarget::create(
             Path::new(target),
             args.flag_force,
         )?))
     } else {
-        Ok(Output::Standard(stdout()))
+        Ok(Output::Standard(stdout.writer()))
     }
 }
 
@@ -206,20 +206,24 @@ fn get_output(args: &Args) -> Result<Output, Error> {
     clippy::too_many_lines,
     reason = "one branch per CLI command keeps the dispatch readable"
 )]
-fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
+fn run_command(
+    args: &Args,
+    stdout: &StdoutState,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
     let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
     includefolders.push(PathBuf::from("."));
 
     if args.cmd_mcp {
-        crate::mcp::serve(std::io::stdin().lock(), stdout(), args.flag_verbose)
+        crate::mcp::serve(std::io::stdin().lock(), stdout.writer(), args.flag_verbose)
     } else if args.cmd_api {
-        run_api(args, warnings)
+        run_api(args, &mut stdout.writer(), warnings)
     } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
         binarize::cmd_binarize(source, &target, args.flag_force, warnings)
     } else if args.cmd_rapify {
-        let mut output = get_output(args)?;
+        let mut output = get_output(args, stdout)?;
         config::cmd_rapify(
             &mut get_input(args)?,
             &mut output,
@@ -229,11 +233,11 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         )?;
         output.commit()
     } else if args.cmd_derapify {
-        let mut output = get_output(args)?;
+        let mut output = get_output(args, stdout)?;
         config::cmd_derapify(&mut get_input(args)?, &mut output)?;
         output.commit()
     } else if args.cmd_preprocess {
-        let mut output = get_output(args)?;
+        let mut output = get_output(args, stdout)?;
         config::cmd_preprocess(
             &mut get_input(args)?,
             &mut output,
@@ -253,9 +257,10 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
         if args.cmd_build {
             // `close()` below removes the Proton sandbox on success and failure alike, before any exit
             // the target first: no sandbox is set up for a target that is rejected
-            let mut output = get_output(args)?;
+            let mut output = get_output(args, stdout)?;
             let mut binarizer = platform_binarizer(args.flag_proton_binarize)?;
             let own = output.own_paths();
+            let to_stdout = output.is_stdout();
             let built = pbo::cmd_build(
                 Path::new(&args.arg_sourcefolder),
                 &mut output,
@@ -263,6 +268,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
                 &args.flag_exclude,
                 &includefolders,
                 &own,
+                to_stdout,
                 binarizer.as_mut(),
                 warnings,
             );
@@ -272,14 +278,16 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
             closed?;
             output.commit()?;
         } else {
-            let mut output = get_output(args)?;
+            let mut output = get_output(args, stdout)?;
             let own = output.own_paths();
+            let to_stdout = output.is_stdout();
             pbo::cmd_pack(
                 Path::new(&args.arg_sourcefolder),
                 &mut output,
                 &args.flag_headerext,
                 &args.flag_exclude,
                 &own,
+                to_stdout,
                 warnings,
             )?;
             output.commit()?;
@@ -300,12 +308,12 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
         if model_magic(&mut input)?.is_some() {
-            p3d::cmd_inspect(&mut input, &mut stdout())
+            p3d::cmd_inspect(&mut input, &mut stdout.writer())
         } else {
-            pbo::cmd_inspect(&mut input, &mut stdout())
+            pbo::cmd_inspect(&mut input, &mut stdout.writer())
         }
     } else if args.cmd_cat {
-        let mut output = get_output(args)?;
+        let mut output = get_output(args, stdout)?;
         pbo::cmd_cat(&mut get_input(args)?, &mut output, &args.arg_filename)?;
         output.commit()
     } else if args.cmd_unpack {
@@ -357,7 +365,7 @@ fn run_command(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error>
 }
 
 /// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
-fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
+fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let ctx = api::ApiContext {
         branch: if args.flag_experimental {
             Branch::Experimental
@@ -368,18 +376,17 @@ fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
         mods: args.flag_mod.clone().unwrap_or_default(),
         refresh: args.flag_refresh || args.cmd_update,
     };
-    #[expect(clippy::print_stdout, reason = "CLI command output")]
     {
         if args.cmd_mods {
             let text = api::mods_text(&ctx, args.flag_json, warnings)?;
             if !text.is_empty() {
-                println!("{text}");
+                writeln!(out, "{text}")?;
             }
             return Ok(());
         }
         if args.cmd_update {
             for line in api::update_lines(&ctx, warnings)? {
-                println!("{line}");
+                writeln!(out, "{line}")?;
             }
             return Ok(());
         }
@@ -390,9 +397,9 @@ fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
         if args.cmd_src && args.flag_cat {
             let text = api::src_cat(&ctx, &args.arg_name, args.flag_json, warnings)?;
             if args.flag_json {
-                println!("{text}");
+                writeln!(out, "{text}")?;
             } else {
-                print!("{text}");
+                write!(out, "{text}")?;
             }
             return Ok(());
         }
@@ -434,7 +441,7 @@ fn run_api(args: &Args, warnings: &mut dyn WarningSink) -> Result<(), Error> {
             args.flag_verbose,
             warnings,
         )? {
-            println!("{line}");
+            writeln!(out, "{line}")?;
         }
     }
     Ok(())
@@ -496,15 +503,19 @@ pub fn args(args: &mut Args) {
     }
 
     if args.flag_version {
-        #[expect(clippy::print_stdout, reason = "CLI command output")]
-        {
-            println!("v{VERSION}");
-        }
+        // a closed pipe is not worth a message here either
+        let _ = writeln!(StdoutState::default().writer(), "v{VERSION}");
         std::process::exit(0);
     }
 
     let mut warnings = PrintWarnings::new(args.flag_warning.clone(), args.flag_verbose);
-    let result = run_command(args, &mut warnings);
+    let stdout = StdoutState::default();
+    let result = run_command(args, &stdout, &mut warnings);
     warnings.print_summary();
+    // The reader closed stdout (`dayzmake inspect x.pbo | head`): like other tools, stop quietly with status 0.
+    // Only a failed write to stdout counts; a BrokenPipe on stderr, a target file or a tool is still an error.
+    if result.is_err() && stdout.is_closed() {
+        std::process::exit(0);
+    }
     result.print_error(true);
 }

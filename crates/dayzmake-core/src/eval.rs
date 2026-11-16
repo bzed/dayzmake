@@ -8,6 +8,7 @@ use std::hash::BuildHasher;
 use std::io::Error;
 
 use crate::error::printable;
+use crate::preprocess::{MAX_NESTING_DEPTH, nesting_error};
 
 /// Result of an `__EVAL`
 #[derive(Debug, Clone, PartialEq)]
@@ -93,6 +94,7 @@ struct Parser<'a, S: BuildHasher> {
     pos: usize,
     expr: &'a str,
     vars: &'a HashMap<String, EvalValue, S>,
+    depth: usize,
 }
 
 impl<S: BuildHasher> Parser<'_, S> {
@@ -112,6 +114,18 @@ impl<S: BuildHasher> Parser<'_, S> {
         }
     }
 
+    /// Runs `f` one nesting level deeper; operator chains (`--1`, `1^1^1`) and parentheses recurse, so
+    /// they share the limit of the grammars.
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return Err(nesting_error());
+        }
+        self.depth += 1;
+        let result = f(self);
+        self.depth -= 1;
+        result
+    }
+
     fn expr(&mut self, min_prec: u8) -> Result<EvalValue, Error> {
         let mut lhs = self.atom()?;
         while let Some(op) = self.peek_op() {
@@ -121,13 +135,17 @@ impl<S: BuildHasher> Parser<'_, S> {
             };
             self.pos += 1;
             // `^` is right-associative, everything else left-associative
-            let rhs = self.expr(if op == '^' { prec } else { prec + 1 })?;
+            let rhs = self.nested(|p| p.expr(if op == '^' { prec } else { prec + 1 }))?;
             lhs = self.apply(op, lhs, rhs)?;
         }
         Ok(lhs)
     }
 
     fn atom(&mut self) -> Result<EvalValue, Error> {
+        self.nested(Self::atom_inner)
+    }
+
+    fn atom_inner(&mut self) -> Result<EvalValue, Error> {
         let tok = self
             .toks
             .get(self.pos)
@@ -206,6 +224,7 @@ pub fn eval<S: BuildHasher>(
         pos: 0,
         expr,
         vars,
+        depth: 0,
     };
     let value = parser.expr(1)?;
     if parser.pos != parser.toks.len() {

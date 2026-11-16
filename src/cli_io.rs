@@ -1,10 +1,12 @@
 //! stdin/stdout and file plumbing for the commands: an input that is a file or buffered stdin, an
 //! output that is a file or stdout, and the creation of target files.
 
+use std::cell::Cell;
 use std::fs::File;
 use std::io;
-use std::io::{Cursor, Read, Seek, Stdout, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -22,7 +24,59 @@ pub enum Output {
     /// A target file, written atomically (see [`AtomicTarget`]).
     File(AtomicTarget),
     /// Standard output.
-    Standard(Stdout),
+    Standard(StdoutWriter),
+}
+
+/// Whether a write to stdout failed because the reader closed the pipe (`dayzmake inspect x.pbo | head`).
+///
+/// The error text is rewritten on its way up (`prepend_error`), so the kind cannot tell stdout from any other
+/// `BrokenPipe` (stderr, a file target, a pipe to an external tool). The [`StdoutWriter`] therefore records it
+/// here, and `run` quits quietly only when this is set.
+#[derive(Clone, Debug, Default)]
+pub struct StdoutState(Rc<Cell<bool>>);
+
+impl StdoutState {
+    /// A writer to the process's stdout that reports a closed pipe to this state.
+    #[must_use]
+    pub fn writer(&self) -> StdoutWriter {
+        StdoutWriter {
+            inner: std::io::stdout(),
+            state: self.clone(),
+        }
+    }
+
+    /// Whether stdout was found closed by its reader.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.0.get()
+    }
+}
+
+/// Standard output that notes a `BrokenPipe` in its [`StdoutState`].
+pub struct StdoutWriter {
+    inner: std::io::Stdout,
+    state: StdoutState,
+}
+
+impl StdoutWriter {
+    fn note<T>(&self, result: io::Result<T>) -> io::Result<T> {
+        if matches!(&result, Err(e) if e.kind() == io::ErrorKind::BrokenPipe) {
+            self.state.0.set(true);
+        }
+        result
+    }
+}
+
+impl Write for StdoutWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let result = self.inner.write(buf);
+        self.note(result)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let result = self.inner.flush();
+        self.note(result)
+    }
 }
 
 impl Read for Input {
@@ -67,6 +121,12 @@ impl Output {
             Output::File(f) => f.own_paths(),
             Output::Standard(_) => Vec::new(),
         }
+    }
+
+    /// Whether this output is the process's standard output, which can be redirected into the source folder.
+    #[must_use]
+    pub fn is_stdout(&self) -> bool {
+        matches!(self, Output::Standard(_))
     }
 
     /// Makes a file output the real target file; stdout needs nothing. Call it only after the command succeeded:
@@ -130,6 +190,45 @@ fn resolve_link(path: &Path) -> io::Result<PathBuf> {
     Ok(target)
 }
 
+/// Opens `path` for writing when it is a device (`NUL`, `CON`, ...), else `None`: a disk file, a missing target or a
+/// handle whose type cannot be read take the checked path. On Windows `Metadata::is_file` is also true for devices,
+/// so the type of a probe handle (`GetFileType`) decides; the probe has no data access, so a read-only or locked
+/// regular file is still reported as existing, not as "access denied".
+#[cfg(windows)]
+fn open_device(path: &Path, failure: &str) -> io::Result<Option<File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // an unanswerable handle counts as a disk file: the worst case is an error, never an in-place overwrite
+    let is_device = |file: &File| winapi_util::file::typ(file).is_ok_and(|t| !t.is_disk());
+    let file = if let Ok(probe) = std::fs::OpenOptions::new().access_mode(0).open(path) {
+        if !is_device(&probe) {
+            return Ok(None);
+        }
+        drop(probe);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .prepend_error(failure)?
+    } else {
+        // `CON` opens as `CONIN$` or `CONOUT$` depending on the requested access, so a probe without access can
+        // fail for a device: ask again with write access (no create, no truncate) before giving up
+        match std::fs::OpenOptions::new().write(true).open(path) {
+            Ok(file) if is_device(&file) => file,
+            _ => return Ok(None),
+        }
+    };
+    Ok(Some(file))
+}
+
+/// Only Windows has device names that look like files.
+#[cfg(not(windows))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "same signature as the Windows version, which can fail"
+)]
+fn open_device(_path: &Path, _failure: &str) -> io::Result<Option<File>> {
+    Ok(None)
+}
+
 impl AtomicTarget {
     /// The target as given, its resolved path and the temp file next to it (a device or FIFO: just the path).
     #[must_use]
@@ -162,13 +261,21 @@ impl AtomicTarget {
         private: bool,
         failure: &str,
     ) -> io::Result<AtomicTarget> {
-        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name.
-        let windows_device = cfg!(windows)
+        // On Windows a device (`NUL`, `CON`, ...) counts as a regular file, so it is recognised by name. Opened
+        // write-only without truncation, which would corrupt a regular file that merely has such a name (a
+        // verbatim `\\?\C:\out\NUL`): the opened handle says what it is, and a disk file takes the checked path.
+        let mut device = None;
+        if cfg!(windows)
             && path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(dayzmake_core::pbo::is_device_name);
-        if !force && !windows_device && path.exists() {
+                .is_some_and(dayzmake_core::pbo::is_device_name)
+            && !path.is_dir()
+        {
+            // a disk file or a missing target: nothing was written, the normal path below applies
+            device = open_device(path, failure)?;
+        }
+        if !force && device.is_none() && path.exists() {
             return Err(error!(
                 "Target file \"{}\" already exists. Use --force to overwrite.",
                 path.display()
@@ -178,12 +285,15 @@ impl AtomicTarget {
             return Err(error!("Target \"{}\" is a directory.", path.display()));
         }
         // `metadata` follows links, so `/dev/stdout` onto a pipe is found too
-        if windows_device || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
+        if device.is_some() || std::fs::metadata(path).is_ok_and(|m| !m.file_type().is_file()) {
             // no truncate: a device or FIFO has nothing to truncate
-            let file = std::fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .prepend_error(failure)?;
+            let file = match device {
+                Some(file) => file,
+                None => std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .prepend_error(failure)?,
+            };
             return Ok(AtomicTarget {
                 path: path.to_path_buf(),
                 given: path.to_path_buf(),

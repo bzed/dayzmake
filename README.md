@@ -24,6 +24,41 @@ is maintained here.
 
 ## Changes
 
+- Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose
+  expansion is empty (`#define E(x)` with `E(A)E(A)` levels) fails like the others; at most 100,000 macro calls
+  per line, real configs need at most 34 (#59).
+- At most 10,000 `#include`s are processed per `preprocess` call (nested ones and repeated inclusions count), so an
+  exponential include fan-out fails at once; real configs under the author's trees use at most 1 (#60).
+- Lines in a disabled `#ifdef`/`#ifndef` branch are skipped before any macro expansion, so they cannot raise macro
+  errors or cost time (#61).
+- All Windows device names are recognised in PBO entry names and output targets: `COM0`-`COM9` and `LPT0`-`LPT9`
+  also with the superscript digits (`COM¹`), `CONIN$` and `CONOUT$`, in any case, with or without an extension
+  (#62).
+- `pack` and `build` recognise their own output by file identity (device and inode, or volume and file index), so
+  `M\OUT.PBO` over an existing `m\out.pbo` on a case-insensitive file system is never packed into itself (#37).
+- An existing regular file with a device-like name (`NUL`, `COM1`, reached through a verbatim path) is not
+  overwritten in place and needs `--force` like any file (#40); a new target with such a name can still be created
+  (#45).
+- `unpack` warns about a leading separator only for entries it extracts, and `build`'s duplicate-entry warning names
+  the stored entry (`config.bin`, `m.p3d`) it kept (#41).
+- A closed stderr no longer panics: usage and other errors still end with their normal exit status (1, or 0 with
+  only warnings) instead of 101 (#43).
+- Macro expansion is capped: a source line that makes expansion copy more than 500,000 tokens, or a file (with its
+  includes) more than 16,000,000, is an error naming the macro, so an exponential definition chain (billion
+  laughs) fails at once instead of exhausting memory (#57). The counters measure copying work, re-counted at each
+  expansion level, not the size of the output. The most that the author's DayZ trees (1596 configs) need is 888
+  tokens per line and 749,577 per file.
+- The same cap also counts bytes (64 MiB per line, 512 MiB per file), so that `#x` stringification, which
+  collapses a large expansion into one token, cannot bypass it (#58). Real configs need at most 12 KB per line
+  and 7.3 MB per file.
+- Nesting deeper than 128 levels (macro argument parentheses, config classes, config arrays, `__EVAL`
+  parentheses and operator chains) is a parse error, not a stack overflow (#54). Parentheses inside macro
+  arguments count even in strings, as the preprocessor reads them.
+- An include cycle (`#include` of a file already being included) or include nesting deeper than 32 is an error
+  naming the chain, not a stack overflow (#53).
+- A closed stdout pipe (`dayzmake inspect x.pbo | head -3`) ends the command quietly with exit status 0 and no
+  error line (it used to print `Broken pipe` and exit 1, or panic in `api`). A closed pipe on stderr, a target file
+  or an external tool is still an error (#39).
 - OpenSSL is gone from the dependency tree, tests included (they use `num-bigint` as the independent check): building
   and testing need no system libraries, and the CI and the Dockerfile no longer install `libssl-dev` or `pkg-config`.
   `dayzmake keygen` generates the RSA key pair with the pure-Rust `rsa` crate and the operating system's random number
@@ -79,7 +114,8 @@ is maintained here.
   or pipe (`/dev/null`, `/dev/stdout`, and on Windows `NUL`, `CON`, ...) is written in place. A failure to create the temporary file names the
   directory (#18, #25).
 - `build` never packs its own output: the target and its temporary file are left out when they lie inside the
-  source folder (#24).
+  source folder (#24). The same holds for `pack` and `build` with stdout redirected into the source folder
+  (`dayzmake pack m > m/out.pbo`) (#38).
 - The `api` warning for a mod with an unsafe prefix shows the prefix escaped once, not twice (#31).
 - `keygen` creates the private key readable by its owner only (`0600`) (#20).
 - `build` and `pack` skip FIFOs, devices and sockets in the source folder (`unsupported-file` warning, no more hanging

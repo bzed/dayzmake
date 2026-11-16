@@ -235,6 +235,17 @@ fn unpack_entries_that_collide_after_stripping_use_the_duplicate_rule() {
 }
 
 #[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_a_skipped_duplicate() {
+    // #41: "A.c" is extracted first; "\\a.c" is then skipped, so only the duplicate is reported
+    let pbo = crafted_pbo(&[("A.c", b"1"), ("\\a.c", b"2")], None);
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("duplicate-entry"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert_eq!(fs::read(tmp.path().join("target/A.c")).unwrap(), b"1");
+}
+
+#[test]
 fn unpack_rejects_dot_space_components() {
     let pbo = crafted_pbo(
         &[
@@ -313,6 +324,39 @@ fn unpack_does_not_follow_symlinks() {
     assert_eq!(code, 0, "{err}");
     assert!(!tmp.path().join("outside/evil.txt").exists());
     assert!(err.contains("unsafe-path"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_an_entry_behind_a_symlink() {
+    // the entry is skipped (unsafe-path), so it is not extracted as anything
+    let pbo = crafted_pbo(&[("\\link\\evil.txt", b"x")], None);
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("outside")).unwrap();
+    fs::create_dir_all(tmp.path().join("target")).unwrap();
+    std::os::unix::fs::symlink("../outside", tmp.path().join("target/link")).unwrap();
+    fs::write(tmp.path().join("in.pbo"), &pbo).unwrap();
+    let (code, err) = run_dayzmake(&["unpack", "-f", "in.pbo", "target"], tmp.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("unsafe-path"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert!(!tmp.path().join("outside/evil.txt").exists());
+}
+
+#[test]
+fn unpack_does_not_warn_about_a_leading_separator_of_an_unreadable_entry() {
+    let pbo = support::raw_pbo_with_headers(
+        &[
+            ("\\bad.c", b"\xFF", support::CPRS, 64),
+            ("ok.txt", b"y", 0, 1),
+        ],
+        &[],
+    );
+    let (tmp, code, err) = unpack_crafted(&pbo, &[]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("Skipping"), "{err}");
+    assert!(!err.contains("leading-separator"), "{err}");
+    assert!(tmp.path().join("target/ok.txt").exists());
 }
 
 #[test]

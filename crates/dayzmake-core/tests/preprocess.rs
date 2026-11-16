@@ -320,3 +320,241 @@ fn macro_expansion_depth_is_limited() {
         "{message}"
     );
 }
+
+fn run_file(path: &std::path::Path) -> std::io::Result<(String, PreprocessInfo)> {
+    let input = std::fs::read_to_string(path)?;
+    preprocess(
+        input,
+        Some(path.to_path_buf()),
+        &[],
+        &mut Warnings::default(),
+    )
+}
+
+/// A file that includes itself is an error naming the chain, not a stack overflow.
+#[test]
+fn include_self_cycle_is_an_error() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("self.hpp");
+    std::fs::write(&a, "#include \"self.hpp\"\n").unwrap();
+    let err = run_file(&a).unwrap_err().to_string();
+    assert!(err.contains("cycle"), "{err}");
+    assert!(err.contains("self.hpp"), "{err}");
+}
+
+/// A -> B -> A, reached through `../` spellings of the same file.
+#[test]
+fn include_two_file_cycle_is_an_error() {
+    let dir = tempdir().unwrap();
+    create_dir(dir.path().join("sub")).unwrap();
+    let a = dir.path().join("a.hpp");
+    std::fs::write(&a, "#include \"sub\\b.hpp\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("sub").join("b.hpp"),
+        "#include \"..\\a.hpp\"\n",
+    )
+    .unwrap();
+    let err = run_file(&a).unwrap_err().to_string();
+    assert!(err.contains("cycle"), "{err}");
+    assert!(err.contains("b.hpp"), "{err}");
+}
+
+fn chain(dir: &std::path::Path, files: usize) -> std::io::Result<PathBuf> {
+    for i in 0..files {
+        let body = if i + 1 < files {
+            format!("#include \"f{}.hpp\"\n", i + 1)
+        } else {
+            "x = 1;\n".to_string()
+        };
+        std::fs::write(dir.join(format!("f{i}.hpp")), body)?;
+    }
+    Ok(dir.join("f0.hpp"))
+}
+
+/// 33 nested includes exceed the limit of 32.
+#[test]
+fn include_chain_over_the_limit_is_an_error() {
+    let dir = tempdir().unwrap();
+    // f0 is the root; f1..f33 are 33 nested includes.
+    let root = chain(dir.path(), 34).unwrap();
+    let err = run_file(&root).unwrap_err().to_string();
+    assert!(err.contains("too deep"), "{err}");
+    assert!(err.contains("32"), "{err}");
+}
+
+/// 32 nested includes are still fine.
+#[test]
+fn include_chain_at_the_limit_works() {
+    let dir = tempdir().unwrap();
+    let root = chain(dir.path(), 33).unwrap();
+    let (out, _) = run_file(&root).unwrap();
+    assert!(out.contains("x = 1;"));
+}
+
+/// A -> B -> D and A -> C -> D is not a cycle: D is included twice and its content appears twice.
+/// Pins that the include stack is restored after each include (#53).
+#[test]
+fn diamond_include_is_not_a_cycle() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("a.hpp");
+    std::fs::write(&a, "#include \"b.hpp\"\n#include \"c.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("b.hpp"), "#include \"d.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("c.hpp"), "#include \"d.hpp\"\n").unwrap();
+    std::fs::write(dir.path().join("d.hpp"), "from_d = 1;\n").unwrap();
+    let (out, _) = run_file(&a).unwrap();
+    assert_eq!(out.matches("from_d = 1;").count(), 2, "{out}");
+}
+
+/// The billion-laughs pattern: every level doubles the output of the one below.
+fn laughs(n: usize) -> String {
+    let mut s = ["#define E", &n.to_string(), " x\n"].concat();
+    for i in (0..n).rev() {
+        let next = i + 1;
+        s += &[
+            "#define E",
+            &i.to_string(),
+            " E",
+            &next.to_string(),
+            " E",
+            &next.to_string(),
+            "\n",
+        ]
+        .concat();
+    }
+    s.push_str("a = E0;\n");
+    s
+}
+
+/// #57: exponential expansion stops early. N=21 expands to about 2M tokens (a few hundred MB) even if the
+/// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`).
+#[test]
+fn exponential_macro_expansion_is_capped() {
+    let start = std::time::Instant::now();
+    let err = preprocess(laughs(21), None, &[], &mut Warnings::new()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("expands to more than"), "{msg}");
+    assert!(msg.contains("\"E"), "{msg}");
+    assert!(
+        start.elapsed().as_secs_f64() < 1.0,
+        "took {:?}",
+        start.elapsed()
+    );
+}
+
+/// The same through macro arguments, which are copied rather than expanded.
+#[test]
+fn exponential_macro_arguments_are_capped() {
+    let mut s = String::from("#define D(x) x x\n");
+    s.push_str("a = ");
+    s.push_str(&"D(".repeat(24));
+    s.push('1');
+    s.push_str(&")".repeat(24));
+    s.push_str(";\n");
+    let err = preprocess(s, None, &[], &mut Warnings::new()).unwrap_err();
+    assert!(err.to_string().contains("expands to more than"), "{err}");
+}
+
+#[test]
+fn moderate_doubling_still_expands() {
+    let (out, _) = preprocess(laughs(12), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.matches('x').count(), 1 << 12);
+}
+
+/// CBA-style helper macros expand as before.
+#[test]
+fn cba_style_macros_still_expand() {
+    let input = "\
+#define PREFIX tag
+#define COMPONENT main
+#define DOUBLES(var1,var2) var1##_##var2
+#define TRIPLES(var1,var2,var3) var1##_##var2##_##var3
+#define ADDON DOUBLES(PREFIX,COMPONENT)
+#define GVAR(var1) DOUBLES(ADDON,var1)
+#define QUOTE(var1) #var1
+#define QGVAR(var1) QUOTE(GVAR(var1))
+#define QQGVAR(var1) QUOTE(QGVAR(var1))
+#define PATHTOF(var1) \\x\\tag\\addons\\main\\var1
+#define QPATHTOF(var1) QUOTE(PATHTOF(var1))
+#define FUNC(var1) TRIPLES(ADDON,fnc,var1)
+#define QFUNC(var1) QUOTE(FUNC(var1))
+a = QGVAR(foo);
+b = QQGVAR(foo);
+c = QPATHTOF(data\\x.paa);
+d = QFUNC(bar);
+";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert!(out.contains("a = \"tag_main_foo\";"), "{out}");
+    assert!(out.contains("b = \""), "{out}");
+    assert!(out.contains("x\\tag\\addons\\main\\data\\x.paa"), "{out}");
+    assert!(out.contains("d = \"tag_main_fnc_bar\";"), "{out}");
+}
+
+/// #59: expansion that yields nothing is charged for its work; N=14 (16k steps) still works, and the
+/// N=30 repro runs in a limited child (`tests/cli.rs`).
+#[test]
+fn moderate_empty_expansion_still_works() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=14 {
+        let p = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &p.to_string(),
+            ")E(A",
+            &p.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str("A14\n");
+    preprocess(src, None, &[], &mut Warnings::new()).unwrap();
+}
+
+/// #61: a line in a disabled branch is not expanded, so it cannot raise a macro error.
+#[test]
+fn disabled_lines_are_not_expanded() {
+    let input = "#define F(x) x\n#ifdef UNDEFINED\na = F(1, 2, 3);\nb = F(\n#endif\nc = 1;\n";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "c = 1;");
+}
+
+/// A disabled exponential line costs nothing, an enabled one is still capped.
+#[test]
+fn disabled_exponential_line_costs_nothing() {
+    let mut off = laughs(21).replace("a = E0;", "#ifdef NOPE\na = E0;\n#endif\nb = 1;");
+    let (out, _) = preprocess(off.clone(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "b = 1;");
+    off = off.replace("#ifdef NOPE", "#ifndef NOPE");
+    assert!(preprocess(off, None, &[], &mut Warnings::new()).is_err());
+}
+
+/// The #else branch of a false #ifdef is enabled and expanded; nesting is tracked while skipping.
+#[test]
+fn else_branch_is_expanded_and_nesting_is_tracked() {
+    let input = "#define F(x) x\n#ifdef A\n#ifdef B\nx = F(1,2);\n#else\ny = F(1,2);\n#endif\n#else\nz = F(7);\n#endif\n";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "z = 7;");
+}
+
+/// #60: a moderate include fan-out (4^4 = 256 leaf includes) is fine; the 30-level repro runs in a
+/// limited child (`tests/cli.rs`).
+#[test]
+fn moderate_include_fan_out_works() {
+    let dir = tempdir().unwrap();
+    for i in 0..4 {
+        let body = format!("#include \"f{}.h\"\n", i + 1).repeat(4);
+        std::fs::write(dir.path().join(format!("f{i}.h")), body).unwrap();
+    }
+    std::fs::write(dir.path().join("f4.h"), "x\n").unwrap();
+    let origin = dir.path().join("e.cpp");
+    std::fs::write(&origin, "").unwrap();
+    let (out, _) = preprocess(
+        "#include \"f0.h\"\n".to_string(),
+        Some(origin),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(out.matches('x').count(), 256);
+}

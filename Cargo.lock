@@ -353,6 +353,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "tempfile",
+ "winapi-util",
  "winreg",
 ]
 
@@ -373,6 +374,7 @@ dependencies = [
  "rand_core",
  "regex",
  "rsa",
+ "same-file",
  "sha1",
  "tempfile",
  "texpresso",

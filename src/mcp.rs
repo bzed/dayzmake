@@ -231,10 +231,9 @@ fn run_tool(name: &str, args: &Args, verbose: bool) -> Value {
     let mut warnings: Vec<String> = Vec::new();
     for w in sink.warnings() {
         if w.kind == WarningKind::Note {
-            #[expect(clippy::print_stderr, reason = "notes go to the server's stderr")]
-            {
-                eprintln!("{w}");
-            }
+            // a failed write to stderr (the reader is gone) cannot be reported anywhere, and must not
+            // stop the server: `eprintln!` would panic on it
+            let _ = writeln!(std::io::stderr(), "{w}");
         } else {
             warnings.push(w.to_string());
         }
@@ -1008,6 +1007,7 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
             &exclude,
             &include_folders(args)?,
             &own,
+            false, // MCP never writes a PBO to stdout
             binarizer.as_mut(),
             warnings,
         );
@@ -1019,7 +1019,9 @@ fn pack(build: bool, args: &Args, warnings: &mut dyn WarningSink) -> Result<Stri
     } else {
         let mut file = AtomicTarget::create(&target, force)?;
         let own = file.own_paths();
-        pbo::cmd_pack(&source, &mut file, &headerext, &exclude, &own, warnings)?;
+        pbo::cmd_pack(
+            &source, &mut file, &headerext, &exclude, &own, false, warnings,
+        )?;
         file.commit()?;
     }
     if let Some(key) = key {

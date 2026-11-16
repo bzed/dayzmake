@@ -12,7 +12,7 @@ use crate::error;
 use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
-use crate::preprocess::preprocess;
+use crate::preprocess::{MAX_NESTING_DEPTH, nesting_error, preprocess};
 use crate::warning::{Warning, WarningSink};
 
 /// Refuses a name with a control character: the config grammar has no way to write one, and it
@@ -132,16 +132,26 @@ peg::parser! {
             result
         }
 
-        rule eval_body() = ("(" eval_body() ")" / "\"" (!"\"" [_])* "\"" / !['(' | ')'] [_])*
+        /// Fails (and records the error) when `d` levels of classes, arrays or parentheses are exceeded.
+        rule nesting_ok(d: usize) = {?
+            if d >= MAX_NESTING_DEPTH {
+                ctx.error.get_or_insert(nesting_error());
+                Err("nesting within the limit")
+            } else {
+                Ok(())
+            }
+        }
 
-        rule eval_value() -> EvalValue = "__EVAL" whitespace()? "(" b:$(eval_body()) ")" {?
+        rule eval_body(d: usize) = ("(" nesting_ok(d) eval_body(d + 1) ")" / "\"" (!"\"" [_])* "\"" / !['(' | ')'] [_])*
+
+        rule eval_value(d: usize) -> EvalValue = "__EVAL" whitespace()? "(" b:$(eval_body(d)) ")" {?
             match eval(b, &mut ctx.vars) {
                 Ok(v) => Ok(v),
                 Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EVAL expression") }
             }
         }
 
-        rule exec_entry() = "__EXEC" whitespace()? "(" b:$(eval_body()) ")" whitespace()? ";" {?
+        rule exec_entry(d: usize) = "__EXEC" whitespace()? "(" b:$(eval_body(d)) ")" whitespace()? ";" {?
             match exec(b, &mut ctx.vars) {
                 Ok(()) => Ok(()),
                 Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EXEC statement") }
@@ -150,30 +160,30 @@ peg::parser! {
 
         rule string() -> String = doublequoted_string() / singlequoted_string()
 
-        rule array_element() -> ConfigArrayElement =
+        rule array_element(d: usize) -> ConfigArrayElement =
             f:float()   &(whitespace()? [',' | '}']) { ConfigArrayElement::FloatElement(f) } /
             i:integer() &(whitespace()? [',' | '}']) { ConfigArrayElement::IntElement(i) } /
-            a:array()   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
+            a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
-            v:eval_value() &(whitespace()? [',' | '}']) { v.into() } /
+            v:eval_value(d) &(whitespace()? [',' | '}']) { v.into() } /
             s:unquoted_string_array() &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) }
 
-        rule array_elements() -> Vec<ConfigArrayElement> = array_element() ** (whitespace()? "," whitespace()?)
+        rule array_elements(d: usize) -> Vec<ConfigArrayElement> = array_element(d) ** (whitespace()? "," whitespace()?)
 
-        rule array() -> ConfigArray = "{" whitespace()? elems:array_elements() whitespace()? ","? whitespace()? "}" {
+        rule array(d: usize) -> ConfigArray = "{" nesting_ok(d) whitespace()? elems:array_elements(d + 1) whitespace()? ","? whitespace()? "}" {
             ConfigArray {
                 is_expansion: false,
                 elements: elems
             }
         }
 
-        rule var() -> ConfigEntry =
+        rule var(d: usize) -> ConfigEntry =
             f:float()   { ConfigEntry::FloatEntry(f) } /
             i:integer() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
-            v:eval_value() { v.into() }
+            v:eval_value(d) { v.into() }
 
-        rule var_entry() -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? ce:var() {
+        rule var_entry(d: usize) -> (String, ConfigEntry) = n:name() whitespace()? "=" whitespace()? ce:var(d) {
             (n, ce)
         }
 
@@ -185,24 +195,24 @@ peg::parser! {
             (n, ConfigEntry::StringEntry(s))
         }
 
-        rule array_entry() -> (String, ConfigEntry) = n:name() whitespace()? "[" whitespace()? "]" whitespace()? "=" whitespace()? a:array() {
+        rule array_entry(d: usize) -> (String, ConfigEntry) = n:name() whitespace()? "[" whitespace()? "]" whitespace()? "=" whitespace()? a:array(d) {
             (n, ConfigEntry::ArrayEntry(a))
         }
 
-        rule array_expansion_entry() -> (String, ConfigEntry) = n:name() whitespace()? "[" whitespace()? "]" whitespace()? "+=" whitespace()? a:array() {
+        rule array_expansion_entry(d: usize) -> (String, ConfigEntry) = n:name() whitespace()? "[" whitespace()? "]" whitespace()? "+=" whitespace()? a:array(d) {
             (n, ConfigEntry::ArrayEntry(ConfigArray {
                 is_expansion: true,
                 ..a
             }))
         }
 
-        rule entry() -> (String, ConfigEntry) =
-            e:(class() / array_entry() / array_expansion_entry() / var_entry()) whitespace()? (";" / &"}") { e } /
+        rule entry(d: usize) -> (String, ConfigEntry) =
+            e:(class(d) / array_entry(d) / array_expansion_entry(d) / var_entry(d)) whitespace()? (";" / &"}") { e } /
             e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { e }
 
-        rule entry_or_exec() -> Option<(String, ConfigEntry)> = exec_entry() { None } / e:entry() { Some(e) }
+        rule entry_or_exec(d: usize) -> Option<(String, ConfigEntry)> = exec_entry(d) { None } / e:entry(d) { Some(e) }
 
-        rule entries() -> Vec<(String, ConfigEntry)> = v:(entry_or_exec() ** (whitespace()?)) { v.into_iter().flatten().collect() }
+        rule entries(d: usize) -> Vec<(String, ConfigEntry)> = v:(entry_or_exec(d) ** (whitespace()?)) { v.into_iter().flatten().collect() }
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
             n.to_string()
@@ -212,7 +222,7 @@ peg::parser! {
             n
         }
 
-        rule regular_class() -> (String, ConfigEntry) = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" whitespace()? e:entries() whitespace()? "}" {
+        rule regular_class(d: usize) -> (String, ConfigEntry) = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
             let parent = p.unwrap_or_default();
             (n, ConfigEntry::ClassEntry(ConfigClass {
                 parent,
@@ -240,10 +250,10 @@ peg::parser! {
             }))
         }
 
-        rule class() -> (String, ConfigEntry) = regular_class() / external_class() / deleted_class()
+        rule class(d: usize) -> (String, ConfigEntry) = regular_class(d) / external_class() / deleted_class()
 
         /// Parses a complete config: a sequence of entries until end of input.
-        pub rule config() -> Config = whitespace()? e:entries() whitespace()? ![_] {
+        pub rule config() -> Config = whitespace()? e:entries(0) whitespace()? ![_] {
             Config {
                 root_body: ConfigClass {
                     parent: String::new(),
@@ -353,8 +363,9 @@ impl ConfigArrayElement {
     }
 }
 
-/// Deepest class or array nesting accepted when reading a rapified config.
-const MAX_RAPIFIED_DEPTH: u32 = 128;
+/// Deepest class or array nesting accepted when reading a rapified config: the root class plus the
+/// `MAX_NESTING_DEPTH` levels the text parser accepts, so every config this crate writes reads back.
+const MAX_RAPIFIED_DEPTH: u32 = 129;
 
 /// Most entries and array elements accepted in one rapified config.
 const MAX_RAPIFIED_ENTRIES: u64 = 4_000_000;
