@@ -94,6 +94,8 @@ pub(crate) mod eval;
 pub mod fileid;
 /// I/O helpers for the binary formats.
 pub(crate) mod io;
+/// Bohemia's LZSS compression.
+pub(crate) mod lzss;
 /// P3D model reading and inspection.
 pub mod p3d;
 /// PAA texture conversion.

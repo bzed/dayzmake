@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! u16  magic (compression: 0xff01 DXT1, 0xff02 DXT2, 0xff03 DXT3,
-//!             0xff04 DXT4, 0xff05 DXT5, 0x8888 RGBA, ...)
+//!             0xff04 DXT4, 0xff05 DXT5, 0x8888 RGBA, 0x4444 RGBA4444,
+//!             0x1555 ARGB1555, 0x8080 AI88)
 //! taggs: 8-byte signature (e.g. "GGATSFFO") + u32 data size + data,
 //!        repeated until a zero byte (which is the low byte of the
 //!        palette length following them)
@@ -14,6 +15,9 @@
 //!          zero width
 //! u16 x3 zero terminator
 //! ```
+//!
+//! The mipmaps of the 16-bit formats (`0x4444`, `0x1555`, `0x8080`) are an LZSS stream of
+//! `width * height * 2` bytes followed by a 4-byte checksum, the signed sum of the output bytes.
 
 use std::io::{Error, Read, Seek, SeekFrom, Write};
 
@@ -102,6 +106,39 @@ fn decompress_mipmap(
     Ok(decompressed_data)
 }
 
+/// The formats whose mipmaps are an LZSS stream of 2-byte pixels followed by a checksum.
+fn is_packed16(compression: &str) -> bool {
+    matches!(compression, "RGBA4444" | "ARGB1555" | "AI88")
+}
+
+/// Checks a 16-bit format mipmap (its stored bytes: the LZSS stream and the 4 byte checksum) and
+/// returns the decoded pixel bytes, `width * height * 2`.
+fn unpack16(data: &[u8], (w, h): (u16, u16), budget: usize) -> Result<Vec<u8>, Error> {
+    let expected = usize::from(w & 0x7FFF)
+        .checked_mul(usize::from(h))
+        .and_then(|n| n.checked_mul(2))
+        .ok_or_else(|| error!("PAA mipmap is too large."))?;
+    if expected > budget {
+        return Err(error!(
+            "PAA mipmaps are too large: more than {MAX_PAA_TOTAL} bytes in total."
+        ));
+    }
+    let (pixels, used) = crate::lzss::decompress(data, expected, "PAA mipmap")?;
+    let stored = used
+        .checked_add(4)
+        .and_then(|end| data.get(used..end))
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .ok_or_else(|| error!("Truncated PAA mipmap: the checksum is missing."))?;
+    let stored = i32::from_le_bytes(stored);
+    let computed = crate::lzss::checksum(&pixels);
+    if stored != computed {
+        return Err(error!(
+            "PAA mipmap checksum mismatch: stored {stored}, computed {computed}."
+        ));
+    }
+    Ok(pixels)
+}
+
 /// Reads one mipmap of `size` stored bytes (LZO compressed if bit 15 of the width is set).
 /// `budget` is what is left of the total mipmap size allowed for the file. A compressed mipmap is
 /// decompressed once to check it against the budget; the result is its stored form and the size it
@@ -119,7 +156,21 @@ fn read_mipmap<I: Read>(
     if mip_data.len() != size {
         return Err(error!("Truncated PAA mipmap."));
     }
-    if (w & 0x8000) != 0 {
+    if is_packed16(compression) {
+        if (w & 0x8000) != 0 {
+            return Err(error!(
+                "LZO compression is only supported for DXT formats, not '{compression}'"
+            ));
+        }
+        let len = unpack16(&mip_data, (w, h), budget)?.len();
+        Ok((
+            Mipmap {
+                data: mip_data,
+                lzo: false,
+            },
+            len,
+        ))
+    } else if (w & 0x8000) != 0 {
         let decompressed = decompress_mipmap(compression, &mip_data, w, h, budget)?.len();
         Ok((
             Mipmap {
@@ -220,6 +271,33 @@ pub struct Paa {
     compression: String,
 }
 
+/// Expands the decoded pixels of a 16-bit format to RGBA.
+#[cfg(feature = "image")]
+fn unpack_pixels(compression: &str, pixels: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(pixels.len().saturating_mul(2));
+    for &[lo, hi] in pixels.as_chunks::<2>().0 {
+        let v = u16::from_le_bytes([lo, hi]);
+        // a 4 or 5 bit field (at most 31) expanded to 8 bits; the result fits a byte
+        let expand = |field: u16, max: u16| u8::try_from(field * 255 / max).unwrap_or(u8::MAX);
+        match compression {
+            "RGBA4444" => rgba.extend([
+                expand(v & 0xF, 15),
+                expand((v >> 4) & 0xF, 15),
+                expand((v >> 8) & 0xF, 15),
+                expand(v >> 12, 15),
+            ]),
+            "ARGB1555" => rgba.extend([
+                expand((v >> 10) & 0x1F, 31),
+                expand((v >> 5) & 0x1F, 31),
+                expand(v & 0x1F, 31),
+                if v & 0x8000 == 0 { 0 } else { 255 },
+            ]),
+            _ => rgba.extend([lo, lo, lo, hi]),
+        }
+    }
+    rgba
+}
+
 impl Paa {
     /// Width of the largest mipmap in pixels.
     #[must_use]
@@ -233,7 +311,7 @@ impl Paa {
         self.height
     }
 
-    /// Compression format name as read from the file, e.g. `"DXT5"`.
+    /// Compression format name as read from the file, e.g. `"DXT5"`, `"RGBA4444"`, `"ARGB1555"` or `"AI88"`.
     #[must_use]
     pub fn compression(&self) -> &str {
         &self.compression
@@ -272,9 +350,19 @@ impl Paa {
             0xff04 => "DXT4",
             0xff05 => "DXT5",
             0x8888 => "RGBA",
-            0x4444 => return Err(error!("Unsupported PAA format: RGBA4444 (0x4444)")),
-            0x1555 => return Err(error!("Unsupported PAA format: RGBA5551 (0x1555)")),
-            0x8080 => return Err(error!("Unsupported PAA format: GRAYwAlpha (0x8080)")),
+            0x4444 => "RGBA4444",
+            0x1555 => "ARGB1555",
+            0x8080 => "AI88",
+            // the first two bytes of a PNG signature
+            0x5089 => {
+                let mut rest = [0u8; 6];
+                if input.read_exact(&mut rest).is_ok() && rest == *b"NG\r\n\x1a\n" {
+                    return Err(error!(
+                        "This is a PNG file, not a PAA texture; convert it with img2paa."
+                    ));
+                }
+                return Err(error!("Invalid PAA magic number: 0x{:04x}", magic_number));
+            }
             _ => return Err(error!("Invalid PAA magic number: 0x{:04x}", magic_number)),
         }
         .to_string();
@@ -406,6 +494,14 @@ impl Paa {
             return Err(error!(
                 "PAA is too large to decode: {width} x {height} pixels."
             ));
+        }
+
+        if is_packed16(&self.compression) {
+            let pixels = unpack16(main_mipmap, (self.width, self.height), MAX_PAA_TOTAL)?;
+            let rgba = unpack_pixels(&self.compression, &pixels);
+            return Ok(DynamicImage::ImageRgba8(Self::rgba_image(
+                width, height, rgba,
+            )?));
         }
 
         let format = match self.compression.as_str() {
@@ -620,6 +716,10 @@ impl Paa {
             "DXT4" => 0xff04,
             "DXT5" => 0xff05,
             "RGBA" => 0x8888,
+            // the stored LZSS bytes are written back as they were read
+            "RGBA4444" => 0x4444,
+            "ARGB1555" => 0x1555,
+            "AI88" => 0x8080,
             _ => {
                 return Err(error!(
                     "Cannot write PAA compression type '{}'.",

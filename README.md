@@ -31,6 +31,9 @@ is maintained here.
 
 ### Unreleased
 
+- PAA reads RGBA4444, ARGB1555 and AI88 (#83): `paa2img` and `paa_to_image` decode the 19 such textures the game
+  ships (LZSS mipmaps with a checksum); a wrong checksum or a cut-short stream is an error. A PNG file named
+  `.paa` is reported as a PNG file.
 - Config enum blocks (#82): `rapify` accepts `enum { A, B = 5, C };` at any class level (values count up from
   the last explicit one, as in C) and writes the names, lowercase, into the enum table of the `config.bin`;
   `derapify` prints the table as an `enum { name = value, ... };` block at the top. A table that is missing or

@@ -331,3 +331,155 @@ fn read_then_write_keeps_lzo_mipmaps_compressed() {
         again.to_dynamic_image().expect("decodes")
     );
 }
+
+/// An LZSS stream of literals only: a flag byte of `0xFF` per 8 bytes.
+fn lzss_literals(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for group in raw.chunks(8) {
+        out.push(0xFF);
+        out.extend_from_slice(group);
+    }
+    out
+}
+
+/// The signed byte sum that follows the stream.
+fn lzss_checksum(raw: &[u8]) -> [u8; 4] {
+    let sum: i32 = raw.iter().map(|&b| i32::from(i8::from_le_bytes([b]))).sum();
+    sum.to_le_bytes()
+}
+
+/// A PAA of one `size` x `size` mipmap holding `stream` and `checksum`.
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
+fn packed_paa(magic: u16, size: u16, stream: &[u8], checksum: [u8; 4]) -> Vec<u8> {
+    let mut bytes = magic.to_le_bytes().to_vec();
+    bytes.extend_from_slice(&[0, 0]); // no taggs, no palette
+    let len = u32::try_from(stream.len() + 4).expect("small");
+    bytes.extend_from_slice(&size.to_le_bytes());
+    bytes.extend_from_slice(&size.to_le_bytes());
+    bytes.extend_from_slice(&len.to_le_bytes()[..3]);
+    bytes.extend_from_slice(stream);
+    bytes.extend_from_slice(&checksum);
+    bytes.extend_from_slice(&[0; 6]);
+    bytes
+}
+
+/// A 4 x 4 PAA of literal bytes with a correct checksum; the pixel data is `pixels`, 2 bytes per pixel.
+fn packed_4x4(magic: u16, pixels: &[[u8; 2]; 16]) -> Vec<u8> {
+    let raw: Vec<u8> = pixels.iter().flatten().copied().collect();
+    packed_paa(magic, 4, &lzss_literals(&raw), lzss_checksum(&raw))
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn rgba4444_decodes_to_rgba() {
+    // nibbles from low to high: R, G, B, A
+    let mut pixels = [[0x21, 0x43]; 16];
+    pixels[1] = [0xFF, 0xFF];
+    pixels[2] = [0x00, 0x00];
+    let paa = Paa::read(&mut Cursor::new(packed_4x4(0x4444, &pixels))).expect("reads");
+    assert_eq!(paa.compression(), "RGBA4444");
+    let img = paa.to_dynamic_image().expect("decodes").to_rgba8();
+    assert_eq!((img.width(), img.height()), (4, 4));
+    assert_eq!(img.get_pixel(0, 0).0, [17, 34, 51, 68]);
+    assert_eq!(img.get_pixel(1, 0).0, [255; 4]);
+    assert_eq!(img.get_pixel(2, 0).0, [0; 4]);
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn argb1555_decodes_to_rgba() {
+    // bit 15 alpha, then 5 bits each of R, G, B
+    let mut pixels = [[0u8; 2]; 16];
+    pixels[0] = 0xFFFFu16.to_le_bytes(); // white, opaque
+    pixels[1] = 0x7C00u16.to_le_bytes(); // red, transparent
+    pixels[2] = 0x83E0u16.to_le_bytes(); // green, opaque
+    pixels[3] = (0x8000u16 | 16).to_le_bytes(); // blue 16/31, opaque
+    let paa = Paa::read(&mut Cursor::new(packed_4x4(0x1555, &pixels))).expect("reads");
+    assert_eq!(paa.compression(), "ARGB1555");
+    let img = paa.to_dynamic_image().expect("decodes").to_rgba8();
+    assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    assert_eq!(img.get_pixel(1, 0).0, [255, 0, 0, 0]);
+    assert_eq!(img.get_pixel(2, 0).0, [0, 255, 0, 255]);
+    assert_eq!(img.get_pixel(3, 0).0, [0, 0, 131, 255]);
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn ai88_decodes_to_grey_with_alpha() {
+    let mut pixels = [[7, 9]; 16];
+    pixels[5] = [200, 255];
+    let paa = Paa::read(&mut Cursor::new(packed_4x4(0x8080, &pixels))).expect("reads");
+    assert_eq!(paa.compression(), "AI88");
+    let img = paa.to_dynamic_image().expect("decodes").to_rgba8();
+    assert_eq!(img.get_pixel(0, 0).0, [7, 7, 7, 9]);
+    assert_eq!(img.get_pixel(1, 1).0, [200, 200, 200, 255]);
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzss_back_references_are_followed() {
+    // literals grey 5, alpha 6, then two references to 2 bytes back: 18 and 12 bytes
+    let stream = [0b0000_0011, 5, 6, 2, 0x0F, 2, 0x09];
+    let raw = [5u8, 6].repeat(16);
+    let bytes = packed_paa(0x8080, 4, &stream, lzss_checksum(&raw));
+    let img = Paa::read(&mut Cursor::new(bytes))
+        .expect("reads")
+        .to_dynamic_image()
+        .expect("decodes")
+        .to_rgba8();
+    assert!(img.pixels().all(|p| p.0 == [5, 5, 5, 6]));
+}
+
+#[test]
+fn packed_formats_are_written_back_unchanged() {
+    let bytes = packed_4x4(0x4444, &[[1, 2]; 16]);
+    let paa = Paa::read(&mut Cursor::new(&bytes)).expect("reads");
+    let written = to_bytes(&paa);
+    let again = Paa::read(&mut Cursor::new(&written)).expect("reads back");
+    assert_eq!(again.compression(), "RGBA4444");
+    assert_eq!(to_bytes(&again), written);
+    // the mipmap's stored bytes are in the output
+    let raw = [1u8, 2].repeat(16);
+    let stored = [lzss_literals(&raw), lzss_checksum(&raw).to_vec()].concat();
+    assert!(written.windows(stored.len()).any(|w| w == stored));
+}
+
+#[test]
+fn a_wrong_checksum_is_an_error() {
+    let raw = [3u8; 32];
+    let bytes = packed_paa(0x8080, 4, &lzss_literals(&raw), [0, 0, 0, 0]);
+    let err = Paa::read(&mut Cursor::new(bytes)).expect_err("checksum mismatch");
+    assert!(err.to_string().contains("checksum"), "{err}");
+}
+
+#[test]
+fn a_truncated_lzss_stream_is_an_error() {
+    let raw = [3u8; 32];
+    let mut stream = lzss_literals(&raw);
+    stream.truncate(stream.len() - 12);
+    let bytes = packed_paa(0x4444, 4, &stream, lzss_checksum(&raw));
+    assert!(Paa::read(&mut Cursor::new(bytes)).is_err());
+    // no room for the checksum
+    let bytes = packed_paa(0x4444, 4, &lzss_literals(&raw)[..20], [0; 4]);
+    assert!(Paa::read(&mut Cursor::new(bytes)).is_err());
+}
+
+#[test]
+fn a_png_named_paa_is_called_a_png() {
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&[0; 32]);
+    let err = Paa::read(&mut Cursor::new(png)).expect_err("a PNG is not a PAA");
+    assert!(err.to_string().contains("PNG"), "{err}");
+}
+
+#[test]
+fn an_unknown_magic_is_still_invalid() {
+    let err = Paa::read(&mut Cursor::new(vec![0x34, 0x12, 0, 0, 0, 0])).expect_err("unknown magic");
+    assert!(err.to_string().contains("Invalid PAA magic number: 0x1234"));
+    // 0x5089 without the rest of the PNG signature
+    let err = Paa::read(&mut Cursor::new(vec![0x89, 0x50, 0, 0, 0, 0, 0, 0])).expect_err("unknown");
+    assert!(
+        err.to_string().contains("Invalid PAA magic number"),
+        "{err}"
+    );
+}

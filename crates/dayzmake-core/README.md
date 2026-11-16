@@ -32,6 +32,9 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- `Paa::read` accepts the formats `0x4444` (`"RGBA4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
+  `Paa::to_dynamic_image` decodes them to RGBA (#83); `Paa::write` writes their stored bytes back unchanged. A
+  wrong checksum or a cut-short LZSS stream is an error, and a PNG file gives an error that names the PNG.
 - `Config` reads, keeps and writes the enum table of a rapified config (#82): the parser accepts `enum { ... };`
   blocks, `Config::enum_values` returns the ordered `(lowercase name, value)` pairs, and `Config::to_string` prints
   them as an `enum` block first. A bad table offset or a cut-short table is not an error.
