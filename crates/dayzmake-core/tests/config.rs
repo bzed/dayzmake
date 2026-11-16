@@ -525,3 +525,13 @@ fn indent_rejects_other_characters() {
     assert!(msg.contains("a\\nb"), "{msg}");
     assert!(WriteOptions::new().indent("\t ").is_ok());
 }
+
+#[test]
+fn indent_too_long_reports_the_length() {
+    let msg = dayzmake_core::config::WriteOptions::new()
+        .indent(" ".repeat(65))
+        .expect_err("too long")
+        .to_string();
+    assert!(msg.contains("65 characters"), "{msg}");
+    assert!(msg.len() < 120, "{msg}");
+}

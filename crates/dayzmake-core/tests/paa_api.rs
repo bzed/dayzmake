@@ -198,13 +198,3 @@ fn lzo_compress_leaves_an_oversized_raw_mipmap_readable() {
     let back = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("the written file reads");
     assert_eq!(back.to_dynamic_image().expect("decodes").to_rgba8(), before);
 }
-
-#[test]
-fn indent_too_long_reports_the_length() {
-    let msg = dayzmake_core::config::WriteOptions::new()
-        .indent(" ".repeat(65))
-        .expect_err("too long")
-        .to_string();
-    assert!(msg.contains("65 characters"), "{msg}");
-    assert!(msg.len() < 120, "{msg}");
-}
