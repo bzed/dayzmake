@@ -24,6 +24,9 @@ is maintained here.
 
 ## Changes
 
+- Nesting deeper than 128 levels (macro argument parentheses, config classes, config arrays, `__EVAL`
+  parentheses and operator chains) is a parse error, not a stack overflow (#54). Parentheses inside macro
+  arguments count even in strings, as the preprocessor reads them.
 - An include cycle (`#include` of a file already being included) or include nesting deeper than 32 is an error
   naming the chain, not a stack overflow (#53).
 - A closed stdout pipe (`dayzmake inspect x.pbo | head -3`) ends the command quietly with exit status 0 and no

@@ -1,5 +1,6 @@
 //! Functions for preprocessing Arma configs and scripts
 
+use std::cell::Cell;
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -13,8 +14,9 @@ use crate::error::{ErrorExt, PreprocessParseErrorExt, printable};
 use crate::warning::{Warning, WarningSink};
 
 peg::parser! {
-    /// PEG grammar for the preprocessor: directives, macros, comments and tokens.
-    pub(crate) grammar preprocess_grammar() for str {
+    /// PEG grammar for the preprocessor: directives, macros, comments and tokens. `deep` is set when
+    /// macro argument parentheses nest deeper than [`MAX_NESTING_DEPTH`]; the caller turns that into an error.
+    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>) for str {
         rule newline() = "\r\n" / "\n"
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
@@ -51,9 +53,18 @@ peg::parser! {
             "#" [' ' | '\t']* "else" { Directive::ElseDirective } /
             "#" [' ' | '\t']* "endif" { Directive::EndIfDirective }
 
-        rule arg_rec() = "(" (arg_rec() / "\\\\" / ("\\" newline()) / !['\r' | '\n' | '(' | ')'] [_])* ")"
+        rule nesting_ok(d: usize) = {?
+            if deep.get() || d >= MAX_NESTING_DEPTH {
+                deep.set(true);
+                Err("parentheses nested within the limit")
+            } else {
+                Ok(())
+            }
+        }
 
-        rule argument() -> String = a:$((arg_rec() / "\\\\" / ("\\" newline()) / !['\r' | '\n' | ',' | ')'] [_])*) {
+        rule arg_rec(d: usize) = "(" nesting_ok(d) (arg_rec(d + 1) / "\\\\" / ("\\" newline()) / !['\r' | '\n' | '(' | ')'] [_])* ")"
+
+        rule argument() -> String = a:$((arg_rec(0) / "\\\\" / ("\\" newline()) / !['\r' | '\n' | ',' | ')'] [_])*) {
             a.to_string()
         }
 
@@ -216,6 +227,32 @@ impl PreprocessInfo {
     }
 }
 
+/// Maximum nesting of brackets in the grammars: macro argument parentheses, config classes, config
+/// arrays and `__EVAL` parentheses and operator chains. Deeper input is a parse error, not a stack
+/// overflow. The generated parsers use up to about 5 KiB of stack per level in a debug build, so this
+/// fits the 1 MiB main-thread stack of Windows (`tests/nesting.rs` runs on such a stack); it equals the
+/// limit of the rapified reader (`MAX_RAPIFIED_DEPTH`), and real configs nest fewer than 20 levels.
+pub(crate) const MAX_NESTING_DEPTH: usize = 128;
+
+/// The error for input nested deeper than [`MAX_NESTING_DEPTH`].
+pub(crate) fn nesting_error() -> Error {
+    error!("Nesting is deeper than {MAX_NESTING_DEPTH} levels")
+}
+
+/// Runs a grammar entry point with a fresh nesting flag; a parse that hit the limit is the nesting
+/// error, whatever the parser reported.
+fn parse_checked<T, E>(
+    parse: impl FnOnce(&Cell<bool>) -> Result<T, E>,
+    on_error: impl FnOnce(E) -> Error,
+) -> Result<T, Error> {
+    let deep = Cell::new(false);
+    let result = parse(&deep);
+    if deep.get() {
+        return Err(nesting_error());
+    }
+    result.map_err(on_error)
+}
+
 /// Maximum nesting of macro expansions; deeper input is an error, not a stack overflow.
 const MAX_EXPANSION_DEPTH: usize = 64;
 
@@ -228,8 +265,10 @@ fn identity(path: &Path) -> PathBuf {
 }
 
 fn parse_macro(input: &str) -> Result<Macro, Error> {
-    let without_original = preprocess_grammar::macro_proper(input)
-        .map_err(|e| error!("Failed to parse macro invocation \"{input}\": {e}"))?;
+    let without_original = parse_checked(
+        |deep| preprocess_grammar::macro_proper(input, deep),
+        |e| error!("Failed to parse macro invocation \"{input}\": {e}"),
+    )?;
 
     Ok(Macro {
         original: String::from(input),
@@ -299,8 +338,10 @@ impl Definition {
 
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
-                let mut tokens = preprocess_grammar::tokens(arg)
-                    .map_err(|e| error!("Failed to parse macro argument: {e}"))?;
+                let mut tokens = parse_checked(
+                    |deep| preprocess_grammar::tokens(arg, deep),
+                    |e| error!("Failed to parse macro argument: {e}"),
+                )?;
                 let stack: Vec<Definition> = Vec::new();
                 tokens = Macro::resolve_all(&tokens, def_map, &stack, depth, mismatches)?;
 
@@ -338,8 +379,10 @@ impl Macro {
         }
 
         let (_, without_name) = self.original.split_at(self.name.len());
-        let mut arg_tokens = preprocess_grammar::tokens(without_name)
-            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
+        let mut arg_tokens = parse_checked(
+            |deep| preprocess_grammar::tokens(without_name, deep),
+            |e| error!("Failed to parse macro arguments: {e}"),
+        )?;
 
         arg_tokens = Macro::resolve_all(&arg_tokens, def_map, stack, depth, mismatches)?;
         for t in arg_tokens {
@@ -374,8 +417,10 @@ impl Macro {
                             .value(None, def_map, stack, depth, mismatches)?
                             .unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
-                        let mut rest_tokens = preprocess_grammar::tokens(rest)
-                            .map_err(|e| error!("Failed to parse macro arguments: {e}"))?;
+                        let mut rest_tokens = parse_checked(
+                            |deep| preprocess_grammar::tokens(rest, deep),
+                            |e| error!("Failed to parse macro arguments: {e}"),
+                        )?;
                         rest_tokens =
                             Macro::resolve_all(&rest_tokens, def_map, stack, depth, mismatches)?;
                         tokens.extend(rest_tokens);
@@ -789,8 +834,12 @@ fn preprocess_rec(
 ) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
-    let lines =
-        PreprocessParseErrorExt::format_error(preprocess_grammar::file(&input), origin, &input)?;
+    let deep = Cell::new(false);
+    let parsed = preprocess_grammar::file(&input, &deep);
+    if deep.get() {
+        return Err(nesting_error());
+    }
+    let lines = PreprocessParseErrorExt::format_error(parsed, origin, &input)?;
     let mut output = String::new();
     let mut original_lineno = 1;
     let mut level = 0;
