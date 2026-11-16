@@ -900,10 +900,34 @@ fn raw_bytes_and_timestamps_of_a_read_pbo_are_available() {
         &[(b"prefix", b"scripts\n\xff")],
     );
     let pbo = read(&bytes);
-    let (key, value) = pbo.header_extensions().next().unwrap();
-    assert_eq!(pbo.extension_bytes(key), b"prefix");
-    assert_eq!(pbo.extension_bytes(value), b"scripts\n\xff");
+    assert_eq!(
+        pbo.header_extensions_bytes(),
+        vec![(b"prefix".to_vec(), b"scripts\n\xff".to_vec())]
+    );
     let header = &pbo.entry_headers()[0];
-    assert_eq!(pbo.name_bytes(&header.name), b"a\xffb.txt");
+    assert_eq!(header.name_bytes, b"a\xffb.txt");
     assert_eq!(header.timestamp, 1_700_000_000);
+}
+
+#[test]
+fn raw_bytes_keep_utf8_and_windows_1252_apart() {
+    // UTF-8 "é" (c3 a9) and the byte e9 (windows-1252 "é") decode to the same string
+    let bytes = support::raw_pbo_bytes(
+        &[(b"\xc3\xa9.txt", b"x", 0), (b"\xe9.txt", b"y", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(
+        pbo.header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xc3\xa9".to_vec()),
+            (b"other".to_vec(), b"\xe9".to_vec()),
+        ]
+    );
+    let names: Vec<Vec<u8>> = pbo
+        .entry_headers()
+        .into_iter()
+        .map(|h| h.name_bytes)
+        .collect();
+    assert_eq!(names, vec![b"\xc3\xa9.txt".to_vec(), b"\xe9.txt".to_vec()]);
 }

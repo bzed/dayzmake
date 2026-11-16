@@ -63,43 +63,35 @@ pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(
 /// Returns an error if the PBO cannot be read or the output cannot be written.
 pub fn cmd_inspect_json<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
-    let view = |text: &str| {
-        let raw = pbo.extension_bytes(text);
-        (String::from_utf8_lossy(&raw).into_owned(), hex(&raw))
-    };
-    let header_extensions = pbo
-        .header_extensions()
-        .map(|(key, value)| {
-            let (key, key_hex) = view(key);
-            let (value, value_hex) = view(value);
-            JsonExtension {
-                key,
-                value,
-                key_hex,
-                value_hex,
-            }
-        })
-        .collect();
-    let (prefix, prefix_hex) = match pbo.prefix() {
-        Some(prefix) => {
-            let (text, hex) = view(prefix);
-            (Some(text), Some(hex))
+    let lossy = |raw: &[u8]| (String::from_utf8_lossy(raw).into_owned(), hex(raw));
+    let raw_extensions = pbo.header_extensions_bytes();
+    let mut prefix = None;
+    let mut prefix_hex = None;
+    let mut header_extensions = Vec::new();
+    for ((key, _), (raw_key, raw_value)) in pbo.header_extensions().zip(&raw_extensions) {
+        let (value, value_hex) = lossy(raw_value);
+        if key == "prefix" {
+            prefix = Some(value.clone());
+            prefix_hex = Some(value_hex.clone());
         }
-        None => (None, None),
-    };
+        let (key, key_hex) = lossy(raw_key);
+        header_extensions.push(JsonExtension {
+            key,
+            value,
+            key_hex,
+            value_hex,
+        });
+    }
     let entries = pbo
         .entry_headers()
         .into_iter()
-        .map(|header| {
-            let raw = pbo.name_bytes(&header.name);
-            JsonEntry {
-                name: String::from_utf8_lossy(&raw).into_owned(),
-                name_hex: hex(&raw),
-                packing: header.packing_method,
-                original_size: header.original_size,
-                data_size: header.data_size,
-                timestamp: header.timestamp,
-            }
+        .map(|header| JsonEntry {
+            name: String::from_utf8_lossy(&header.name_bytes).into_owned(),
+            name_hex: hex(&header.name_bytes),
+            packing: header.packing_method,
+            original_size: header.original_size,
+            data_size: header.data_size,
+            timestamp: header.timestamp,
         })
         .collect();
     let json = JsonInspect {

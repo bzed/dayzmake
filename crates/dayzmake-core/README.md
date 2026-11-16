@@ -33,8 +33,7 @@ need to be GPL-2.0-or-later compatible.
 ### Unreleased
 
 - `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::entry_selected` applies them (#86).
-- `EntryHeader` gains `timestamp`, and `PBO::extension_bytes` is public: the raw bytes of a header extension key or
-  value (#91).
+- `EntryHeader` gains `timestamp` and `name_bytes`, and `PBO::header_extensions_bytes` returns the stored bytes of the header extensions (#91).
 
 ### 0.2.2
 

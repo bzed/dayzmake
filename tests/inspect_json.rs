@@ -130,8 +130,32 @@ fn text_output_is_unchanged_and_escaped() {
     write_pbo(dir.path());
     let (code, out, err) = dayzmake(&["inspect", "t.pbo"], dir.path());
     assert_eq!(code, 0, "{err}");
-    assert!(out.starts_with("Header extensions:\n- prefix="), "{out}");
     assert!(!out.contains('{'), "{out}");
+    assert!(
+        out.starts_with("Header extensions:\n- prefix=scripts\\n\u{ff}\n"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn json_keeps_utf8_and_windows_1252_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("t.pbo"),
+        support::raw_pbo_bytes(
+            &[(b"\xc3\xa9.txt", b"x", 0), (b"\xe9.txt", b"y", 0)],
+            &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+        ),
+    )
+    .unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "--json", "t.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["prefix_hex"], "c3a9");
+    assert_eq!(v["header_extensions"][0]["value_hex"], "c3a9");
+    assert_eq!(v["header_extensions"][1]["value_hex"], "e9");
+    assert_eq!(v["entries"][0]["name_hex"], "c3a92e747874");
+    assert_eq!(v["entries"][1]["name_hex"], "e92e747874");
 }
 
 #[test]
@@ -176,6 +200,19 @@ fn mcp_call(name: &str, args: &Value, cwd: &Path) -> (bool, String) {
             .unwrap()
             .to_string(),
     )
+}
+
+#[test]
+fn mcp_pbo_inspect_json_on_a_model_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mlod/small.p3d");
+    let (is_error, text) = mcp_call(
+        "pbo_inspect",
+        &json!({"path": model.to_str().unwrap(), "json": true}),
+        dir.path(),
+    );
+    assert!(is_error, "{text}");
+    assert!(text.contains("--json is only supported for PBOs"), "{text}");
 }
 
 #[test]

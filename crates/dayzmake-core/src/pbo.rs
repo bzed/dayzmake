@@ -49,6 +49,8 @@ pub struct EntryHeader {
     pub data_size: u32,
     /// The timestamp field of the entry header (Unix time, usually 0).
     pub timestamp: u32,
+    /// The bytes the name is stored as in the PBO header (`name` is decoded from them).
+    pub name_bytes: Vec<u8>,
 }
 
 /// The header extensions as `(key, value)` pairs and the entry names, both in file order.
@@ -176,6 +178,9 @@ pub struct PBO {
     raw_names: HashMap<String, Vec<u8>>,
     /// Same as `raw_names`, for header extension keys and values.
     raw_extensions: HashMap<String, Vec<u8>>,
+    /// The stored bytes of every header extension in the order of `header_extensions`; empty once
+    /// the extensions were changed.
+    raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
     /// only defined when reading existing PBOs, for created PBOs this is calculated during writing
     /// and included in the output
@@ -233,6 +238,8 @@ impl PBOHeader {
 struct HeaderBlock {
     extensions: LinkedHashMap<String, String>,
     raw_extensions: HashMap<String, Vec<u8>>,
+    /// The stored bytes of every extension `(key, value)`, in the order of `extensions`.
+    raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
 }
 
@@ -246,6 +253,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
     let mut block = HeaderBlock {
         extensions: LinkedHashMap::new(),
         raw_extensions: HashMap::new(),
+        raw_pairs: Vec::new(),
         headers: Vec::new(),
     };
     let mut first = true;
@@ -258,14 +266,24 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
                 return Err(error!("Duplicate version header in PBO."));
             }
             loop {
-                let (key, raw_key) = decode_name(read_bounded_cstring(input)?);
+                let key_bytes = read_bounded_cstring(input)?;
+                let (key, raw_key) = decode_name(key_bytes.clone());
                 if key.is_empty() {
                     break;
                 }
                 if block.extensions.len() >= MAX_HEADER_EXTENSIONS {
                     return Err(error!("PBO has too many header extensions."));
                 }
-                let (value, raw_value) = decode_name(read_bounded_cstring(input)?);
+                let value_bytes = read_bounded_cstring(input)?;
+                let (value, raw_value) = decode_name(value_bytes.clone());
+                match block.extensions.keys().position(|k| *k == key) {
+                    Some(at) => {
+                        if let Some(pair) = block.raw_pairs.get_mut(at) {
+                            pair.1 = value_bytes;
+                        }
+                    }
+                    None => block.raw_pairs.push((key_bytes, value_bytes)),
+                }
                 if let Some(raw) = raw_key {
                     block.raw_extensions.insert(key.clone(), raw);
                 }
@@ -637,6 +655,7 @@ impl PBO {
             header_extensions: LinkedHashMap::new(),
             raw_names: HashMap::new(),
             raw_extensions: HashMap::new(),
+            raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
             computed_checksum: None,
@@ -699,6 +718,7 @@ impl PBO {
 
     /// Sets a header extension; a repeated key keeps its position and takes the new value.
     pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.raw_pairs.clear();
         self.checksum = None;
         self.computed_checksum = None;
         set_extension(&mut self.header_extensions, &key.into(), value.into());
@@ -778,6 +798,10 @@ impl PBO {
                 original_size: h.original_size,
                 data_size: h.data_size,
                 timestamp: h.timestamp,
+                name_bytes: h
+                    .raw_filename
+                    .clone()
+                    .unwrap_or_else(|| h.filename.as_bytes().to_vec()),
             })
             .collect()
     }
@@ -791,11 +815,22 @@ impl PBO {
             .unwrap_or_else(|| name.as_bytes().to_vec())
     }
 
-    /// Returns the bytes a header extension key or value (as returned by
-    /// [`PBO::header_extensions`]) is stored as in the PBO header; for a string that is not one of
-    /// them, its UTF-8 bytes.
+    /// The header extensions as `(key, value)` bytes, in the order of [`PBO::header_extensions`]:
+    /// exactly what the PBO header stores for a PBO that was read and whose extensions were not
+    /// changed, the UTF-8 bytes of the strings otherwise. A repeated key has the bytes of its
+    /// first key and its last value.
     #[must_use]
-    pub fn extension_bytes(&self, s: &str) -> Vec<u8> {
+    pub fn header_extensions_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        if self.raw_pairs.len() == self.header_extensions.len() {
+            return self.raw_pairs.clone();
+        }
+        self.header_extensions()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+            .collect()
+    }
+
+    /// Returns the bytes a header extension key or value is stored as.
+    pub(crate) fn extension_bytes(&self, s: &str) -> Vec<u8> {
         self.raw_extensions
             .get(s)
             .cloned()
@@ -816,6 +851,7 @@ impl PBO {
         let HeaderBlock {
             extensions: header_extensions,
             raw_extensions,
+            raw_pairs,
             headers,
         } = read_header_block(input)?;
 
@@ -857,6 +893,7 @@ impl PBO {
             header_extensions,
             raw_names,
             raw_extensions,
+            raw_pairs,
             headers,
             checksum: Some(checksum),
             computed_checksum: Some(computed_checksum),
@@ -1211,6 +1248,7 @@ impl PBO {
             header_extensions,
             raw_names: HashMap::new(),
             raw_extensions: HashMap::new(),
+            raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
             computed_checksum: None,
