@@ -188,8 +188,13 @@ Behaviour:
 - For a PBO: the header extensions, the number of files, and a table with name, packing method (0 stored,
   compressed entries are listed with their packed size), original size and stored size.
 - For an editable MLOD model: format and version, the LODs with point, face, normal and UV-set counts, textures
-  and materials with the number of faces that use them, properties and named selections. For a binarized ODOL
-  or BMTR file only the format and version are known.
+  and materials with the number of faces that use them, properties and named selections.
+- For a binarized ODOL v56 model: format and version, the skeleton and bone count, the property class and damage,
+  mass, bounding box, the LODs with vertex and face counts, textures and materials with the number of LODs that use
+  them (a built-in material without a name is listed as `(none)`), proxies, properties, named selections and the
+  animation classes. A v56 model that cannot be read is an error.
+  For another ODOL version, or a BMTR file, only the format and version are shown (ODOL adds a note that only v56 is
+  decoded).
 - Nothing is written; the command only reads.
 - `--json` prints one JSON object on one line, with the fields in this order:
   - `header_extensions`: an ordered array of `{key, value, key_hex, value_hex}`;

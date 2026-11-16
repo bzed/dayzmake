@@ -1,5 +1,8 @@
 //! `dayzmake api config`: lookup of config classes with their inheritance chain and resolved properties.
-#![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
+#![cfg_attr(
+    unix,
+    expect(clippy::expect_used, reason = "a failing expect is a failing test")
+)]
 // the CLI is run with unix-style environment variables and paths only
 #![cfg(unix)]
 

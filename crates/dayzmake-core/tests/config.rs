@@ -535,3 +535,388 @@ fn indent_too_long_reports_the_length() {
     assert!(msg.contains("65 characters"), "{msg}");
     assert!(msg.len() < 120, "{msg}");
 }
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn parse(src: &str) -> Config {
+    Config::from_string(src.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap()
+}
+
+/// Returns the bytes of the rapified config and the enum table (from the header's `enum_offset`).
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn table_bytes(config: &Config) -> Vec<u8> {
+    let bytes = config.to_cursor().unwrap().into_inner().into_vec();
+    let off = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    bytes[off..].to_vec()
+}
+
+#[test]
+fn rapify_enum_block() {
+    let with = parse("enum { A, B = 5, C };\nclass X { y = 1; };");
+    let without = parse("class X { y = 1; };");
+    assert_eq!(
+        table_bytes(&with),
+        b"\x03\0\0\0a\0\0\0\0\0b\0\x05\0\0\0c\0\x06\0\0\0"
+    );
+    assert_eq!(table_bytes(&without), b"\0\0\0\0");
+    let a = with.to_cursor().unwrap().into_inner();
+    let b = without.to_cursor().unwrap().into_inner();
+    // the class tree (bytes 16..enum_offset) is identical
+    let ea = u32::from_le_bytes(a[12..16].try_into().unwrap()) as usize;
+    assert_eq!(&a[16..ea], &b[16..b.len() - 4]);
+    assert_eq!(
+        with.enum_values(),
+        &[
+            ("a".to_string(), 0),
+            ("b".to_string(), 5),
+            ("c".to_string(), 6)
+        ]
+    );
+}
+
+#[test]
+fn enum_in_class_and_trailing_comma() {
+    let c = parse("class X { enum { Foo = -2, Bar, }; v = 1; };\nenum { Z = 0x10 };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("foo".to_string(), -2),
+            ("bar".to_string(), -1),
+            ("z".to_string(), 16)
+        ]
+    );
+    assert_eq!(c.to_string().unwrap().lines().next(), Some("enum {"));
+    assert!(c.root().get("X").is_some());
+}
+
+fn bin_with_table(table: &[u8]) -> Vec<u8> {
+    let mut v = b"\0raP\0\0\0\0\x08\0\0\0".to_vec();
+    v.extend_from_slice(&21u32.to_le_bytes());
+    v.extend_from_slice(b"\0\0"); // root: parent "", 0 entries
+    v.extend_from_slice(&[0; 3]); // padding to offset 21
+    v.extend_from_slice(table);
+    v
+}
+
+#[test]
+fn derapify_enum_table() {
+    let data = bin_with_table(b"\x02\0\0\0destructno\0\0\0\0\0destructwreck\0\x07\0\0\0");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(
+        c.to_string().unwrap(),
+        "enum {\n    destructno = 0,\n    destructwreck = 7\n};\n"
+    );
+}
+
+#[test]
+fn enum_round_trip() {
+    let c = parse("enum { A, B = 5, C };\nclass X { y = 1; };");
+    let text = c.to_string().unwrap();
+    let again = parse(&text);
+    assert_eq!(again.to_string().unwrap(), text);
+    let mut cur = c.to_cursor().unwrap();
+    cur.seek(SeekFrom::Start(0)).unwrap();
+    let back = Config::read_rapified(&mut cur).unwrap();
+    assert_eq!(back.to_string().unwrap(), text);
+}
+
+#[test]
+fn damaged_enum_table_is_no_error() {
+    // offset past the end
+    let mut data = bin_with_table(b"");
+    data[12..16].copy_from_slice(&9999u32.to_le_bytes());
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), []);
+    // table cut short: second entry has no value
+    let data = bin_with_table(b"\x02\0\0\0a\0\x01\0\0\0b\0\x02");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), &[("a".to_string(), 1)]);
+    // hostile count, no data
+    let data = bin_with_table(b"\xff\xff\xff\xff");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), []);
+}
+
+#[test]
+fn enum_table_ends_at_the_first_name_that_is_no_identifier() {
+    for bad in [&b"\x01"[..], b"a b", b"a-b", b"a\"b", b"", b"\xff\xfe"] {
+        let mut table = b"\x03\0\0\0ok\0\x05\0\0\0".to_vec();
+        table.extend_from_slice(bad);
+        table.extend_from_slice(b"\0\x01\0\0\0fine\0\x02\0\0\0");
+        let c = Config::read_rapified(&mut Cursor::new(bin_with_table(&table))).unwrap();
+        assert_eq!(c.enum_values(), &[("ok".to_string(), 5)], "{bad:?}");
+        assert_eq!(c.to_string().unwrap(), "enum {\n    ok = 5\n};\n");
+    }
+    // a bad first name leaves no block at all
+    let data = bin_with_table(b"\x01\0\0\0\x01\0\x01\0\0\0");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.to_string().unwrap(), "");
+}
+
+#[test]
+fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
+    let c = parse("enum { A = 2147483647 };");
+    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
+    let c = parse("enum { A = 0x7FFFFFFF };");
+    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
+    assert!(
+        Config::from_string(
+            "enum { A = 2147483647, B };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+}
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn parse_a(src: &str) -> (Config, Warnings) {
+    let mut w = Warnings::default();
+    let config = Config::from_string(src.to_string(), None, &[], &mut w).unwrap();
+    (config, w)
+}
+
+#[expect(clippy::unwrap_used, clippy::panic, reason = "tests fail by panicking")]
+fn entry_a<'a>(config: &'a Config, name: &str) -> &'a ConfigEntry {
+    let Some(ConfigEntry::ClassEntry(c)) = config.root().get("A") else {
+        panic!("no class A");
+    };
+    c.get(name).unwrap()
+}
+
+#[test]
+fn exponent_floats_are_floats() {
+    let src = "class A { a = 1e-5; b = 1.5E+3; c = -2.5e-7; d = 3.162277e-5; e = 7; f = 1.0; g = 0x10; };";
+    let (config, w) = parse_a(src);
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    for (n, v) in [
+        ("a", 1e-5_f32),
+        ("b", 1500.0),
+        ("c", -2.5e-7),
+        ("d", 3.162_277e-5),
+    ] {
+        assert!(
+            matches!(entry_a(&config, n), ConfigEntry::FloatEntry(f) if f.to_bits() == v.to_bits()),
+            "{n}"
+        );
+    }
+    assert!(matches!(entry_a(&config, "e"), ConfigEntry::IntEntry(7)));
+    assert!(matches!(entry_a(&config, "f"), ConfigEntry::FloatEntry(_)));
+    assert!(matches!(entry_a(&config, "g"), ConfigEntry::IntEntry(16)));
+}
+
+#[test]
+fn exponent_floats_in_arrays_are_floats() {
+    let (config, w) = parse_a("class A { x[] = {1e-5, 1.5E+3, -2.5e-7, 3.162277e-5, 4}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "x") else {
+        panic!("not an array");
+    };
+    let kinds: Vec<bool> = a
+        .elements()
+        .iter()
+        .map(|e| matches!(e, ConfigArrayElement::FloatElement(_)))
+        .collect();
+    assert_eq!(kinds, [true, true, true, true, false]);
+}
+
+#[test]
+fn malformed_exponents_stay_strings() {
+    let (config, w) = parse_a("class A { a = 1e5x; b = e5; c = 1e; d[] = {1e5x, e5, 1e}; };");
+    assert!(
+        w.warnings()
+            .iter()
+            .any(|x| x.name == Some("unquoted-string")),
+        "{:?}",
+        w.warnings()
+    );
+    for n in ["a", "b", "c"] {
+        assert!(
+            matches!(entry_a(&config, n), ConfigEntry::StringEntry(_)),
+            "{n}"
+        );
+    }
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "d") else {
+        panic!("not an array");
+    };
+    assert!(
+        a.elements()
+            .iter()
+            .all(|e| matches!(e, ConfigArrayElement::StringElement(_)))
+    );
+}
+
+#[test]
+fn derapified_exponent_float_roundtrips() {
+    let first = derapify(rapify_src("class A { x = 0.00003162277; };"));
+    let second = derapify(rapify_src(&first));
+    assert_eq!(first, second);
+}
+
+#[test]
+fn out_of_range_floats_are_errors() {
+    let long = format!("1{}.5", "0".repeat(45));
+    for v in ["1e999", "-1e999", "1e39", "-1e39", long.as_str()] {
+        for src in [
+            format!("class A {{ x = {v}; }};"),
+            format!("class A {{ x[] = {{1, {v}}}; }};"),
+        ] {
+            let err = Config::from_string(src.clone(), None, &[], &mut Warnings::new())
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(err.contains("out of range"), "{src}: {err:?}");
+            assert!(err.contains("Invalid float"), "{src}: {err:?}");
+        }
+    }
+}
+
+#[test]
+fn float_underflow_is_zero_without_warning() {
+    let (config, w) = parse_a("class A { a = 1e-50; b[] = {1e-50}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::FloatEntry(f) if f.to_bits() == 0));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(a.elements(), [ConfigArrayElement::FloatElement(f)] if f.to_bits() == 0));
+}
+
+#[test]
+fn hex_and_leading_dot_exponent() {
+    let (config, w) = parse_a("class A { a = 0x1e5; b = .5e3; c[] = {0x1e5, .5e3}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::IntEntry(485)));
+    assert!(
+        matches!(entry_a(&config, "b"), ConfigEntry::FloatEntry(f) if f.to_bits() == 500.0_f32.to_bits())
+    );
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "c") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [ConfigArrayElement::IntElement(485), ConfigArrayElement::FloatElement(f)] if f.to_bits() == 500.0_f32.to_bits()
+    ));
+}
+
+#[test]
+fn overflowing_float_followed_by_text_stays_a_string() {
+    let (config, w) = parse_a("class A { a = 1e999x; b[] = {1e999x}; };");
+    assert!(
+        w.warnings()
+            .iter()
+            .any(|x| x.name == Some("unquoted-string")),
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(_)));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [ConfigArrayElement::StringElement(_)]
+    ));
+}
+
+#[test]
+fn overflowing_integer_followed_by_text_stays_a_string() {
+    let (config, w) = parse_a("class A { a = 99999999999x; b[] = {99999999999x, 0xfffffffffy}; };");
+    assert_eq!(
+        w.warnings()
+            .iter()
+            .filter(|x| x.name == Some("unquoted-string"))
+            .count(),
+        3,
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(s) if s == "99999999999x"));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [
+            ConfigArrayElement::StringElement(_),
+            ConfigArrayElement::StringElement(_)
+        ]
+    ));
+}
+
+#[test]
+fn an_overflowing_integer_alone_is_still_an_error() {
+    assert!(
+        Config::from_string(
+            "class A { a = 99999999999; };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+    assert!(
+        Config::from_string(
+            "class A { a[] = {99999999999}; };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn inf_and_nan_are_unquoted_strings_with_a_warning() {
+    let (config, w) = parse_a("class A { a = inf; b = nan; };");
+    assert_eq!(
+        w.warnings()
+            .iter()
+            .filter(|x| x.name == Some("unquoted-string"))
+            .count(),
+        2,
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(s) if s == "inf"));
+    assert!(matches!(entry_a(&config, "b"), ConfigEntry::StringEntry(s) if s == "nan"));
+}
+
+#[test]
+fn floats_ending_at_a_closing_brace_stay_floats() {
+    let (config, w) = parse_a("class A { x = 1.5 };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1.5_f32.to_bits())
+    );
+    let (config, w) = parse_a("class A {\n x = 1e5\n};");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1e5_f32.to_bits())
+    );
+    let err = Config::from_string(
+        "class A { x = 1e999 };".to_string(),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default();
+    assert!(err.contains("out of range"), "{err:?}");
+}
+
+#[test]
+fn array_floats_accept_whitespace_before_terminators() {
+    let (config, w) = parse_a("class A { x[] = {1.5 , 2e1 , 1e-5 }; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "x") else {
+        panic!("not an array");
+    };
+    assert!(
+        a.elements()
+            .iter()
+            .all(|e| matches!(e, ConfigArrayElement::FloatElement(_)))
+    );
+    assert_eq!(a.elements().len(), 3);
+}

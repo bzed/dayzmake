@@ -77,3 +77,10 @@ path = "fuzz_targets/sign_verify.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "odol_read"
+path = "fuzz_targets/odol_read.rs"
+test = false
+doc = false
+bench = false

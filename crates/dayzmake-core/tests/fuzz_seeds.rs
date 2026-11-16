@@ -6,6 +6,7 @@ use std::io::{self, Cursor};
 use std::path::Path;
 
 use dayzmake_core::config::Config;
+use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::P3D;
 use dayzmake_core::paa::Paa;
 use dayzmake_core::pbo::PBO;
@@ -124,6 +125,14 @@ fn sign_verify_seeds() -> io::Result<()> {
         if let Ok(private) = BIPrivateKey::read(&mut &private[..]) {
             let _ = private.sign(&pbo, BISignVersion::V3);
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn odol_read_seeds() -> io::Result<()> {
+    for data in seeds("odol_read")? {
+        let _ = Odol::read(&mut Cursor::new(&data));
     }
     Ok(())
 }

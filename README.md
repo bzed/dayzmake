@@ -62,6 +62,21 @@ is maintained here.
   is not UTF-8 is unambiguous. The MCP tool `pbo_inspect` takes the argument `json`. A model gives an error (#91).
 - Writing and signing a PBO keep the stored bytes of header extensions and entry names that a UTF-8 and a windows-1252
   spelling would otherwise swap (#92).
+- Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
+  `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
+  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
+  entry may end at a closing brace without a semicolon.
+- `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,
+  textures, materials, proxies, properties, selections and animations. Other ODOL versions still show the format
+  and version, with a note that only v56 is decoded. A model whose LOD ranges overlap is refused.
+- PAA reads ARGB4444, ARGB1555 and AI88 (#83): `paa2img` and `paa_to_image` decode the 19 such textures the game
+  ships (LZSS mipmaps with a checksum); a wrong checksum or a cut-short stream is an error. A PNG file named
+  `.paa` is reported as a PNG file.
+- Config enum blocks (#82): `rapify` accepts `enum { A, B = 5, C };` at any class level (values count up from
+  the last explicit one, as in C) and writes the names, lowercase, into the enum table of the `config.bin`;
+  `derapify` prints the table as an `enum { name = value, ... };` block at the top. A table that is missing or
+  damaged gives no block and no error.
 
 ### 3.0.2
 
@@ -349,7 +364,7 @@ Commands:
                 for models whose textures are referenced by a longer prefix.
     build       Build a PBO from a folder.
     pack        Pack a folder into a PBO without any binarization or rapification.
-    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
+    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL v56) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
     extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
@@ -498,7 +513,7 @@ the result, so a cut never drops them, and failures are results with `isError: t
 
 ## Inspecting models and checking their textures
 
-`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections; for a binarized ODOL (or BMTR) only the format and version are known. Without a model header, `inspect` treats the input as a PBO.
+`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections. For a binarized ODOL version 56 (the version of the game's models) it lists the skeleton, the bounding box, the LODs with vertex and face counts, textures, materials, proxies, properties, selections and animations; a damaged v56 model is an error. For other ODOL versions and for BMTR only the format and version are shown, with a note that only v56 is decoded. Without a model header, `inspect` treats the input as a PBO.
 
 `build` checks every MLOD model it is about to binarize (also without `--proton-binarize`) and warns about textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute with `-w`). References starting with the addon's prefix are looked up in the source folder, ignoring case. Other references (vanilla `dz\...`, other mods) are only checked if they exist below an `-i` folder or the current directory; if they don't, they are not reported because there is no way to tell whether they are wrong. Procedural textures (`#(argb,...)`) are skipped.
 

@@ -422,60 +422,10 @@ pub(crate) fn decompress_entry(data: &[u8], original_size: u32) -> Result<Vec<u8
 /// Packing method of entries compressed with Bohemia's LZSS variant ("Cprs").
 const PACKING_COMPRESSED: u32 = 0x4370_7273;
 
-/// Decompresses a "Cprs" PBO entry: groups of 8 items led by a flag byte (LSB first),
-/// bit set = literal byte, bit clear = 2-byte back reference (12 bit offset, 4 bit length - 3).
-/// The window starts out filled with spaces; the 4 byte checksum after the data is ignored.
+/// Decompresses a "Cprs" PBO entry (Bohemia's LZSS); the 4 byte checksum after the data is
+/// ignored.
 fn lzss_decompress(data: &[u8], original_size: usize) -> Result<Vec<u8>, Error> {
-    let truncated = || error!("Truncated compressed PBO entry.");
-    // a flag byte and 8 two byte references expand to at most 8 * 18 bytes out of 17 in
-    let max_size = data.len().saturating_mul(9);
-    if original_size > max_size {
-        return Err(error!(
-            "Compressed PBO entry claims an implausible size: {original_size} bytes from {} bytes.",
-            data.len()
-        ));
-    }
-    let mut out: Vec<u8> = Vec::with_capacity(original_size.min(max_size));
-    let mut pos = 0;
-
-    while out.len() < original_size {
-        let flags = *data.get(pos).ok_or_else(truncated)?;
-        pos += 1;
-
-        for bit in 0..8 {
-            if out.len() >= original_size {
-                break;
-            }
-
-            if flags & (1 << bit) != 0 {
-                out.push(*data.get(pos).ok_or_else(truncated)?);
-                pos += 1;
-            } else {
-                let b1 = *data.get(pos).ok_or_else(truncated)? as usize;
-                let b2 = *data.get(pos + 1).ok_or_else(truncated)? as usize;
-                pos += 2;
-
-                let offset = b1 | ((b2 & 0xF0) << 4);
-                let length = (b2 & 0x0F) + 3;
-                if offset == 0 {
-                    return Err(error!("Invalid back reference in compressed PBO entry."));
-                }
-
-                for _ in 0..length {
-                    let byte = out
-                        .len()
-                        .checked_sub(offset)
-                        .and_then(|i| out.get(i))
-                        .copied()
-                        .unwrap_or(b' ');
-                    out.push(byte);
-                }
-            }
-        }
-    }
-
-    out.truncate(original_size);
-    Ok(out)
+    crate::lzss::decompress(data, original_size, "PBO entry").map(|(out, _)| out)
 }
 
 /// Matches `s` against `pattern`, where `*` stands for any run of characters, including none.

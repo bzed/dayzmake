@@ -208,6 +208,29 @@ fn mcp_stdout_is_pure_jsonrpc() {
 }
 
 #[test]
+fn mcp_pbo_inspect_lists_an_odol_v56_model() {
+    #[path = "../crates/dayzmake-core/tests/support/odol_builder.rs"]
+    mod odol_builder;
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::write(
+        tmp.path().join("m.p3d"),
+        odol_builder::build(odol_builder::Knobs::default()),
+    )
+    .expect("write");
+    let r = run(
+        &[call(1, "pbo_inspect", &json!({"path":"m.p3d"}))],
+        tmp.path(),
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    let t = text(&r.replies[0]);
+    assert!(
+        t.contains("Version: 56") && t.contains("\\dz\\tex_a_co.paa"),
+        "{t}"
+    );
+    assert!(t.contains("- LOD 0: class = house"), "{t}");
+}
+
+#[test]
 fn mcp_unknown_method_is_32601() {
     let tmp = tempfile::tempdir().expect("tmp");
     let r = run(

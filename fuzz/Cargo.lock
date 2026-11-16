@@ -253,6 +253,7 @@ dependencies = [
  "image",
  "linked-hash-map",
  "lzo1x",
+ "lzokay-native",
  "peg",
  "regex",
  "rsa",
@@ -511,6 +512,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8138859503d536f7a33a44032e1681e4a67266de388a6961ad7e3efdfe969ea"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "lzokay-native"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c83fc518c5874790cff277720d646a859d5c88fb2a58c7d7c45782384658ddd"
+dependencies = [
+ "byteorder",
+ "thiserror",
 ]
 
 [[package]]
@@ -934,6 +945,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8550677e2259d675a7841cb1403db35f330cc9e58674c8c5caa12dd12c51dc71"
 dependencies = [
  "libm",
+]
+
+[[package]]
+name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

@@ -62,7 +62,7 @@ Commands:
                 for models whose textures are referenced by a longer prefix.
     build       Build a PBO from a folder.
     pack        Pack a folder into a PBO without any binarization or rapification.
-    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
+    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL v56) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
     extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
