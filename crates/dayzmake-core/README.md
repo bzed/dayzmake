@@ -40,7 +40,7 @@ own output is never packed on case-insensitive file systems.
 New errors on hostile input, all naming the offending item: nesting deeper than 128 levels (macro arguments,
 config classes and arrays, `__EVAL`); an include cycle or include nesting deeper than 32; more than 10,000
 `#include`s per `preprocess` call; macro expansion above 500,000 tokens, 64 MiB or 100,000 macro calls per line, or
-16,000,000 tokens or 512 MiB per file. Lines in a disabled `#ifdef` branch are no longer expanded.
+16,000,000 tokens, 512 MiB or 250,000 macro calls per file (per `preprocess` call, includes counted). Lines in a disabled `#ifdef` branch are no longer expanded.
 `pbo::is_device_name` recognises the full list of Windows device names.
 
 ### 0.2.0

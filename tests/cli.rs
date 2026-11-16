@@ -2068,3 +2068,35 @@ fn include_fan_out_fails_fast() {
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("the limit is"), "{err}");
 }
+
+/// #64: 3000 lines of `A13` (about 16,000 macro calls each, 37 s uncapped) fail fast on the per-file cap.
+#[cfg(unix)]
+#[test]
+fn per_file_macro_work_fails_fast() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=13 {
+        let prev = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str(&"A13\n".repeat(3000));
+    let start = std::time::Instant::now();
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("macro calls in one file"), "{err}");
+    assert!(
+        start.elapsed().as_secs_f64() < 10.0,
+        "took {:?}",
+        start.elapsed()
+    );
+}

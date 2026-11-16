@@ -218,6 +218,8 @@ pub struct PreprocessInfo {
     expanded: usize,
     /// Bytes of token text copied by macro expansion so far.
     expanded_bytes: usize,
+    /// Macro resolution steps taken so far, over the file and its includes.
+    steps: usize,
     /// `#include`s processed so far, over the file and its includes.
     includes: usize,
 }
@@ -280,19 +282,27 @@ const MAX_FILE_BYTES: usize = 512 << 20;
 /// that produces nothing still costs, so expansion that drops its output cannot run exponentially (#59).
 const MAX_LINE_STEPS: usize = 100_000;
 
+/// Maximum macro resolution steps of all lines of one `preprocess` call (the includes count too). The line cap alone lets
+/// thousands of cheap-looking lines add up to tens of seconds (#64).
+const MAX_FILE_STEPS: usize = 250_000;
+
 /// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
 struct Budget {
     tokens: usize,
     bytes: usize,
     steps: usize,
+    /// Steps the earlier lines of the `preprocess` call took.
+    file_steps: usize,
 }
 
 impl Budget {
-    fn new() -> Budget {
+    /// A budget for one line; `file_steps` are the steps the earlier lines of the call already took.
+    fn new(file_steps: usize) -> Budget {
         Budget {
             tokens: 0,
             bytes: 0,
             steps: 0,
+            file_steps,
         }
     }
 
@@ -302,6 +312,12 @@ impl Budget {
         if self.steps > MAX_LINE_STEPS {
             return Err(error!(
                 "Macro \"{}\" expands to more than {MAX_LINE_STEPS} macro calls in one line",
+                printable(name)
+            ));
+        }
+        if self.file_steps.saturating_add(self.steps) > MAX_FILE_STEPS {
+            return Err(error!(
+                "Macro \"{}\" expands to more than {MAX_FILE_STEPS} macro calls in one file",
                 printable(name)
             ));
         }
@@ -1023,7 +1039,7 @@ fn preprocess_rec(
                             info.includes += 1;
                             if info.includes > MAX_INCLUDES {
                                 return Err(error!(
-                                    "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
+                                    "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per preprocess call",
                                     printable(&path),
                                     info.includes
                                 ));
@@ -1110,7 +1126,7 @@ fn preprocess_rec(
                     }
                     let stack: Vec<Definition> = Vec::new();
                     let mut mismatches: Vec<String> = Vec::new();
-                    let mut budget = Budget::new();
+                    let mut budget = Budget::new(info.steps);
                     let resolved = Macro::resolve_all(
                         &tokens,
                         definition_map,
@@ -1121,6 +1137,7 @@ fn preprocess_rec(
                     )
                     .prepend_error("Failed to resolve macros:");
                     let resolved = resolved?;
+                    info.steps = info.steps.saturating_add(budget.steps);
                     info.expanded = info.expanded.saturating_add(budget.tokens);
                     info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
                     if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
@@ -1223,6 +1240,7 @@ pub fn preprocess(
         include_depth: 0,
         expanded: 0,
         expanded_bytes: 0,
+        steps: 0,
         includes: 0,
     };
 
@@ -1265,12 +1283,12 @@ mod tests {
         let tokens = vec![Token::MacroToken(parse_macro("F(1,2)").unwrap())];
 
         let mut first = Vec::new();
-        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new()).unwrap();
+        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new(0)).unwrap();
         assert_eq!(first.len(), 1);
 
         let plain = vec![Token::RegularToken("x".to_string())];
         let mut second = Vec::new();
-        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new()).unwrap();
+        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new(0)).unwrap();
         assert_eq!(second.len(), 0);
     }
 

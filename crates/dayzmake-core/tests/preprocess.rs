@@ -558,3 +558,40 @@ fn moderate_include_fan_out_works() {
     .unwrap();
     assert_eq!(out.matches('x').count(), 256);
 }
+
+/// A file of `lines` lines `A{level}`, where `A{level}` expands to nothing after many macro calls (#59, #64).
+fn empty_steps_file(level: usize, lines: usize) -> String {
+    let mut s = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=level {
+        let prev = i - 1;
+        s += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    s.push_str(&["A", &level.to_string(), "\n"].concat().repeat(lines));
+    s
+}
+
+/// #64: macro calls are capped per file, not only per line. Each `A14` line (about 32,000 calls) stays below
+/// the line cap (100,000 calls), but 12 of them together exceed the file cap. The 3000-line `A13` repro
+/// runs in a limited child process (`tests/cli.rs`).
+#[test]
+fn macro_work_is_capped_per_file() {
+    let err = preprocess(empty_steps_file(14, 12), None, &[], &mut Warnings::new()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("macro calls in one file"), "{msg}");
+    assert!(msg.contains("\"A") || msg.contains("\"E\""), "{msg}");
+}
+
+/// A few such lines are fine.
+#[test]
+fn macro_work_below_the_file_cap_is_accepted() {
+    preprocess(empty_steps_file(14, 3), None, &[], &mut Warnings::new()).unwrap();
+}
