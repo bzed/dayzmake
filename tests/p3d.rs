@@ -190,6 +190,19 @@ fn inspect_odol_v56_counts_lods_not_occurrences() {
 }
 
 #[test]
+fn inspect_odol_v56_names_an_empty_material() {
+    let dir = tempfile::tempdir().unwrap();
+    let knobs = odol_builder::Knobs {
+        empty_material_name: true,
+        ..Default::default()
+    };
+    std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Materials:\n- (none) (1 LODs)\n"), "{out}");
+}
+
+#[test]
 fn inspect_odol_v56_escapes_control_characters() {
     let dir = tempfile::tempdir().unwrap();
     let knobs = odol_builder::Knobs {

@@ -161,7 +161,13 @@ fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
     }
     writeln!(output, "Materials:")?;
     for (name, count) in &materials {
-        writeln!(output, "- {} ({count} LODs)", printable(name))?;
+        // an empty name is a built-in material, not a missing line
+        let shown = if name.is_empty() {
+            "(none)".to_string()
+        } else {
+            printable(name)
+        };
+        writeln!(output, "- {shown} ({count} LODs)")?;
     }
 
     writeln!(output)?;

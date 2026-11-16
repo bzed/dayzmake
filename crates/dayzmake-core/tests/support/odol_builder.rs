@@ -38,6 +38,8 @@ pub struct Knobs {
     pub repeat_texture: bool,
     /// The selection name in LOD 0 contains an ESC control character.
     pub control_char_name: bool,
+    /// The material in LOD 0 has an empty name (a built-in material).
+    pub empty_material_name: bool,
 }
 
 /// The little endian writer of the model.
@@ -218,7 +220,11 @@ fn lod0(o: &mut Out, knobs: Knobs) {
     o.cstr("\\dz\\tex_a_co.paa");
     o.cstr("\\dz\\tex_b_co.paa");
     o.u32(1); // materials
-    o.cstr("\\dz\\mat.rvmat");
+    o.cstr(if knobs.empty_material_name {
+        ""
+    } else {
+        "\\dz\\mat.rvmat"
+    });
     o.u32(20); // mat_version
     o.zeros(200); // colors and lighting values
     o.f32(10.0); // specular_power

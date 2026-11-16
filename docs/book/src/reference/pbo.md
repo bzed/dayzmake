@@ -190,7 +190,8 @@ Behaviour:
   and materials with the number of faces that use them, properties and named selections.
 - For a binarized ODOL v56 model: format and version, the skeleton and bone count, the property class and damage,
   mass, bounding box, the LODs with vertex and face counts, textures and materials with the number of LODs that use
-  them, proxies, properties, named selections and the animation classes. A v56 model that cannot be read is an error.
+  them (a built-in material without a name is listed as `(none)`), proxies, properties, named selections and the
+  animation classes. A v56 model that cannot be read is an error.
   For another ODOL version, or a BMTR file, only the format and version are shown (ODOL adds a note that only v56 is
   decoded).
 - Nothing is written; the command only reads.
