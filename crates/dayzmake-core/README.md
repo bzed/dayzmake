@@ -35,7 +35,11 @@ need to be GPL-2.0-or-later compatible.
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer
   flags a short raw mipmap as compressed (#76) and `Paa::to_dynamic_image` decodes a `Paa` built by
   `Paa::from_dynamic_image` or `Paa::lzo_compress` without a write/read round trip (#78). `Paa::read` drops the
-  `GGATSFFO` offset tagg, so a re-written PAA has it once (#75).
+  `GGATSFFO` offset tagg, so a re-written PAA has it once (#75); `Paa::tagg("GGATSFFO")` now returns `None` after
+  `read`.
+- `Paa::write` and `img2paa` reject a mipmap of 16 MiB or more (its length field has 3 bytes) instead of writing a
+  wrong length, and `Paa::read` keeps an LZO-compressed mipmap compressed, so a read and re-written PAA stays
+  readable (#79).
 - `Paa::lzo_compress` LZO-compresses the DXT mipmaps wider than 128 pixels that are still raw (#70).
   `Paa::from_dynamic_image` is unchanged: it already compresses them.
 - `config::WriteOptions` and `Config::write_with` write a config with a chosen indentation (#69). `Config::write`

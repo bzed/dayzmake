@@ -40,6 +40,9 @@ const MAX_MIPMAPS: usize = 16;
 /// otherwise expand to 256 times its size.
 const MAX_PAA_TOTAL: usize = 256 << 20;
 
+/// Longest mipmap the format can store: its length field has 3 bytes.
+const MAX_MIPMAP_STORED: usize = 0x00FF_FFFF;
+
 /// Largest tagg accepted when reading.
 const MAX_TAGG_SIZE: usize = 1 << 20;
 
@@ -100,14 +103,16 @@ fn decompress_mipmap(
 }
 
 /// Reads one mipmap of `size` stored bytes (LZO compressed if bit 15 of the width is set).
-/// `budget` is what is left of the total mipmap size allowed for the file.
+/// `budget` is what is left of the total mipmap size allowed for the file. A compressed mipmap is
+/// decompressed once to check it against the budget; the result is its stored form and the size it
+/// takes when decompressed.
 fn read_mipmap<I: Read>(
     input: &mut I,
     compression: &str,
     (w, h): (u16, u16),
     size: usize,
     budget: usize,
-) -> Result<Vec<u8>, Error> {
+) -> Result<(Mipmap, usize), Error> {
     // the size field is not trusted for preallocation
     let mut mip_data = Vec::new();
     input.take(size as u64).read_to_end(&mut mip_data)?;
@@ -115,13 +120,27 @@ fn read_mipmap<I: Read>(
         return Err(error!("Truncated PAA mipmap."));
     }
     if (w & 0x8000) != 0 {
-        decompress_mipmap(compression, &mip_data, w, h, budget)
+        let decompressed = decompress_mipmap(compression, &mip_data, w, h, budget)?.len();
+        Ok((
+            Mipmap {
+                data: mip_data,
+                lzo: true,
+            },
+            decompressed,
+        ))
     } else if size > budget {
         Err(error!(
             "PAA mipmaps are too large: more than {MAX_PAA_TOTAL} bytes in total."
         ))
     } else {
-        Ok(mip_data)
+        let len = mip_data.len();
+        Ok((
+            Mipmap {
+                data: mip_data,
+                lzo: false,
+            },
+            len,
+        ))
     }
 }
 
@@ -336,11 +355,8 @@ impl Paa {
             }
             let budget = MAX_PAA_TOTAL.saturating_sub(total);
             let mip = read_mipmap(input, &compression, (w, h), size, budget)?;
-            total += mip.len();
-            mipmaps.push(Mipmap {
-                data: mip,
-                lzo: false,
-            });
+            total += mip.1;
+            mipmaps.push(mip.0);
         }
 
         if mipmaps.is_empty() {
@@ -370,7 +386,7 @@ impl Paa {
             return Err(error!("PAA has no image data"));
         };
         let decompressed_mipmap;
-        let main_mipmap: &Vec<u8> = if first.lzo {
+        let main_mipmap: &[u8] = if first.lzo {
             decompressed_mipmap = decompress_mipmap(
                 &self.compression,
                 &first.data,
@@ -418,7 +434,7 @@ impl Paa {
             }
             "RGBA" => {
                 if main_mipmap.len() == width * height * 4 {
-                    let img = Self::rgba_image(width, height, main_mipmap.clone())?;
+                    let img = Self::rgba_image(width, height, main_mipmap.to_vec())?;
                     return Ok(DynamicImage::ImageRgba8(img));
                 }
                 return Err(error!("Invalid uncompressed RGBA data size"));
@@ -611,6 +627,14 @@ impl Paa {
                 ));
             }
         };
+        for mipmap in &self.mipmaps {
+            if mipmap.data.len() > MAX_MIPMAP_STORED {
+                return Err(error!(
+                    "PAA mipmap of {} bytes is too large: at most {MAX_MIPMAP_STORED} bytes fit its 3-byte length.",
+                    mipmap.data.len()
+                ));
+            }
+        }
         output.write_u16::<LittleEndian>(magic_number)?;
 
         for (name, data) in &self.taggs {

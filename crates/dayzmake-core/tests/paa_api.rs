@@ -1,10 +1,8 @@
 //! The PAA conversion API: formats, accessors and the bytes the CLI writes.
-#[cfg(feature = "image")]
 use std::io::Cursor;
 
 #[cfg(feature = "image")]
 use dayzmake_core::image::{DynamicImage, Rgba, RgbaImage};
-#[cfg(feature = "image")]
 use dayzmake_core::paa::Paa;
 use dayzmake_core::paa::PaaFormat;
 
@@ -21,7 +19,6 @@ fn gradient() -> DynamicImage {
     }))
 }
 
-#[cfg(feature = "image")]
 #[expect(clippy::expect_used, reason = "tests fail by panicking")]
 fn to_bytes(paa: &Paa) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -104,7 +101,6 @@ fn raw_paa(size: u32, format: PaaFormat) -> (Paa, Vec<u8>) {
 }
 
 /// The width field (with the LZO bit) of the first mipmap of a PAA file.
-#[cfg(feature = "image")]
 #[expect(
     clippy::expect_used,
     clippy::indexing_slicing,
@@ -123,7 +119,12 @@ fn first_mipmap_width_field(paa: &[u8]) -> u16 {
 #[cfg(feature = "image")]
 #[test]
 fn lzo_compress_marks_large_dxt_mipmaps() {
-    let (mut raw, _) = raw_paa(256, PaaFormat::Dxt5);
+    // a raw (unflagged) 256 x 256 DXT1 mipmap
+    let blocks: Vec<u8> = (0..32768u32)
+        .map(|i| u8::try_from(i / 64 % 251).unwrap_or(0))
+        .collect();
+    let mut raw =
+        Paa::read(&mut Cursor::new(hand_made_paa(&[], &[(256, 256, blocks)]))).expect("reads");
     let raw_file = to_bytes(&raw);
     assert_eq!(first_mipmap_width_field(&raw_file) & 0x8000, 0);
     raw.lzo_compress().expect("compresses");
@@ -203,7 +204,6 @@ fn lzo_compress_leaves_an_oversized_raw_mipmap_readable() {
 }
 
 /// A hand-built DXT1 file: `taggs`, no palette, then the given `(width field, height, data)` mipmaps.
-#[cfg(feature = "image")]
 #[expect(clippy::expect_used, reason = "tests fail by panicking")]
 fn hand_made_paa(taggs: &[(&[u8; 8], Vec<u8>)], mipmaps: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
     let mut bytes = vec![0x01, 0xff];
@@ -223,15 +223,17 @@ fn hand_made_paa(taggs: &[(&[u8; 8], Vec<u8>)], mipmaps: &[(u16, u16, Vec<u8>)])
     bytes
 }
 
-#[cfg(feature = "image")]
 #[test]
 fn short_raw_mipmap_is_written_unflagged() {
     let input = hand_made_paa(&[], &[(256, 256, vec![0u8; 1000])]);
     let paa = Paa::read(&mut Cursor::new(input)).expect("a short raw mipmap is accepted");
-    let bytes = to_bytes(&paa);
-    // magic (2) + offset tagg (8 + 4 + 64) + palette size (2), then the first mipmap's width
-    let width = u16::from_le_bytes([bytes[80], bytes[81]]);
+    let width = first_mipmap_width_field(&to_bytes(&paa));
     assert_eq!(width, 256, "the raw mipmap must not carry the LZO flag");
+    #[cfg(feature = "image")]
+    assert!(
+        paa.to_dynamic_image().is_err(),
+        "a short mipmap does not fit its dimensions"
+    );
 }
 
 #[cfg(feature = "image")]
@@ -268,5 +270,56 @@ fn rewritten_paa_has_one_offset_tagg() {
     assert_eq!(
         first.to_dynamic_image().expect("decodes"),
         second.to_dynamic_image().expect("decodes")
+    );
+}
+
+/// Deterministic noise that LZO cannot shrink.
+#[cfg(feature = "image")]
+fn noise_image(size: u32) -> DynamicImage {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    DynamicImage::ImageRgba8(RgbaImage::from_fn(size, size, |_, _| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let b = state.to_le_bytes();
+        Rgba([b[0], b[1], b[2], b[3]])
+    }))
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn write_rejects_a_mipmap_of_16_mib() {
+    let paa = Paa::from_dynamic_image(&noise_image(4096), PaaFormat::Dxt5).expect("converts");
+    let mut out = Vec::new();
+    let err = paa
+        .write(&mut out)
+        .expect_err("the length field has 3 bytes");
+    let text = err.to_string();
+    assert!(
+        text.contains("16777216") && text.contains("16777215"),
+        "{text}"
+    );
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn read_then_write_keeps_lzo_mipmaps_compressed() {
+    let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(4096, 4096, |x, y| {
+        Rgba([
+            u8::try_from(x / 16).unwrap_or(255),
+            u8::try_from(y / 16).unwrap_or(255),
+            90,
+            255,
+        ])
+    }));
+    let paa = Paa::from_dynamic_image(&img, PaaFormat::Dxt5).expect("converts");
+    let first = to_bytes(&paa);
+    let read = Paa::read(&mut Cursor::new(first.clone())).expect("reads");
+    let second = to_bytes(&read);
+    assert_eq!(first, second);
+    let again = Paa::read(&mut Cursor::new(second)).expect("reads again");
+    assert_eq!(
+        read.to_dynamic_image().expect("decodes"),
+        again.to_dynamic_image().expect("decodes")
     );
 }

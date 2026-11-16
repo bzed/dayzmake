@@ -212,3 +212,36 @@ fn img2paa_compress_writes_valid_lzo_mipmaps() {
         std::fs::read(dir.path().join("b.png")).unwrap()
     );
 }
+
+#[test]
+fn img2paa_rejects_a_mipmap_of_16_mib_and_writes_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // noisy alpha too, or the DXT5 alpha blocks compress
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let img = image::RgbaImage::from_fn(4096, 4096, |_, _| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let b = state.to_le_bytes();
+        image::Rgba([b[0], b[1], b[2], b[3]])
+    });
+    let source = dir.path().join("in.png");
+    img.save(&source).unwrap();
+    let target = dir.path().join("out.paa");
+    let (code, err) = run(
+        &[
+            "img2paa",
+            "-t",
+            "dxt5",
+            source.to_str().unwrap(),
+            target.to_str().unwrap(),
+        ],
+        dir.path(),
+    );
+    assert_ne!(code, 0, "{err}");
+    assert!(
+        err.contains("16777216") && err.contains("16777215"),
+        "{err}"
+    );
+    assert!(!target.exists());
+}
