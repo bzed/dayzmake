@@ -507,7 +507,7 @@ sets it (the last one that extended it, for `+=`), the classes declared inside t
 subclasses (classes whose base resolves to it). Long values are cut in text output. JSON is
 `{"path", "name", "chain": [{"name", "path"}], "chain_end": "root" or "unknown base <name>",
 "properties": [{"name", "value", "origin", "origin_path"}], "subclasses", "classes", "pbos": [{"source", "pbo"}],
-"truncated": N}`.
+"base_changes": [{"from", "to", "source", "pbo"}], "truncated": N}`.
 
 The index is cached like the script index: one file per source (`config-vanilla-<branch>.json`,
 `config-mod-<name>-<branch>-<hash>.json`) that is rebuilt when a PBO changes, with `--refresh`, or after an update of

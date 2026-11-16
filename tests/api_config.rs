@@ -553,3 +553,72 @@ fn a_base_change_inside_one_mod_warns_when_its_index_is_built() {
     assert!(err.contains("api-config-base-changed"), "{err}");
     assert!(out.contains("Base changed: P -> (none)"), "{out}");
 }
+
+/// A mod with two PBOs that redefine `Hatch` one after the other; p2 requires p1.
+fn two_pbo_mod(w: &World, first: &str, second: &str) -> String {
+    let dir = w.home.join("@Two");
+    let patch = |name: &str, req: &str, body: &str| {
+        format!(
+            "class CfgPatches {{ class {name} {{ requiredAddons[] = {{\"{req}\"}}; }}; }};\n\
+             class CfgVehicles {{ class X {{}}; {body} }};"
+        )
+    };
+    write(
+        &dir.join("addons/p1.pbo"),
+        &config_pbo(&patch("T1", "B_Patch", first), true),
+    );
+    write(
+        &dir.join("addons/p2.pbo"),
+        &config_pbo(&patch("T2", "T1", second), true),
+    );
+    dir.to_string_lossy().into_owned()
+}
+
+fn change_list(v: &Value) -> Vec<String> {
+    v["base_changes"]
+        .as_array()
+        .expect("changes")
+        .iter()
+        .map(|c| {
+            let show = |k: &str| c[k].as_str().unwrap_or("(none)").to_string();
+            format!("{}->{}@{}", show("from"), show("to"), show("pbo"))
+        })
+        .collect()
+}
+
+#[test]
+fn a_mod_changing_the_base_twice_records_each_step_from_the_right_base() {
+    let w = World::new();
+    let m = two_pbo_mod(&w, "class Hatch: X {};", "class Hatch {};");
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Hatch"]);
+    assert_eq!(code, 0, "{err}");
+    // the boundary change and the mod's own change are both warned about, each once
+    assert_eq!(err.matches("api-config-base-changed").count(), 2, "{err}");
+    let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
+    assert_eq!(
+        change_list(&v),
+        ["Base->X@addons/p1.pbo", "X->(none)@addons/p2.pbo"]
+    );
+}
+
+#[test]
+fn a_mod_changing_the_base_and_back_is_not_hidden_by_the_boundary() {
+    let w = World::new();
+    let m = two_pbo_mod(&w, "class Hatch: X {};", "class Hatch: Base {};");
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Hatch"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(err.matches("api-config-base-changed").count(), 2, "{err}");
+    let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
+    assert_eq!(
+        change_list(&v),
+        ["Base->X@addons/p1.pbo", "X->Base@addons/p2.pbo"]
+    );
+}
+
+#[test]
+fn base_names_compare_ignoring_case_across_sources() {
+    let w = World::new();
+    let m = two_pbo_mod(&w, "class Hatch: BASE {};", "class Hatch: base {};");
+    let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
+    assert!(change_list(&v).is_empty(), "{v}");
+}

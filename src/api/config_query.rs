@@ -205,7 +205,7 @@ pub struct BaseChangeRef {
     pub from: Option<String>,
     /// The base after; `None` for no base.
     pub to: Option<String>,
-    /// The index of the PBO of the redefinition.
+    /// The name of the source of the redefinition: `vanilla` or the mod.
     pub source: String,
     /// The PBO, relative to its install or mod directory.
     pub pbo: String,

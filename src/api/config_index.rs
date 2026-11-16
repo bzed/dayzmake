@@ -35,7 +35,7 @@ use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
 /// Version of the config index layout. Bump it on every change of the model; the cache treats other values as
 /// stale.
-pub const CONFIG_FORMAT: u32 = 1;
+pub const CONFIG_FORMAT: u32 = 2;
 
 /// Most classes one layer holds; the rest of a hostile config is skipped with a warning.
 const MAX_CLASSES: usize = 2_000_000;
@@ -222,7 +222,7 @@ impl ConfigLayer {
     }
 
     /// A definition of the class `key`: creates it, extends it, or revives a deleted one. A definition with a
-    /// body sets the base class to what it names, none included (the engine does the same); the returned flag
+    /// body sets the base class to what it names, none included (the engine does the same); the returned change
     /// says the base changed, and the change is recorded with `pbo`. An external declaration never gets here.
     fn define_class(
         &mut self,
@@ -230,7 +230,7 @@ impl ConfigLayer {
         name: &str,
         parent: Option<&str>,
         pbo: u32,
-    ) -> Result<(&mut ConfigNode, bool), LimitHit> {
+    ) -> Result<(&mut ConfigNode, Option<BaseChange>), LimitHit> {
         let fresh = |reset: bool| ConfigNode {
             name: name.to_string(),
             parent: parent.map(str::to_string),
@@ -248,7 +248,7 @@ impl ConfigLayer {
             .nodes
             .entry(key.to_string())
             .or_insert_with(|| fresh(false));
-        let mut changed = false;
+        let mut changed = None;
         if node.deleted {
             *node = fresh(true);
         } else if existed {
@@ -258,34 +258,33 @@ impl ConfigLayer {
                 _ => false,
             };
             if !same {
-                node.base_changes.push(BaseChange {
+                let change = BaseChange {
                     from: node.parent.take(),
                     to: parent.map(str::to_string),
                     pbo,
-                });
+                };
+                node.base_changes.push(change.clone());
                 node.parent = parent.map(str::to_string);
-                changed = true;
+                changed = Some(change);
             }
         }
         Ok((node, changed))
     }
 
-    /// The `api-config-base-changed` warning for the last base change of `key`, made in `pbo`.
-    fn base_changed_warning(&self, key: &str, pbo: u32) -> Warning {
-        let node = self.nodes.get(key);
-        let change = node.and_then(|n| n.base_changes.last());
+    /// The `api-config-base-changed` warning for `change` of the class `key`.
+    fn base_changed_warning(&self, key: &str, change: &BaseChange) -> Warning {
         let shown = |b: Option<&String>| b.map_or_else(|| "(none)".to_string(), |b| printable(b));
         let file = self
             .pbos
-            .get(usize::try_from(pbo).unwrap_or(usize::MAX))
+            .get(usize::try_from(change.pbo).unwrap_or(usize::MAX))
             .map(|p| format!("{}: {}", p.source, p.pbo));
         let warning = Warning::new(
             Some("api-config-base-changed"),
             format!(
                 "class {} changes its base class: {} -> {}",
                 printable(key),
-                shown(change.and_then(|c| c.from.as_ref())),
-                shown(change.and_then(|c| c.to.as_ref()))
+                shown(change.from.as_ref()),
+                shown(change.to.as_ref())
             ),
         );
         match file {
@@ -356,9 +355,14 @@ impl ConfigLayer {
             if node.reset {
                 self.delete_class(&key, &node.name);
             }
-            let pbo = node.pbos.last().and_then(|p| mapped(*p)).unwrap_or(0);
-            let Ok((mine, changed)) =
-                self.define_class(&key, &node.name, node.parent.as_deref(), pbo)
+            // The layer boundary: the base the mod's first definition names (the base before its own first
+            // change, else its final base) against the base so far, at the PBO of that first definition.
+            let first_base = node
+                .base_changes
+                .first()
+                .map_or(node.parent.as_deref(), |c| c.from.as_deref());
+            let first_pbo = node.pbos.first().and_then(|p| mapped(*p)).unwrap_or(0);
+            let Ok((mine, boundary)) = self.define_class(&key, &node.name, first_base, first_pbo)
             else {
                 return false;
             };
@@ -370,19 +374,15 @@ impl ConfigLayer {
                     mine.pbos.push(at);
                 }
             }
-            // the changes inside `over`, without the one the layer boundary just recorded
+            // the changes inside `over` follow unchanged, and the class ends with the base `over` ends with
             for c in node.base_changes {
-                let Some(at) = mapped(c.pbo) else { continue };
-                if mine
-                    .base_changes
-                    .last()
-                    .is_none_or(|l| l.from != c.from || l.to != c.to)
-                {
+                if let Some(at) = mapped(c.pbo) {
                     mine.base_changes.push(BaseChange { pbo: at, ..c });
                 }
             }
-            if changed {
-                let warning = self.base_changed_warning(&key, pbo);
+            mine.parent = node.parent;
+            if let Some(change) = boundary {
+                let warning = self.base_changed_warning(&key, &change);
                 warnings.warn(warning);
             }
             for (_, prop) in node.props {
@@ -473,15 +473,15 @@ fn apply_class(
                 } else if c.is_external() {
                     // a forward declaration: it only tells the parser where the base class is
                 } else if depth < MAX_DEPTH {
-                    let (node, changed) = layer.define_class(&key, name, c.parent(), pbo)?;
+                    let (node, change) = layer.define_class(&key, name, c.parent(), pbo)?;
                     if !node.pbos.contains(&pbo) {
                         node.pbos.push(pbo);
                     }
                     // the game's own layout changes bases on purpose; only a mod's change is worth a warning
-                    if changed && layer.name != "vanilla" {
+                    if let Some(change) = change.filter(|_| layer.name != "vanilla") {
                         warnings.warn(
                             layer
-                                .base_changed_warning(&key, pbo)
+                                .base_changed_warning(&key, &change)
                                 .in_file(origin.to_string()),
                         );
                     }
