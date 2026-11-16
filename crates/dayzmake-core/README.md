@@ -30,6 +30,10 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
+### Unreleased
+
+- `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::entry_selected` applies them (#86).
+
 ### 0.2.2
 
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer

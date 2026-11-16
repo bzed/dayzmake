@@ -96,14 +96,10 @@ fn parse_header_extensions(headerext: &[String]) -> Result<Vec<(String, String)>
 pub fn cmd_unpack<I: Read>(
     input: &mut I,
     output: &Path,
-    force: bool,
-    use_prefix: bool,
+    options: &UnpackOptions,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut options = UnpackOptions::default();
-    options.force = force;
-    options.use_prefix = use_prefix;
-    unpack(input, output, &options, warnings)
+    unpack(input, output, options, warnings)
 }
 
 /// Fails with the folder's name when it cannot be read (the library error does not name it).

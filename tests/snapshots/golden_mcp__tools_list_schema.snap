@@ -425,12 +425,26 @@ expression: "r.result(2)[\"tools\"]"
     "name": "pbo_cat"
   },
   {
-    "description": "Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.",
+    "description": "Unpack a PBO into a folder, all of it or the entries selected by only/exclude. Unsafe entry names are skipped with a warning.",
     "inputSchema": {
       "properties": {
+        "exclude": {
+          "description": "Glob patterns of entries to leave out (case-insensitive, / separators).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "force": {
           "description": "Overwrite existing target files.",
           "type": "boolean"
+        },
+        "only": {
+          "description": "Glob patterns: write only the entries that match one (exclude wins).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "pbo": {
           "description": "PBO file.",

@@ -933,3 +933,51 @@ fn mcp_image_to_paa_compress() {
     assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
     assert!(p.join("o.paa").is_file());
 }
+
+#[test]
+fn mcp_unpack_filters_with_exclude_and_only() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::write(
+        tmp.path().join("a.pbo"),
+        make_pbo(&[
+            ("scripts\\a.c", b"c"),
+            ("model.p3d", b"p"),
+            ("config.bin", b"b"),
+            ("data\\x.paa", b"t"),
+        ]),
+    )
+    .expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"only","only":["*.c","*config.bin"]}),
+            ),
+            call(
+                2,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"excl","exclude":["*.p3d"]}),
+            ),
+            call(
+                3,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"both","only":["*.c","*.p3d"],"exclude":["scripts/*"]}),
+            ),
+        ],
+        tmp.path(),
+    );
+    for reply in &r.replies {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    let p = tmp.path();
+    assert!(p.join("only/scripts/a.c").is_file());
+    assert!(p.join("only/config.bin").is_file());
+    assert!(!p.join("only/model.p3d").exists());
+    assert!(!p.join("only/data/x.paa").exists());
+    assert!(!p.join("excl/model.p3d").exists());
+    assert!(p.join("excl/data/x.paa").is_file());
+    assert!(!p.join("both/scripts/a.c").exists());
+    assert!(p.join("both/model.p3d").is_file());
+    assert!(!p.join("both/config.bin").exists());
+}

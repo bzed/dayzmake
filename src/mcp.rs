@@ -22,6 +22,7 @@ use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::{WarningKind, WarningSink, Warnings};
@@ -553,12 +554,22 @@ fn tools() -> Value {
         ),
         tool(
             "pbo_unpack",
-            "Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.",
+            "Unpack a PBO into a folder, all of it or the entries selected by only/exclude. Unsafe entry names are skipped with a warning.",
             &[
                 ("pbo", 's', "PBO file."),
                 ("target", 's', "Folder to extract into."),
                 FORCE_ARG,
                 ("use_prefix", 'b', "Extract into <target>/<prefix>/."),
+                (
+                    "exclude",
+                    'a',
+                    "Glob patterns of entries to leave out (case-insensitive, / separators)."
+                ),
+                (
+                    "only",
+                    'a',
+                    "Glob patterns: write only the entries that match one (exclude wins)."
+                ),
             ],
             &["pbo", "target"],
         ),
@@ -763,13 +774,12 @@ fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         "pbo_cat" => pbo_cat(args),
         "pbo_unpack" => {
             let (pbo_path, target) = (path_arg(args, "pbo")?, path_arg(args, "target")?);
-            pbo::cmd_unpack(
-                &mut open(&pbo_path)?,
-                &target,
-                bool_arg(args, "force")?,
-                bool_arg(args, "use_prefix")?,
-                warnings,
-            )?;
+            let mut options = UnpackOptions::default();
+            options.force = bool_arg(args, "force")?;
+            options.use_prefix = bool_arg(args, "use_prefix")?;
+            options.exclude = strs_arg(args, "exclude")?;
+            options.only = strs_arg(args, "only")?;
+            pbo::cmd_unpack(&mut open(&pbo_path)?, &target, &options, warnings)?;
             Ok(format!(
                 "unpacked {} to {}",
                 pbo_path.display(),

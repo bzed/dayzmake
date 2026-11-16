@@ -794,3 +794,101 @@ fn stale_temp_file_of_the_target_is_skipped_whatever_its_case() {
         "{names:?}"
     );
 }
+
+/// The files below `dir`, as sorted `/`-separated relative paths.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn files_below(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn unpack_filtered(exclude: &[&str], only: &[&str]) -> Vec<String> {
+    let bytes = support::raw_pbo(
+        &[
+            ("scripts\\Game.C", b"c"),
+            ("scripts\\x.c", b"c"),
+            ("model.p3d", b"p"),
+            ("config.bin", b"b"),
+            ("data\\x.paa", b"t"),
+        ],
+        &[],
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let mut options = UnpackOptions::default();
+    options.exclude = exclude.iter().map(ToString::to_string).collect();
+    options.only = only.iter().map(ToString::to_string).collect();
+    unpack(
+        &mut Cursor::new(&bytes),
+        tmp.path(),
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    files_below(tmp.path())
+}
+
+#[test]
+fn unpack_only_writes_the_matching_entries() {
+    assert_eq!(
+        unpack_filtered(&[], &["*.c"]),
+        ["scripts/Game.C", "scripts/x.c"]
+    );
+    assert_eq!(
+        unpack_filtered(&[], &["*.c", "*config.bin"]),
+        ["config.bin", "scripts/Game.C", "scripts/x.c"]
+    );
+}
+
+#[test]
+fn unpack_exclude_leaves_out_the_matching_entries() {
+    assert_eq!(
+        unpack_filtered(&["*.p3d"], &[]),
+        ["config.bin", "data/x.paa", "scripts/Game.C", "scripts/x.c"]
+    );
+}
+
+#[test]
+fn unpack_exclude_wins_over_only() {
+    assert_eq!(
+        unpack_filtered(&["scripts/*"], &["*.c", "*.p3d"]),
+        ["model.p3d"]
+    );
+}
+
+#[test]
+fn unpack_conflict_check_only_covers_the_selected_entries() {
+    let bytes = support::raw_pbo(&[("a.c", b"c"), ("b.p3d", b"p")], &[]);
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("b.p3d"), "mine").unwrap();
+    let mut options = UnpackOptions::default();
+    options.only = vec!["*.c".to_string()];
+    unpack(
+        &mut Cursor::new(&bytes),
+        tmp.path(),
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("b.p3d")).unwrap(),
+        "mine"
+    );
+}

@@ -1553,6 +1553,50 @@ pub struct UnpackOptions {
     pub force: bool,
     /// Extract into `<target>/<prefix>/` instead of `<target>/`.
     pub use_prefix: bool,
+    /// Glob patterns of entries to leave out; see [`entry_selected`]. An entry that matches one is
+    /// never written, even when it matches `only`.
+    pub exclude: Vec<String>,
+    /// Glob patterns of the entries to write; see [`entry_selected`]. Empty means every entry.
+    pub only: Vec<String>,
+}
+
+/// Whether the PBO entry `name` passes the `only` and `exclude` glob patterns: it matches at least one
+/// `only` pattern (or `only` is empty) and no `exclude` pattern.
+///
+/// `*` stands for any run of characters, as in the `-x` patterns of `pack`. The name is matched with
+/// `/` separators (`\\` is turned into `/`), without the PBO prefix, and ignoring case, like PBO names.
+#[must_use]
+pub fn entry_selected(name: &str, only: &[String], exclude: &[String]) -> bool {
+    let name = name.replace('\\', "/").to_lowercase();
+    let hit = |pattern: &String| matches_glob(&name, &pattern.replace('\\', "/").to_lowercase());
+    (only.is_empty() || only.iter().any(hit)) && !exclude.iter().any(hit)
+}
+
+/// Fails when a selected file of `pbo` (or `$PBOPREFIX$`) already exists below `base`. Runs before anything
+/// is written, so a conflict leaves the target untouched.
+fn check_unpack_conflicts(pbo: &PBO, base: &Path, options: &UnpackOptions) -> Result<(), Error> {
+    let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
+    let first = prefix
+        .into_iter()
+        .chain(
+            pbo.files
+                .keys()
+                .map(String::as_str)
+                .filter(|name| entry_selected(name, &options.only, &options.exclude)),
+        )
+        .find(|name| {
+            unpack_relative(name).is_some_and(|(relative, _)| {
+                !crosses_symlink(base, &relative) && base.join(relative).exists()
+            })
+        });
+    match first {
+        Some(name) => Err(error!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
+            printable(&base.display().to_string()),
+            printable(name)
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Unpacks a PBO into the target folder.
@@ -1561,7 +1605,8 @@ pub struct UnpackOptions {
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
 /// with an entry already written in this run are skipped with a warning. Leading separators are
 /// stripped from a name (`leading-separator` warning). With `options.use_prefix`
-/// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix.
+/// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix. `options.only` and
+/// `options.exclude` select the entries to write (`$PBOPREFIX$` is always written).
 ///
 /// # Errors
 ///
@@ -1574,30 +1619,19 @@ pub fn unpack<I: Read>(
     options: &UnpackOptions,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let UnpackOptions { force, use_prefix } = *options;
+    let UnpackOptions {
+        force,
+        use_prefix,
+        ref exclude,
+        ref only,
+    } = *options;
     let output = target;
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     let base = unpack_base(&pbo, output, use_prefix)?;
 
     if !force {
-        // Check every target before writing anything, so a conflict leaves the folder untouched.
-        let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
-        let first = prefix
-            .into_iter()
-            .chain(pbo.files.keys().map(String::as_str))
-            .find(|name| {
-                unpack_relative(name).is_some_and(|(relative, _)| {
-                    !crosses_symlink(&base, &relative) && base.join(relative).exists()
-                })
-            });
-        if let Some(name) = first {
-            return Err(error!(
-                "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
-                printable(&base.display().to_string()),
-                printable(name)
-            ));
-        }
+        check_unpack_conflicts(&pbo, &base, options)?;
     }
 
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
@@ -1608,6 +1642,9 @@ pub fn unpack<I: Read>(
 
     let mut written: HashSet<String> = HashSet::new();
     for file_name in pbo.files.keys() {
+        if !entry_selected(file_name, only, exclude) {
+            continue;
+        }
         if pbo.raw_names.contains_key(file_name) {
             warnings.warn(Warning::new(
                 Some("non-utf8-filename"),

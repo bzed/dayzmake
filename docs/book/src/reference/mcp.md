@@ -258,7 +258,7 @@ Result: The entry as text when it is UTF-8, or `wrote <target> (<n> bytes)` with
 
 ### pbo_unpack
 
-Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.
+Unpack a PBO into a folder, all of it or the entries selected by `only` and `exclude`. Unsafe entry names are skipped with a warning.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
@@ -266,6 +266,8 @@ Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.
 | `target` | string | yes | Folder to extract into. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `use_prefix` | boolean | no | Extract into `<target>`/`<prefix>`/. |
+| `exclude` | array of strings | no | Glob patterns of entries to leave out (case-insensitive, `/` separators). |
+| `only` | array of strings | no | Glob patterns: write only the entries that match one (`exclude` wins). |
 
 Result: `unpacked <pbo> to <target>`.
 

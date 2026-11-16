@@ -251,7 +251,7 @@ Extract a PBO into a folder.
 <div class="synopsis">
 
 ```text
-dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
+dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
 ```
 
 </div>
@@ -266,6 +266,8 @@ dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
 | `-v`, `--verbose` | off | Show every warning. |
 | `-f`, `--force` | off | Overwrite files that already exist in the target folder. |
 | `--use-prefix` | off | Extract into `<targetfolder>/<prefix>/` instead of directly into `<targetfolder>`. |
+| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. Repeatable. |
+| `--only <pattern>` | none | Glob pattern: write only the entries that match one. Repeatable. |
 
 Behaviour:
 
@@ -278,6 +280,12 @@ Behaviour:
   never followed.
 - Without `-f`, extraction stops with an error when the target folder already contains a file of the PBO, and
   names the first one. Nothing is overwritten.
+- `--only` and `-x` select the entries to write: an entry is written when it matches at least one `--only`
+  pattern (or none is given) and no `-x` pattern, so `-x` wins. `*` stands for any run of characters, as in the
+  `-x` of `pack`. Patterns are matched against the entry path with `/` separators, without the prefix, ignoring
+  case. `$PBOPREFIX$` is always written, and the conflict check without `-f` covers only the selected entries.
+  `dayzmake unpack --only '*.c' --only '*config.bin' scripts.pbo out` extracts scripts and configs, not models
+  and textures.
 - Compressed entries are decompressed. A rapified `config.bin` stays rapified; use
   [derapify](config.md#dayzmake-derapify) to read it.
 - With `--use-prefix` an unsafe prefix is an error. An empty prefix means no prefix directory.

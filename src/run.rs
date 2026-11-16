@@ -10,6 +10,7 @@ use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::WarningSink;
@@ -28,7 +29,7 @@ Usage:
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
+    dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -77,7 +78,7 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern to exclude from output folder.
+                                      For unpack: pattern of entries to leave out (matched against the entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as \"key=value\".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -86,6 +87,7 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
+    --only <pattern>            unpack: write only the entries that match a pattern (-x wins).
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
@@ -156,6 +158,7 @@ pub struct Args {
     flag_verbose: bool,
     flag_force: bool,
     flag_use_prefix: bool,
+    flag_only: Vec<String>,
     flag_warning: Vec<String>,
     flag_include: Vec<String>,
     flag_exclude: Vec<String>,
@@ -323,11 +326,15 @@ fn run_command(
         pbo::cmd_cat(&mut get_input(args)?, &mut output, &args.arg_filename)?;
         output.commit()
     } else if args.cmd_unpack {
+        let mut options = UnpackOptions::default();
+        options.force = args.flag_force;
+        options.use_prefix = args.flag_use_prefix;
+        options.exclude.clone_from(&args.flag_exclude);
+        options.only.clone_from(&args.flag_only);
         pbo::cmd_unpack(
             &mut get_input(args)?,
             &PathBuf::from(&args.arg_targetfolder),
-            args.flag_force,
-            args.flag_use_prefix,
+            &options,
             warnings,
         )
     } else if args.cmd_keygen {
