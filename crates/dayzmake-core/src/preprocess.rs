@@ -207,7 +207,8 @@ pub(crate) enum Line {
 ///
 /// A folder in `search` is searched recursively for a file whose path ends in the include path (and whose
 /// `$PBOPREFIX$` matches); the walk does not follow directory symlinks that leave the folder or lead back into it,
-/// and fails with an error naming the include after visiting 1,000,000 entries. A folder in `direct` is only
+/// and enters no directory twice; a search folder that reaches 1,000,000 visited entries is an error naming the
+/// include, and it ends the whole lookup (the other folders are not tried). A folder in `direct` is only
 /// checked for `<folder>/<include path>` (case-insensitively as a second pass), without walking it: use it for the
 /// current working directory, which can be a whole disk. The `search` folders are tried first, then the `direct`
 /// ones.
@@ -853,19 +854,27 @@ struct Walk<'a> {
     ci: bool,
     visited: usize,
     limit: usize,
+    /// Canonical paths of the directories entered so far: none is entered twice, so symlink loops and several
+    /// links to one directory cost nothing.
+    seen: std::collections::BTreeSet<PathBuf>,
 }
 
 impl Walk<'_> {
-    /// Whether the directory symlink `path`, found while walking `directory`, must not be followed: its target is
-    /// outside the search root, is `directory` or one of its parents (a loop), or cannot be resolved.
-    fn skips_link(&self, path: &Path, directory: &Path) -> bool {
-        match path.canonicalize() {
-            Ok(target) => !target.starts_with(self.root) || directory.starts_with(&target),
-            Err(_) => true,
-        }
+    /// Whether the directory symlink `path` must not be followed: its target is outside the search root or cannot
+    /// be resolved. (Loops are caught by the set of directories already entered.)
+    fn skips_link(&self, path: &Path) -> bool {
+        path.canonicalize()
+            .map_or(true, |target| !target.starts_with(self.root))
     }
 
     fn search(&mut self, directory: &Path) -> Result<Option<PathBuf>, Error> {
+        // an unresolvable directory is skipped like an unreadable one
+        let Ok(canonical) = directory.canonicalize() else {
+            return Ok(None);
+        };
+        if !self.seen.insert(canonical) {
+            return Ok(None);
+        }
         // unreadable directories are skipped
         if let Ok(entries) = read_dir(directory) {
             for entry in entries.filter_map(std::result::Result::ok) {
@@ -884,7 +893,7 @@ impl Walk<'_> {
                     if path.file_name() == Some(OsStr::new(".git")) {
                         continue;
                     }
-                    if is_link && self.skips_link(&path, directory) {
+                    if is_link && self.skips_link(&path) {
                         continue;
                     }
 
@@ -1011,6 +1020,7 @@ fn find_include_file(
                     ci,
                     visited: 0,
                     limit: MAX_SEARCH_ENTRIES,
+                    seen: std::collections::BTreeSet::new(),
                 };
                 found = walk.search(root)?;
                 if found.is_some() {
@@ -1394,6 +1404,29 @@ pub fn preprocess_in(
 mod tests {
     use super::*;
 
+    /// Several links to one directory are entered once: the entries are counted once.
+    #[cfg(unix)]
+    #[test]
+    fn sibling_links_are_not_visited_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("real")).unwrap();
+        std::fs::write(root.join("real/f.txt"), "x").unwrap();
+        std::os::unix::fs::symlink("real", root.join("l1")).unwrap();
+        std::os::unix::fs::symlink("real", root.join("l2")).unwrap();
+        let mut walk = Walk {
+            include_path: "\\DZ\\gone.hpp",
+            root: &root,
+            ci: false,
+            visited: 0,
+            limit: 1000,
+            seen: std::collections::BTreeSet::new(),
+        };
+        assert!(walk.search(&root).unwrap().is_none());
+        // root: real, l1, l2 (3 entries) plus real's one file; the links add nothing
+        assert_eq!(walk.visited, 4);
+    }
+
     /// The walk stops with an error naming the include once it visited more entries than its limit (#66).
     #[test]
     fn search_stops_after_the_entry_limit() {
@@ -1408,6 +1441,7 @@ mod tests {
             ci: false,
             visited: 0,
             limit: 5,
+            seen: std::collections::BTreeSet::new(),
         };
         let err = walk.search(&root).unwrap_err().to_string();
         assert!(

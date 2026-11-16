@@ -103,3 +103,38 @@ fn symlink_out_of_a_search_folder_is_not_followed() {
     let err = run(&folders).unwrap_err();
     assert!(err.contains("not found"), "{err}");
 }
+
+#[cfg(unix)]
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn link_maze(inc: &Path) {
+    use std::os::unix::fs::symlink;
+    fs::create_dir_all(inc.join("a")).unwrap();
+    fs::create_dir_all(inc.join("b")).unwrap();
+    symlink("../b", inc.join("a/x")).unwrap();
+    symlink(".", inc.join("b/y")).unwrap();
+    symlink("../b", inc.join("b/z")).unwrap();
+}
+
+/// Loops through several links branch exponentially unless a directory is entered only once.
+#[cfg(unix)]
+#[test]
+fn link_maze_fails_fast_with_not_found() {
+    let inc = tempdir().unwrap();
+    link_maze(inc.path());
+    let folders = IncludeFolders::new(vec![inc.path().to_path_buf()]);
+    let err = run(&folders).unwrap_err();
+    assert!(
+        err.contains("not found") && !err.contains("stopped after"),
+        "{err}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn link_maze_still_finds_the_file_elsewhere() {
+    let inc = tempdir().unwrap();
+    link_maze(inc.path());
+    put(inc.path(), "zz/DZ/data/x.hpp", "a = 4;\n");
+    let folders = IncludeFolders::new(vec![inc.path().to_path_buf()]);
+    assert_eq!(run(&folders).unwrap().trim(), "a = 4;");
+}

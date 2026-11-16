@@ -413,7 +413,7 @@ fn tools() -> Value {
     build_props.push((
         "include",
         'a',
-        "Folders to search for includes (the current directory is always searched).",
+        "Folders to search for includes (the current directory is only checked directly, not searched).",
     ));
     build_props.push((
         "proton_binarize",

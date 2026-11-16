@@ -231,7 +231,7 @@ Options:
     -v --verbose                Enable verbose output.
     -f --force                  Overwrite the target file/folder if it already exists.
     -w --warning <wname>        Warning to disable
-    -i --include <includefolder>    Folder to search for includes, defaults to CWD.
+    -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
                                       For unpack: pattern to exclude from output folder.
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
