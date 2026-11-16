@@ -198,3 +198,52 @@ fn lzo_compress_leaves_an_oversized_raw_mipmap_readable() {
     let back = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("the written file reads");
     assert_eq!(back.to_dynamic_image().expect("decodes").to_rgba8(), before);
 }
+
+/// A hand-built DXT1 file: `taggs`, no palette, then the given `(width field, height, data)` mipmaps.
+#[cfg(feature = "image")]
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
+fn hand_made_paa(taggs: &[(&[u8; 8], Vec<u8>)], mipmaps: &[(u16, u16, Vec<u8>)]) -> Vec<u8> {
+    let mut bytes = vec![0x01, 0xff];
+    for (name, data) in taggs {
+        bytes.extend_from_slice(*name);
+        bytes.extend_from_slice(&u32::try_from(data.len()).expect("small").to_le_bytes());
+        bytes.extend_from_slice(data);
+    }
+    bytes.extend_from_slice(&[0, 0]); // palette size, also the tagg terminator
+    for (w, h, data) in mipmaps {
+        bytes.extend_from_slice(&w.to_le_bytes());
+        bytes.extend_from_slice(&h.to_le_bytes());
+        bytes.extend_from_slice(&u32::try_from(data.len()).expect("small").to_le_bytes()[..3]);
+        bytes.extend_from_slice(data);
+    }
+    bytes.extend_from_slice(&[0; 6]);
+    bytes
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn short_raw_mipmap_is_written_unflagged() {
+    let input = hand_made_paa(&[], &[(256, 256, vec![0u8; 1000])]);
+    let paa = Paa::read(&mut Cursor::new(input)).expect("a short raw mipmap is accepted");
+    let bytes = to_bytes(&paa);
+    // magic (2) + offset tagg (8 + 4 + 64) + palette size (2), then the first mipmap's width
+    let width = u16::from_le_bytes([bytes[80], bytes[81]]);
+    assert_eq!(width, 256, "the raw mipmap must not carry the LZO flag");
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn compressed_paa_decodes_without_a_round_trip() {
+    let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(256, 256, |x, y| {
+        Rgba([
+            u8::try_from(x).unwrap_or(0),
+            u8::try_from(y).unwrap_or(0),
+            128,
+            255,
+        ])
+    }));
+    let paa = Paa::from_dynamic_image(&img, PaaFormat::Dxt5).expect("converts");
+    let direct = paa.to_dynamic_image().expect("decodes in memory");
+    let read = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("reads back");
+    assert_eq!(direct, read.to_dynamic_image().expect("decodes"));
+}

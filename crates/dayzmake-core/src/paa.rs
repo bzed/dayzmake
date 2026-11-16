@@ -177,6 +177,13 @@ impl PaaFormat {
     }
 }
 
+/// One mipmap: its stored bytes and whether they are an LZO stream.
+#[derive(Debug)]
+struct Mipmap {
+    data: Vec<u8>,
+    lzo: bool,
+}
+
 /// A PAA texture.
 #[derive(Debug)]
 pub struct Paa {
@@ -185,7 +192,7 @@ pub struct Paa {
     /// Palette data, if the texture is paletted.
     palette: Option<Vec<u8>>,
     /// Mipmap data, largest first.
-    mipmaps: Vec<Vec<u8>>,
+    mipmaps: Vec<Mipmap>,
     /// Width of the largest mipmap.
     width: u16,
     /// Height of the largest mipmap.
@@ -325,7 +332,10 @@ impl Paa {
             let budget = MAX_PAA_TOTAL.saturating_sub(total);
             let mip = read_mipmap(input, &compression, (w, h), size, budget)?;
             total += mip.len();
-            mipmaps.push(mip);
+            mipmaps.push(Mipmap {
+                data: mip,
+                lzo: false,
+            });
         }
 
         if mipmaps.is_empty() {
@@ -351,8 +361,21 @@ impl Paa {
     #[cfg_attr(docsrs, doc(cfg(feature = "image")))]
     #[cfg(feature = "image")]
     pub fn to_dynamic_image(&self) -> Result<DynamicImage, Error> {
-        let Some(main_mipmap) = self.mipmaps.first() else {
+        let Some(first) = self.mipmaps.first() else {
             return Err(error!("PAA has no image data"));
+        };
+        let decompressed_mipmap;
+        let main_mipmap: &Vec<u8> = if first.lzo {
+            decompressed_mipmap = decompress_mipmap(
+                &self.compression,
+                &first.data,
+                self.width,
+                self.height,
+                MAX_PAA_TOTAL,
+            )?;
+            &decompressed_mipmap
+        } else {
+            &first.data
         };
         let width = usize::from(self.width);
         let height = usize::from(self.height);
@@ -501,7 +524,10 @@ impl Paa {
                     ));
                 }
             };
-            mipmaps.push(mipmap);
+            mipmaps.push(Mipmap {
+                data: mipmap,
+                lzo: false,
+            });
         }
 
         let Some(first) = levels.first() else {
@@ -539,12 +565,15 @@ impl Paa {
         let compression = self.compression.clone();
         for mipmap in &mut self.mipmaps {
             let raw = raw_mipmap_size(&compression, width, height);
-            if let Some(raw) = raw.filter(|&raw| width > 128 && mipmap.len() == raw) {
+            if let Some(raw) =
+                raw.filter(|&raw| width > 128 && !mipmap.lzo && mipmap.data.len() == raw)
+            {
                 // The stream already ends with the LZO end marker (11 00 00); a byte after it makes
                 // the game reject the mipmap.
-                let compressed = lzo1x::compress(mipmap, lzo1x::CompressLevel::default());
+                let compressed = lzo1x::compress(&mipmap.data, lzo1x::CompressLevel::default());
                 if compressed.len() < raw {
-                    *mipmap = compressed;
+                    mipmap.data = compressed;
+                    mipmap.lzo = true;
                 }
             }
             width = (width / 2).max(1);
@@ -619,8 +648,8 @@ impl Paa {
         let mut current_height = self.height;
         for mipmap in self.mipmaps.iter().take(num_mipmaps) {
             offsets.push(current_offset);
-            let size = u32::try_from(mipmap.len())
-                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.len()))?;
+            let size = u32::try_from(mipmap.data.len())
+                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.data.len()))?;
             current_offset += size + 2 + 2 + 3;
             if current_width > 1 {
                 current_width /= 2;
@@ -653,23 +682,16 @@ impl Paa {
         let mut current_height = self.height;
         for mipmap in &self.mipmaps {
             let mut w = current_width;
-            // Only mipmaps that are smaller than their uncompressed size are LZO streams; the others
-            // (LZO did not help) are stored raw and must not be marked.
-            let raw = raw_mipmap_size(
-                &self.compression,
-                usize::from(current_width),
-                usize::from(current_height),
-            );
-            if current_width > 128 && raw.is_some_and(|raw| mipmap.len() < raw) {
+            if mipmap.lzo {
                 w |= 0x8000; // LZO compressed
             }
             output.write_u16::<LittleEndian>(w)?;
             output.write_u16::<LittleEndian>(current_height)?;
-            let len = u32::try_from(mipmap.len())
-                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.len()))?;
+            let len = u32::try_from(mipmap.data.len())
+                .map_err(|_| error!("mipmap too large: {} bytes", mipmap.data.len()))?;
             // 3-byte little endian length
             output.write_all(&len.to_le_bytes()[..3])?;
-            output.write_all(mipmap)?;
+            output.write_all(&mipmap.data)?;
 
             if current_width > 1 {
                 current_width /= 2;
