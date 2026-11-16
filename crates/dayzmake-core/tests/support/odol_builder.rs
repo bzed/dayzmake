@@ -40,6 +40,8 @@ pub struct Knobs {
     pub control_char_name: bool,
     /// The material in LOD 0 has an empty name (a built-in material).
     pub empty_material_name: bool,
+    /// Writes this many LODs, all copies of LOD 0 one after the other, each declaring its end as the end of the file.
+    pub repeat_lod0_to_eof: Option<usize>,
 }
 
 /// The little endian writer of the model.
@@ -172,7 +174,7 @@ fn model_info(o: &mut Out, knobs: Knobs) {
     o.u8(0); // unknown flag
 }
 
-fn animations(o: &mut Out) {
+fn animations(o: &mut Out, lods: usize) {
     o.u32(2); // class_count
     for (kind, name, source) in [(0u32, "turn", "door"), (9, "vanish", "hide")] {
         o.u32(kind);
@@ -189,15 +191,15 @@ fn animations(o: &mut Out) {
             o.f32(0.01); // hide_value
         }
     }
-    o.i32(2); // res_count == lod_count
-    for _ in 0..2 {
+    o.i32(i32::try_from(lods).unwrap()); // res_count == lod_count
+    for _ in 0..lods {
         // bones to animations: 2 bones; bone 0 has animation 0
         o.u32(2);
         o.u32(1);
         o.u32(0);
         o.u32(0);
     }
-    for _ in 0..2 {
+    for _ in 0..lods {
         // animations to bones: class 0 (rotation) has axis, class 1 (hide) has not
         o.i32(0);
         o.vec3([0.0; 3]);
@@ -376,6 +378,9 @@ pub fn build(knobs: Knobs) -> Vec<u8> {
 
 /// The model and the offset of its first LOD (the end of the header).
 pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
+    if let Some(n) = knobs.repeat_lod0_to_eof {
+        return build_repeated(knobs, n);
+    }
     let mut o = Out::default();
     o.bytes(b"ODOL");
     o.u32(56);
@@ -388,7 +393,7 @@ pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
         return (o.0, n);
     }
     o.u8(1); // has_animations
-    animations(&mut o);
+    animations(&mut o, 2);
     let starts = o.pos();
     o.zeros(16); // lod_start x2, lod_end x2
     o.u8(0);
@@ -408,4 +413,35 @@ pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
     patch(&mut o, starts + 8, end0);
     patch(&mut o, starts + 12, end1);
     (o.0, start0)
+}
+
+/// `n` copies of LOD 0, back to back, every one declaring `end` = the end of the file.
+fn build_repeated(knobs: Knobs, n: usize) -> (Vec<u8>, usize) {
+    let mut lod = Out::default();
+    lod0(&mut lod, knobs);
+    let mut o = Out::default();
+    o.bytes(b"ODOL");
+    o.u32(56);
+    o.u32(u32::try_from(n).unwrap());
+    for _ in 0..n {
+        o.f32(1.0);
+    }
+    model_info(&mut o, knobs);
+    o.u8(1); // has_animations
+    animations(&mut o, n);
+    let starts = o.pos();
+    o.zeros(8 * n);
+    o.u8(0);
+    o.u8(0); // use_default
+    let first = o.pos();
+    for _ in 0..n {
+        o.bytes(&lod.0);
+    }
+    let eof = u32::try_from(o.pos()).unwrap();
+    for i in 0..n {
+        let start = u32::try_from(first + i * lod.0.len()).unwrap();
+        o.patch_u32(starts + 4 * i, start);
+        o.patch_u32(starts + 4 * n + 4 * i, eof);
+    }
+    (o.0, first)
 }

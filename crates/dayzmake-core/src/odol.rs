@@ -111,6 +111,30 @@ impl OdolLod {
     }
 }
 
+/// A [`BufReader`] whose relative seeks keep the buffer (the plain one drops it on every `Current` seek, and
+/// each skip would then cost a refill).
+struct Buffered<R: Read + Seek>(BufReader<R>);
+
+impl<R: Read + Seek> Read for Buffered<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<R: Read + Seek> Seek for Buffered<R> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        if let SeekFrom::Current(n) = pos {
+            self.0.seek_relative(n)?;
+            return self.0.stream_position();
+        }
+        self.0.seek(pos)
+    }
+
+    fn stream_position(&mut self) -> std::io::Result<u64> {
+        self.0.stream_position()
+    }
+}
+
 /// A reader that knows how many bytes are left.
 struct Rd<'a, R: Read + Seek> {
     r: &'a mut R,
@@ -249,7 +273,7 @@ impl Odol {
         let len = input.seek(SeekFrom::End(0))?;
         input.seek(SeekFrom::Start(0))?;
         // the header part is read through a buffer; each LOD is read into memory in one piece
-        let mut buffered = BufReader::new(input);
+        let mut buffered = Buffered(BufReader::new(input));
         let mut rd = Rd {
             r: &mut buffered,
             len,
@@ -299,54 +323,100 @@ impl Odol {
             ends.push(rd.u32()?);
         }
 
-        // Parse the LODs in file order and let none reach into the data of the one before it: LODs that
-        // share or overlap data would make a small file cost as much work as a big one.
-        let mut order: Vec<usize> = (0..lod_count).collect();
-        order.sort_by_key(|i| starts.get(*i).copied().unwrap_or(0));
-        let mut parsed = Vec::with_capacity(lod_count);
-        let mut previous_end = 0;
-        for index in order {
-            let start = u64::from(starts.get(index).copied().unwrap_or(0));
-            let end = u64::from(ends.get(index).copied().unwrap_or(0));
-            let context = format!("ODOL LOD {index} at offset {start}:");
-            if start >= len {
-                return Err(error!("{context}\nstarts past the end of the file"));
-            }
-            if start < previous_end {
-                return Err(error!(
-                    "{context}\nstarts inside the data of the LOD before it"
-                ));
-            }
-            // The bytes of this LOD go into memory: the parser seeks a lot, and counts are checked against
-            // the bytes of this LOD, not those of the whole file.
-            let stop = end.min(len);
-            let size = stop.saturating_sub(start);
-            if size > MAX_LOD_BYTES {
-                return Err(error!(
-                    "{context}\nthe LOD is {size} bytes, more than the {MAX_LOD_BYTES} accepted"
-                ));
-            }
-            rd.r.seek(SeekFrom::Start(start))?;
-            let mut bytes = Vec::new();
-            (&mut *rd.r).take(size).read_to_end(&mut bytes)?;
-            let mut cursor = Cursor::new(bytes);
-            let mut lod_rd = Rd {
-                r: &mut cursor,
-                len: size,
-                budget: rd.budget,
-            };
-            let resolution = resolutions.get(index).copied().unwrap_or(0.0);
-            let lod = read_lod(&mut lod_rd, resolution).prepend_error(&context)?;
-            rd.budget = lod_rd.budget;
-            previous_end = start
-                .checked_add(lod_rd.pos()?)
-                .ok_or_else(|| error!("{context}\nthe LOD ends beyond the file"))?;
-            parsed.push((index, lod));
-        }
-        parsed.sort_by_key(|(index, _)| *index);
-        model.lods = parsed.into_iter().map(|(_, lod)| lod).collect();
+        // The LOD data is read in one piece each, without read-ahead: back to the plain input.
+        let budget = rd.budget;
+        let input = buffered.0.into_inner();
+        model.lods = read_lods(
+            input,
+            &LodTable {
+                starts: &starts,
+                ends: &ends,
+                resolutions: &resolutions,
+            },
+            len,
+            budget,
+        )?;
         Ok(model)
     }
+}
+
+/// The offsets, end offsets and resolutions of the LODs, as the header lists them.
+struct LodTable<'a> {
+    starts: &'a [u32],
+    ends: &'a [u32],
+    resolutions: &'a [f32],
+}
+
+/// Reads the LODs of a file of `len` bytes, each from its offset, and returns them in header order.
+fn read_lods<R: Read + Seek>(
+    input: &mut R,
+    table: &LodTable<'_>,
+    len: u64,
+    mut budget: u64,
+) -> Result<Vec<OdolLod>, Error> {
+    let (starts, ends, resolutions) = (table.starts, table.ends, table.resolutions);
+    let lod_count = starts.len();
+    // Parse the LODs in file order and let none reach into the data of the one before it: LODs that
+    // share or overlap data would make a small file cost as much work as a big one.
+    let mut order: Vec<usize> = (0..lod_count).collect();
+    order.sort_by_key(|i| starts.get(*i).copied().unwrap_or(0));
+    let mut parsed = Vec::with_capacity(lod_count);
+    let mut previous_end = 0;
+    let mut total_read = 0u64;
+    for (rank, &index) in order.iter().enumerate() {
+        let start = u64::from(starts.get(index).copied().unwrap_or(0));
+        let end = u64::from(ends.get(index).copied().unwrap_or(0));
+        let context = format!("ODOL LOD {index} at offset {start}:");
+        if start >= len {
+            return Err(error!("{context}\nstarts past the end of the file"));
+        }
+        if start < previous_end {
+            return Err(error!(
+                "{context}\nstarts inside the data of the LOD before it"
+            ));
+        }
+        // The bytes of this LOD go into memory: the parser seeks a lot, and counts are checked against
+        // the bytes of this LOD, not those of the whole file.
+        // A LOD never reads past the start of the next one (the file end for the last), and the bytes
+        // read over all LODs never exceed the file: the cost stays linear whatever the declared ends.
+        let next_start = order
+            .iter()
+            .skip(rank + 1)
+            .map(|next| u64::from(starts.get(*next).copied().unwrap_or(0)))
+            .find(|next| *next > start)
+            .unwrap_or(len);
+        let stop = end.min(len).min(next_start);
+        let size = stop.saturating_sub(start);
+        total_read = total_read.saturating_add(size);
+        if total_read > len {
+            return Err(error!(
+                "{context}\nthe LODs together hold more bytes than the file"
+            ));
+        }
+        if size > MAX_LOD_BYTES {
+            return Err(error!(
+                "{context}\nthe LOD is {size} bytes, more than the {MAX_LOD_BYTES} accepted"
+            ));
+        }
+        input.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        (&mut *input).take(size).read_to_end(&mut bytes)?;
+        let mut cursor = Cursor::new(bytes);
+        let mut lod_rd = Rd {
+            r: &mut cursor,
+            len: size,
+            budget,
+        };
+        let resolution = resolutions.get(index).copied().unwrap_or(0.0);
+        let lod = read_lod(&mut lod_rd, resolution).prepend_error(&context)?;
+        budget = lod_rd.budget;
+        previous_end = start
+            .checked_add(lod_rd.pos()?)
+            .ok_or_else(|| error!("{context}\nthe LOD ends beyond the file"))?;
+        parsed.push((index, lod));
+    }
+    parsed.sort_by_key(|(index, _)| *index);
+    Ok(parsed.into_iter().map(|(_, lod)| lod).collect())
 }
 
 fn model_info<R: Read + Seek>(rd: &mut Rd<'_, R>, model: &mut Odol) -> Result<(), Error> {

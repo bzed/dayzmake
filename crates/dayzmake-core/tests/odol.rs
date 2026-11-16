@@ -180,3 +180,45 @@ fn lods_that_share_data_are_refused() {
         "{message}"
     );
 }
+
+/// A reader that counts the bytes handed out.
+struct Counting<'a> {
+    inner: Cursor<&'a [u8]>,
+    read: u64,
+}
+
+impl std::io::Read for Counting<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += n as u64;
+        Ok(n)
+    }
+}
+
+impl std::io::Seek for Counting<'_> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+#[test]
+fn lods_that_all_declare_the_end_of_the_file_are_read_in_linear_time() {
+    // Every LOD declares `end` = EOF; each one must still only be read up to the start of the next, or
+    // N LODs cost N times the file.
+    let bytes = build(Knobs {
+        repeat_lod0_to_eof: Some(300),
+        ..Knobs::default()
+    });
+    let mut input = Counting {
+        inner: Cursor::new(&bytes),
+        read: 0,
+    };
+    let model = Odol::read(&mut input).unwrap();
+    assert_eq!(model.lods.len(), 300);
+    let len = bytes.len() as u64;
+    assert!(
+        input.read <= len + len / 4,
+        "read {} bytes of a {len} byte file",
+        input.read
+    );
+}
