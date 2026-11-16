@@ -33,8 +33,8 @@ need to be GPL-2.0-or-later compatible.
 ### Unreleased (since 0.2.0)
 
 New public items: `preprocess::IncludeFolders` (folders searched recursively plus folders that are only checked
-directly), `preprocess::preprocess_in`, `Config::read_in` and `PackOptions::direct_include_folders`. The recursive
-search of an include folder no longer follows directory symlinks that leave the folder or lead back into it, and
+directly), `preprocess::preprocess_in`, `Config::read_in`, `Config::from_string_in` and `PackOptions::direct_include_folders`. The recursive
+search of an include folder no longer follows directory symlinks that leave the folder, and enters no directory twice, and it
 fails with an error naming the include after visiting 1,000,000 entries. `preprocess` and `Config::read` keep
 their signatures and search every folder they get recursively.
 

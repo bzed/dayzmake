@@ -1110,8 +1110,7 @@ impl Config {
     /// Preprocesses and parses input string.
     ///
     /// `path` is the path to the input if it is known and is used for relative includes and error
-    /// messages. `includefolders` are the folders searched for absolute includes and should usually at
-    /// least include the current working directory.
+    /// messages. `includefolders` are the folders searched recursively for absolute includes.
     ///
     /// # Errors
     ///
@@ -1124,6 +1123,21 @@ impl Config {
     ) -> Result<Config, Error> {
         let mut cursor = Cursor::new(input.into_bytes());
         Self::read(&mut cursor, path, includefolders, warnings)
+    }
+
+    /// Like [`Config::from_string`], with the include folders given as an [`IncludeFolders`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on preprocessing or parse failures.
+    pub fn from_string_in(
+        input: String,
+        path: Option<PathBuf>,
+        includefolders: &IncludeFolders,
+        warnings: &mut dyn WarningSink,
+    ) -> Result<Config, Error> {
+        let mut cursor = Cursor::new(input.into_bytes());
+        Self::read_in(&mut cursor, path, includefolders, warnings)
     }
 
     /// Reads the rapified config from input.

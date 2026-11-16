@@ -586,7 +586,7 @@ fn empty_steps_file(level: usize, lines: usize) -> String {
 fn macro_work_is_capped_per_file() {
     let err = preprocess(empty_steps_file(14, 2), None, &[], &mut Warnings::new()).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("macro calls in one file"), "{msg}");
+    assert!(msg.contains("macro calls (at macro"), "{msg}");
     assert!(msg.contains("\"A") || msg.contains("\"E\""), "{msg}");
 }
 

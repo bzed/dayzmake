@@ -206,8 +206,8 @@ pub(crate) enum Line {
 /// The folders searched for absolute includes (`#include "\DZ\data\x.hpp"`).
 ///
 /// A folder in `search` is searched recursively for a file whose path ends in the include path (and whose
-/// `$PBOPREFIX$` matches); the walk does not follow directory symlinks that leave the folder or lead back into it,
-/// and enters no directory twice; a search folder that reaches 1,000,000 visited entries is an error naming the
+/// `$PBOPREFIX$` matches); the walk does not follow directory symlinks that leave the folder, and enters no directory twice;
+/// a search folder that reaches 1,000,000 visited entries is an error naming the
 /// include, and it ends the whole lookup (the other folders are not tried). A folder in `direct` is only
 /// checked for `<folder>/<include path>` (case-insensitively as a second pass), without walking it: use it for the
 /// current working directory, which can be a whole disk. The `search` folders are tried first, then the `direct`
@@ -356,7 +356,7 @@ impl Budget {
         }
         if self.file_steps.saturating_add(self.steps) > MAX_FILE_STEPS {
             return Err(error!(
-                "Macro \"{}\" expands to more than {MAX_FILE_STEPS} macro calls in one file and its includes",
+                "The file and its includes reach more than {MAX_FILE_STEPS} macro calls (at macro \"{}\")",
                 printable(name)
             ));
         }

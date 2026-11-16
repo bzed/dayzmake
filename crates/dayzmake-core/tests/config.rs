@@ -471,3 +471,12 @@ fn macro_uses_do_not_shift_line_numbers() {
     let string = "#define M \"a\\\nb\"\nx = M;\nclass X { y = ; };\n";
     assert_eq!(empty_value_line(string), Some(4));
 }
+
+#[test]
+fn from_string_in_matches_from_string() {
+    let folders = dayzmake_core::preprocess::IncludeFolders::new(Vec::new());
+    let mut w = Warnings::default();
+    let config =
+        Config::from_string_in("class A { x = 1; };".to_string(), None, &folders, &mut w).unwrap();
+    assert!(config.root().get("A").is_some());
+}

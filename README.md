@@ -24,10 +24,13 @@ is maintained here.
 
 ## Changes
 
-- A missing absolute include no longer walks the whole working directory (#66): the implicit working directory is
+- Backslash line continuations count as source lines: in a `#define` and in disabled lines they used to be
+  lost, and a macro use no longer shifts the line numbers after it, so warnings and errors point at the right line
+  (#65).
+- Behaviour change: a missing absolute include no longer walks the whole working directory (#66): the implicit working directory is
   only checked directly (`./DZ/data/x.hpp`), so a file buried below it is no longer found without `-i`. Folders
   given with `-i` are still searched recursively, but the search does not follow directory symlinks that leave the
-  folder or lead back into it, and fails with an error naming the include after 1,000,000 visited entries (the
+  folder, and enters no directory twice, and it fails with an error naming the include after 1,000,000 visited entries (the
   author's `P:` drive copy has 109,000).
 - Line numbers in warnings and errors stay right after a disabled `#ifdef`/`#ifndef` branch (plain lines, `#define`,
   `#undef`, `#include`, nested branches); they used to drift up by one per disabled line (#63).

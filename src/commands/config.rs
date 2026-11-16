@@ -11,8 +11,7 @@ use dayzmake_core::warning::{Warning, WarningSink};
 /// Reads input, preprocesses and rapifies it and writes to output.
 ///
 /// `path` is the path to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes.
 ///
 /// # Errors
 ///
@@ -70,8 +69,7 @@ pub fn cmd_derapify<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> 
 /// Reads input, preprocesses it and writes to output.
 ///
 /// `path` is the `path` to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes.
 ///
 /// # Errors
 ///

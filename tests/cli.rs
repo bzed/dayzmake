@@ -2093,7 +2093,7 @@ fn per_file_macro_work_fails_fast() {
         return;
     };
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("macro calls in one file"), "{err}");
+    assert!(err.contains("macro calls (at macro"), "{err}");
     assert!(
         start.elapsed().as_secs_f64() < 10.0,
         "took {:?}",
