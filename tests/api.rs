@@ -2152,6 +2152,58 @@ mod from_pbo {
     }
 
     #[test]
+    fn api_grep_merges_hits_across_the_pbos_of_a_mod() {
+        let w = World::new();
+        let dir = w.home.join("@Two");
+        let empty = tempfile::tempdir().expect("tmp");
+        // paths interleave across the two PBOs: a/1, b/1 (pbo one) and a/2, b/0 (pbo two) with prefix p
+        make_pbo(
+            empty.path(),
+            &[("a.c", "hit\nhit\n"), ("c.c", "hit\n")],
+            Some("p"),
+            &dir.join("addons/one.pbo"),
+        );
+        make_pbo(
+            empty.path(),
+            &[("b.c", "hit\n"), ("0.c", "x\nhit\n")],
+            Some("p"),
+            &dir.join("addons/two.pbo"),
+        );
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "grep", "^hit$", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let paths: Vec<&str> = out
+            .lines()
+            .map(|l| &l[l.find(' ').expect("tag") + 1..])
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "p\\0.c:2: hit",
+                "p\\a.c:1: hit",
+                "p\\a.c:2: hit",
+                "p\\b.c:1: hit",
+                "p\\c.c:1: hit"
+            ]
+        );
+        for max in ["0", "1", "3", "4"] {
+            let (code, out, err) = w.run(&["api", "grep", "^hit$", "-m", &m, "--max", max]);
+            assert_eq!(code, 0, "{err}");
+            let n: usize = max.parse().expect("n");
+            let lines: Vec<&str> = out.lines().collect();
+            assert_eq!(lines.len(), n + 1, "{max}: {out}");
+            assert_eq!(
+                lines[n],
+                format!("... {} more lines (raise --max or narrow the query)", 5 - n)
+            );
+            assert!(!out.contains("no match"), "{out}");
+            if n > 0 {
+                assert!(lines[0].ends_with("p\\0.c:2: hit"), "{out}");
+            }
+        }
+    }
+
+    #[test]
     fn api_grep_invalid_regex_is_a_clear_error() {
         let w = World::new();
         let (code, out, err) = w.run(&["api", "grep", "(unclosed"]);

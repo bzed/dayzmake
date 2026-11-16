@@ -465,7 +465,7 @@ pub fn cat_sources(
 pub struct GrepHit {
     /// Name of the index (`vanilla` or the mod).
     pub source: String,
-    /// `<PBO prefix>\<entry name>`, as `api src` prints the file.
+    /// `<PBO prefix>\<entry name>`: the path part of what `api src` prints (without the PBO file).
     pub path: String,
     /// 1-based line.
     pub line: u32,
@@ -538,22 +538,37 @@ pub fn grep(
                     }
                 }
             };
+            let mut mine = 0usize;
             let Some((prefix, texts)) = texts else {
                 continue;
             };
+            // Entries in path order and lines in order give this PBO's hits in output order, so only the
+            // first `left` need to be built; the others are counted. Memory follows `left`, not the matches.
+            let mut texts = texts;
+            texts.sort_by(|a, b| a.0.cmp(&b.0));
             for (entry, text) in &texts {
-                let shown = format!("{prefix}\\{entry}");
+                let mut shown: Option<String> = None;
                 for (i, line) in text.lines().enumerate() {
-                    if rx.is_match(line) {
-                        kept.push(GrepHit {
-                            source: name.to_string(),
-                            path: shown.clone(),
-                            line: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                            text: line.to_string(),
-                        });
+                    if !rx.is_match(line) {
+                        continue;
                     }
+                    if mine >= left {
+                        result.more += 1;
+                        continue;
+                    }
+                    mine += 1;
+                    let path = shown
+                        .get_or_insert_with(|| format!("{prefix}\\{entry}"))
+                        .clone();
+                    kept.push(GrepHit {
+                        source: name.to_string(),
+                        path,
+                        line: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                        text: line.to_string(),
+                    });
                 }
             }
+            // merge with the PBOs before: keep the first `left` overall, count the others
             kept.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
             if kept.len() > left {
                 result.more += kept.len() - left;
@@ -599,7 +614,7 @@ pub fn grep_lines(
             printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text))
         })
         .collect();
-    if out.is_empty() {
+    if out.is_empty() && r.more == 0 {
         out.push(if r.multi {
             "no match".to_string()
         } else {

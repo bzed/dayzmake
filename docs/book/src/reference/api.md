@@ -386,8 +386,8 @@ dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [
 
 Behaviour: every `.c` entry of `dta/scripts.pbo` and of the script PBOs of the selected mods is read straight
 from its PBO and matched line by line on the raw source, comments included; nothing is written to disk and no
-index is needed (`--refresh` does not apply). Output is `<prefix>\<path>:<line>: <text>`, the path in the form of
-`api src`, with `[<index>] ` in front when mods are selected. Hits are sorted by source (vanilla first, then the mods
+index is needed (`--refresh` does not apply). Output is `<prefix>\<path>:<line>: <text>`, the path as the
+`<prefix>\<path>` part of `api src` output (without the PBO file), with `[<index>] ` in front when mods are selected. Hits are sorted by source (vanilla first, then the mods
 in `-m` order), then path, then line. `--max` limits the printed lines but the whole input is scanned, so the
 number in the `... N more lines` note is exact (a full scan of the game's scripts takes well under a second).
 `no match` is printed when nothing matches; control characters in the text are escaped (a tab shows as `\t`).

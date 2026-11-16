@@ -205,7 +205,6 @@ Full-text search over the script bodies (every .c file of vanilla and the select
 | `json` | boolean | no | Return JSON instead of text. |
 | `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
 | `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
-| `refresh` | boolean | no | Rebuild the cached index first. |
 
 Result: The matching lines, as `dayzmake api grep`.
 

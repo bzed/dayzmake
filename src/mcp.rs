@@ -374,6 +374,27 @@ const LENGTH_ARG: (&str, char, &str) = (
     "Return at most this many bytes (default and maximum 200000).",
 );
 
+/// `api_grep`: the common api arguments except `refresh` (grep reads the PBOs and builds no index).
+fn grep_tool() -> Value {
+    let mut props: Vec<(&str, char, &str)> = vec![
+        (
+            "regex",
+            's',
+            "Regular expression, matched against each line.",
+        ),
+        ("ignore_case", 'b', "Match case-insensitively."),
+    ];
+    props.extend(API_COMMON.iter().filter(|p| p.0 != "refresh"));
+    props.push(JSON_ARG);
+    props.push(MAX_ARG);
+    tool(
+        "api_grep",
+        "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
+        &props,
+        &["regex"],
+    )
+}
+
 fn api_tool(
     name: &str,
     description: &str,
@@ -507,20 +528,7 @@ fn tools() -> Value {
             &["name"],
             (true, true)
         ),
-        api_tool(
-            "api_grep",
-            "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
-            &[
-                (
-                    "regex",
-                    's',
-                    "Regular expression, matched against each line."
-                ),
-                ("ignore_case", 'b', "Match case-insensitively."),
-            ],
-            &["regex"],
-            (true, true)
-        ),
+        grep_tool(),
         api_tool(
             "api_defines",
             "Compile-time defines of the selected indexes, optionally filtered by a regex.",
