@@ -44,7 +44,8 @@ pub fn cmd_paa2img(input_path: &Path, output_path: &Path, force: bool) -> Result
     Ok(())
 }
 
-/// Converts a standard image file to PAA.
+/// Converts a standard image file to PAA. With `compress`, mipmaps wider than 128 pixels are LZO
+/// compressed (DXT only; `Paa::from_dynamic_image` already does that, so the output is the same).
 ///
 /// # Errors
 ///
@@ -53,8 +54,7 @@ pub fn cmd_img2paa(
     input_path: &Path,
     output_path: &Path,
     paa_type: &str,
-    // `-c` has no effect; the flag stays so existing scripts keep working
-    _compress: bool,
+    compress: bool,
     force: bool,
 ) -> Result<(), Error> {
     if !force && output_path.exists() {
@@ -67,10 +67,14 @@ pub fn cmd_img2paa(
     let img = image::open(input_path)
         .map_err(|e| error!("{}", e))
         .prepend_error(open_failure(input_path, "input image file"))?;
-    let paa = paa_type
+    let mut paa = paa_type
         .parse::<PaaFormat>()
         .and_then(|format| Paa::from_dynamic_image(&img, format))
         .prepend_error("Failed to convert image to PAA:")?;
+    if compress {
+        paa.lzo_compress()
+            .prepend_error("Failed to compress the PAA mipmaps:")?;
+    }
 
     let mut file = AtomicTarget::create_with(
         output_path,

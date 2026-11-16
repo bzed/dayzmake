@@ -478,3 +478,60 @@ fn from_string_in_matches_from_string() {
         Config::from_string_in("class A { x = 1; };".to_string(), None, &folders, &mut w).unwrap();
     assert!(config.root().get("A").is_some());
 }
+
+#[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
+fn write_with(bytes: Vec<u8>, indent: &str) -> String {
+    let config = read_bytes(bytes).unwrap();
+    let mut out = Vec::new();
+    config
+        .write_with(&mut out, &WriteOptions::new().indent(indent).unwrap())
+        .unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn write_with_uses_the_given_indent() {
+    let bytes = rapify_src("class A { class B { x = 1; }; y = 2; };");
+    let tab = write_with(bytes.clone(), "\t");
+    assert!(tab.contains("\n\ty = 2;"), "{tab}");
+    assert!(tab.contains("\n\t\tx = 1;"), "{tab}");
+    let two = write_with(bytes, "  ");
+    assert!(two.contains("\n  y = 2;"), "{two}");
+    assert!(two.contains("\n    x = 1;"), "{two}");
+    assert!(two.contains("\n  };"), "{two}");
+}
+
+#[test]
+fn write_with_empty_indent_round_trips() {
+    let bytes = rapify_src("class A { class B { x = 1; }; y[] = {1,2}; s = \"t\"; };");
+    let text = write_with(bytes.clone(), "");
+    assert!(text.contains("\nx = 1;"), "{text}");
+    let again = Config::from_string(text, None, &[], &mut Warnings::new())
+        .unwrap()
+        .to_cursor()
+        .unwrap()
+        .into_inner()
+        .into_vec();
+    assert_eq!(bytes, again);
+}
+
+#[test]
+fn indent_rejects_other_characters() {
+    for bad in ["x", "\n", " \n", "  //", &" ".repeat(65)] {
+        let err = WriteOptions::new().indent(bad).err();
+        assert!(err.is_some(), "{bad:?} must be rejected");
+    }
+    let msg = WriteOptions::new().indent("a\nb").unwrap_err().to_string();
+    assert!(msg.contains("a\\nb"), "{msg}");
+    assert!(WriteOptions::new().indent("\t ").is_ok());
+}
+
+#[test]
+fn indent_too_long_reports_the_length() {
+    let msg = dayzmake_core::config::WriteOptions::new()
+        .indent(" ".repeat(65))
+        .expect_err("too long")
+        .to_string();
+    assert!(msg.contains("65 characters"), "{msg}");
+    assert!(msg.len() < 120, "{msg}");
+}

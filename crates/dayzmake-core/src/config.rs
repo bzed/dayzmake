@@ -614,14 +614,14 @@ impl ConfigClass {
             .map(|(_, entry)| entry)
     }
 
-    fn write<O: Write>(&self, output: &mut O, level: usize) -> Result<(), Error> {
+    fn write<O: Write>(&self, output: &mut O, level: usize, indent: &str) -> Result<(), Error> {
         if let Some(entries) = &self.entries {
             if level > 0 && !entries.is_empty() {
                 output.write_all(b"\n")?;
             }
             for (key, value) in entries {
                 text_name(key, "Entry")?;
-                output.write_all(String::from("    ").repeat(level).as_bytes())?;
+                output.write_all(indent.repeat(level).as_bytes())?;
 
                 match value {
                     ConfigEntry::ClassEntry(c) => {
@@ -646,10 +646,8 @@ impl ConfigClass {
                                         output.write_all(
                                             format!("class {key}{parent} {{").as_bytes(),
                                         )?;
-                                        c.write(output, level + 1)?;
-                                        output.write_all(
-                                            String::from("    ").repeat(level).as_bytes(),
-                                        )?;
+                                        c.write(output, level + 1, indent)?;
+                                        output.write_all(indent.repeat(level).as_bytes())?;
                                         output.write_all(b"};\n")?;
                                     }
                                 }
@@ -940,6 +938,55 @@ impl ConfigClass {
     }
 }
 
+/// Options for [`Config::write_with`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WriteOptions {
+    indent: String,
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        Self {
+            indent: "    ".to_string(),
+        }
+    }
+}
+
+impl WriteOptions {
+    /// The default options: four spaces of indentation.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the string written once per nesting level.
+    ///
+    /// The string may be empty and may only contain spaces and tabs, at most 64 characters, so the
+    /// output stays parsable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the value if it contains other characters or is too long.
+    pub fn indent(mut self, indent: impl Into<String>) -> Result<Self, Error> {
+        let indent = indent.into();
+        let length = indent.chars().count();
+        if length > 64 {
+            return Err(error!(
+                "Invalid indentation: it is {length} characters, at most 64 are allowed."
+            ));
+        }
+        if !indent.chars().all(|c| c == ' ' || c == '\t') {
+            return Err(error!(
+                "Invalid indentation \"{}\": use spaces and tabs only.",
+                printable(&indent)
+            ));
+        }
+        self.indent = indent;
+        Ok(self)
+    }
+}
+
 impl Config {
     /// The unnamed top-level class holding all entries of the file.
     #[must_use]
@@ -953,7 +1000,20 @@ impl Config {
     ///
     /// Returns an error on I/O failure.
     pub fn write<O: Write>(&self, output: &mut O) -> Result<(), Error> {
-        self.root_body.write(output, 0)
+        self.write_with(output, &WriteOptions::new())
+    }
+
+    /// Writes the config (unrapified) to the output with the given options.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or if a name cannot be written as text.
+    pub fn write_with<O: Write>(
+        &self,
+        output: &mut O,
+        options: &WriteOptions,
+    ) -> Result<(), Error> {
+        self.root_body.write(output, 0, &options.indent)
     }
 
     /// Returns the unrapified config as a string.

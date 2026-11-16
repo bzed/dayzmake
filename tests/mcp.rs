@@ -870,3 +870,66 @@ fn mcp_verify_and_sign_reject_a_pbo_with_a_stale_trailer() {
         assert!(text(reply).contains("checksum mismatch"), "{}", text(reply));
     }
 }
+
+#[test]
+fn mcp_config_derapify_indent() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    fs::write(p.join("c.cpp"), "class A { x = 1; };\n").expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "config_rapify",
+                &json!({"source":"c.cpp","target":"c.bin"}),
+            ),
+            call(
+                2,
+                "config_derapify",
+                &json!({"source":"c.bin","indent":"\t"}),
+            ),
+            call(
+                3,
+                "config_derapify",
+                &json!({"source":"c.bin","indent":"x"}),
+            ),
+        ],
+        p,
+    );
+    assert!(
+        text(&r.replies[1]).contains("\n\tx = 1;"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(is_error(&r.replies[2]));
+    assert!(
+        text(&r.replies[2]).contains("indent"),
+        "{}",
+        text(&r.replies[2])
+    );
+}
+
+#[test]
+fn mcp_image_to_paa_compress() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    image::RgbImage::from_fn(256, 256, |x, y| {
+        image::Rgb([
+            u8::try_from(x / 4).unwrap_or(255),
+            u8::try_from(y / 4).unwrap_or(255),
+            9,
+        ])
+    })
+    .save(p.join("in.png"))
+    .expect("png");
+    let r = run(
+        &[call(
+            1,
+            "image_to_paa",
+            &json!({"source":"in.png","target":"o.paa","type":"dxt1","compress":true}),
+        )],
+        p,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(p.join("o.paa").is_file());
+}

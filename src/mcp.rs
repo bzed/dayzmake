@@ -591,6 +591,11 @@ fn tools() -> Value {
             &[
                 ("source", 's', "Rapified config."),
                 ("target", 's', "Write the text here; absent: return it."),
+                (
+                    "indent",
+                    's',
+                    "Indentation per level: spaces and tabs only, at most 64 characters, default four spaces.",
+                ),
                 FORCE_ARG,
             ],
             &["source"],
@@ -623,7 +628,11 @@ fn tools() -> Value {
                 ("source", 's', "Image file."),
                 ("target", 's', "PAA file to write."),
                 ("type", 's', "PAA type, e.g. dxt1, dxt5 (default dxt5)."),
-                ("compress", 'b', "Compress the output."),
+                (
+                    "compress",
+                    'b',
+                    "LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility)."
+                ),
                 FORCE_ARG,
             ],
             &["source", "target"],
@@ -789,7 +798,12 @@ fn file_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         }
         "config_derapify" => {
             let mut out = Vec::new();
-            config::cmd_derapify(&mut open(&path_arg(args, "source")?)?, &mut out)?;
+            let indent = opt_str(args, "indent")?;
+            config::cmd_derapify(
+                &mut open(&path_arg(args, "source")?)?,
+                &mut out,
+                indent.as_deref(),
+            )?;
             text_or_target(args, &out)
         }
         "config_preprocess" => {

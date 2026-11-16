@@ -27,7 +27,7 @@ The `-t` option chooses the pixel format:
 | `rgba` | uncompressed 8-bit RGBA, no loss | 21945 bytes |
 
 dayzmake builds the mipmap chain itself (down to 4 pixels on a side). It does not resize your image, so make it
-a power of two before. `-c` is accepted but has no effect yet.
+a power of two before. Mipmaps wider than 128 pixels of the DXT types are LZO-compressed automatically, so `-c` does not change the file.
 
 To look at a PAA from a mod or the game, convert it to an image; the format follows the extension:
 

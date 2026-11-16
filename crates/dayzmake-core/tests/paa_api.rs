@@ -76,3 +76,125 @@ fn conversion_matches_the_cli_bytes() {
     let paa = Paa::from_dynamic_image(&gradient(), PaaFormat::Dxt5).expect("converts");
     assert_eq!(to_bytes(&paa), snapshot);
 }
+
+/// A smooth `size` x `size` picture that LZO can shrink.
+#[cfg(feature = "image")]
+fn smooth(size: u32) -> DynamicImage {
+    DynamicImage::ImageRgba8(RgbaImage::from_fn(size, size, |x, y| {
+        Rgba([
+            u8::try_from(x / 4).unwrap_or(255),
+            u8::try_from(y / 4).unwrap_or(255),
+            90,
+            255,
+        ])
+    }))
+}
+
+/// The file written by `from_dynamic_image`, read back: its mipmaps are held uncompressed.
+#[cfg(feature = "image")]
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
+fn raw_paa(size: u32, format: PaaFormat) -> (Paa, Vec<u8>) {
+    let paa = Paa::from_dynamic_image(&smooth(size), format).expect("converts");
+    let written = to_bytes(&paa);
+    let raw = Paa::read(&mut Cursor::new(written.clone())).expect("reads back");
+    (raw, written)
+}
+
+/// The width field (with the LZO bit) of the first mipmap of a PAA file.
+#[cfg(feature = "image")]
+#[expect(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test helper parsing output the test itself created"
+)]
+fn first_mipmap_width_field(paa: &[u8]) -> u16 {
+    let at = paa
+        .windows(8)
+        // a read PAA keeps its offset tagg and the writer adds a fresh one; the last one is right
+        .rposition(|w| w == b"GGATSFFO")
+        .expect("offset tagg");
+    let offset = u32::from_le_bytes(paa[at + 12..at + 16].try_into().expect("4 bytes")) as usize;
+    u16::from_le_bytes([paa[offset], paa[offset + 1]])
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzo_compress_marks_large_dxt_mipmaps() {
+    let (mut raw, _) = raw_paa(256, PaaFormat::Dxt5);
+    let raw_file = to_bytes(&raw);
+    assert_eq!(first_mipmap_width_field(&raw_file) & 0x8000, 0);
+    raw.lzo_compress().expect("compresses");
+    let out = to_bytes(&raw);
+    assert!(out.len() < raw_file.len());
+    assert_ne!(first_mipmap_width_field(&out) & 0x8000, 0);
+    let back = Paa::read(&mut Cursor::new(out)).expect("reads back");
+    let expected = Paa::read(&mut Cursor::new(raw_file)).expect("reads back");
+    assert_eq!(
+        back.to_dynamic_image().expect("decodes").to_rgba8(),
+        expected.to_dynamic_image().expect("decodes").to_rgba8()
+    );
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzo_compress_leaves_small_and_non_dxt_unchanged() {
+    for (size, format) in [
+        (64, PaaFormat::Dxt5),
+        (128, PaaFormat::Dxt1),
+        (256, PaaFormat::Rgba),
+    ] {
+        let (mut paa, _) = raw_paa(size, format);
+        let before = to_bytes(&paa);
+        paa.lzo_compress().expect("no error");
+        assert_eq!(to_bytes(&paa), before, "{size} {format:?}");
+    }
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzo_compress_twice_is_idempotent() {
+    let (mut paa, _) = raw_paa(256, PaaFormat::Dxt1);
+    paa.lzo_compress().expect("compresses");
+    let once = to_bytes(&paa);
+    paa.lzo_compress().expect("compresses");
+    assert_eq!(to_bytes(&paa), once);
+}
+
+/// A DXT1 PAA of 256 x 256 whose first mipmap is stored raw but longer than the raw size.
+#[cfg(feature = "image")]
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
+fn oversized_first_mipmap_file() -> Vec<u8> {
+    let first: Vec<u8> = (0..40000u32)
+        .map(|i| u8::try_from(i / 160).unwrap_or(255))
+        .collect();
+    let second = vec![7u8; 8192];
+    let offset0 = 2u32 + 8 + 4 + 64 + 2;
+    let offset1 = offset0 + 7 + u32::try_from(first.len()).expect("fits");
+    let mut out = vec![0x01, 0xff];
+    out.extend_from_slice(b"GGATSFFO");
+    out.extend_from_slice(&64u32.to_le_bytes());
+    let mut table = vec![offset0, offset1];
+    table.resize(16, 0);
+    for o in table {
+        out.extend_from_slice(&o.to_le_bytes());
+    }
+    out.extend_from_slice(&0u16.to_le_bytes());
+    for (w, h, data) in [(256u16, 256u16, &first), (128, 128, &second)] {
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&u32::try_from(data.len()).expect("fits").to_le_bytes()[..3]);
+        out.extend_from_slice(data);
+    }
+    out.extend_from_slice(&[0; 6]);
+    out
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzo_compress_leaves_an_oversized_raw_mipmap_readable() {
+    let mut paa = Paa::read(&mut Cursor::new(oversized_first_mipmap_file())).expect("reads");
+    let before = paa.to_dynamic_image().expect("decodes").to_rgba8();
+    paa.lzo_compress().expect("no error");
+    let back = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("the written file reads");
+    assert_eq!(back.to_dynamic_image().expect("decodes").to_rgba8(), before);
+}

@@ -185,3 +185,30 @@ fn to_dynamic_image_rejects_a_short_mipmap() {
         assert!(paa.to_dynamic_image().is_err());
     }
 }
+
+#[test]
+fn img2paa_compress_writes_valid_lzo_mipmaps() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = png(dir.path(), "in.png", 512, false);
+    let s = source.to_str().unwrap();
+    for (name, extra) in [("plain.paa", None), ("c.paa", Some("-c"))] {
+        let mut args = vec!["img2paa", "-t", "dxt1"];
+        args.extend(extra);
+        args.extend([s, name]);
+        let (code, err) = run(&args, dir.path());
+        assert_eq!(code, 0, "{err}");
+    }
+    let plain = std::fs::read(dir.path().join("plain.paa")).unwrap();
+    let compressed = std::fs::read(dir.path().join("c.paa")).unwrap();
+    // large mipmaps are LZO-compressed with or without -c, so the files are the same
+    assert_eq!(plain, compressed);
+    assert!(mipmaps(&compressed).iter().any(|(w, _, _)| w & 0x8000 != 0));
+    for (paa, png) in [("plain.paa", "a.png"), ("c.paa", "b.png")] {
+        let (code, err) = run(&["paa2img", paa, png], dir.path());
+        assert_eq!(code, 0, "{err}");
+    }
+    assert_eq!(
+        std::fs::read(dir.path().join("a.png")).unwrap(),
+        std::fs::read(dir.path().join("b.png")).unwrap()
+    );
+}

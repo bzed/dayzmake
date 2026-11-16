@@ -183,7 +183,7 @@ dayzmake derapify [-v] [-f] [-d <indentation>] [<source> [<target>]]
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. |
-| `-d <indentation>`, `--indent <indentation>` | four spaces | Meant to set the indentation string. It is accepted but has no effect in 3.0.0 ([#69](https://github.com/bzed/dayzmake/issues/69)): the output always uses four spaces. |
+| `-d <indentation>`, `--indent <indentation>` | four spaces | The string written once per nesting level. Only spaces and tabs are accepted, at most 64 characters; an empty string gives unindented output. Anything else is an error and nothing is written. |
 
 Behaviour:
 

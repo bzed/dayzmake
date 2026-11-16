@@ -3,7 +3,7 @@
 use std::io::{Cursor, Error, Read, Seek, Write};
 use std::path::PathBuf;
 
-use dayzmake_core::config::{Config, is_rapified};
+use dayzmake_core::config::{Config, WriteOptions, is_rapified};
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::preprocess::{IncludeFolders, preprocess_in};
 use dayzmake_core::warning::{Warning, WarningSink};
@@ -51,16 +51,25 @@ pub fn cmd_rapify<I: Read, O: Write>(
     Ok(())
 }
 
-/// Reads input, derapifies it and writes to output.
+/// Reads input, derapifies it and writes to output, indenting with `indent`
+/// (spaces and tabs only; `None` is the default of [`WriteOptions`]).
 ///
 /// # Errors
 ///
 /// Returns an error if the input is not a rapified config or cannot be written.
-pub fn cmd_derapify<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
+pub fn cmd_derapify<I: Read + Seek, O: Write>(
+    input: &mut I,
+    output: &mut O,
+    indent: Option<&str>,
+) -> Result<(), Error> {
+    let options = match indent {
+        Some(indent) => WriteOptions::new().indent(indent)?,
+        None => WriteOptions::new(),
+    };
     let config = Config::read_rapified(input).prepend_error("Failed to read rapified config:")?;
 
     config
-        .write(output)
+        .write_with(output, &options)
         .prepend_error("Failed to derapify config:")?;
 
     Ok(())

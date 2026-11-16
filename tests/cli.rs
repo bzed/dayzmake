@@ -2123,3 +2123,72 @@ fn working_directory_include_is_checked_directly_not_walked() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out.trim(), "a = 2;");
 }
+
+#[test]
+fn derapify_indent_option() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "c.cpp", "class A { x = 1; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, out, err) = dayzmake(&["derapify", "-d", "  ", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("\n  x = 1;"), "{out}");
+    assert!(!out.contains("\n   x = 1;"), "{out}");
+}
+
+#[test]
+fn derapify_rejects_bad_indent() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "c.cpp", "class A { x = 1; };\n");
+    let (code, _, err) = dayzmake(&["rapify", "c.cpp", "c.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["derapify", "-d", "x", "c.bin", "out.cpp"], dir.path());
+    assert_ne!(code, 0);
+    assert!(err.contains("indent"), "{err}");
+    assert!(!dir.path().join("out.cpp").exists());
+}
+
+/// A PBO `out.pbo` holding `config.cpp` next to a pre-existing `t.txt`.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn cat_setup() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/config.cpp", "class B { y = 2; };\n");
+    let (code, _, err) = dayzmake(&["build", "m", "out.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    write(dir.path(), "t.txt", "old");
+    dir
+}
+
+#[test]
+fn cat_refuses_existing_target_without_force() {
+    let dir = cat_setup();
+    let (code, _, err) = dayzmake(&["cat", "out.pbo", "config.bin", "t.txt"], dir.path());
+    assert_ne!(code, 0);
+    assert!(err.contains("--force"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("t.txt")).unwrap(),
+        "old"
+    );
+}
+
+#[test]
+fn cat_force_overwrites_target() {
+    let dir = cat_setup();
+    let (code, _, err) = dayzmake(&["cat", "-f", "out.pbo", "config.bin", "t.txt"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let written = std::fs::read(dir.path().join("t.txt")).unwrap();
+    assert!(is_rapified_bytes(&written), "{written:?}");
+}
+
+#[test]
+fn cat_force_to_stdout_is_accepted() {
+    let dir = cat_setup();
+    let (code, out, err) = dayzmake_raw(&["cat", "-f", "out.pbo", "config.bin"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(is_rapified_bytes(&out));
+}
+
+/// A rapified config starts with a NUL byte followed by `raP`.
+fn is_rapified_bytes(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"\0raP")
+}

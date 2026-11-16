@@ -23,11 +23,20 @@ targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
 
-**Status:** `paa2img` and `img2paa` work. Two options are accepted but have no effect yet: `derapify -d` (indentation, [#69](https://github.com/bzed/dayzmake/issues/69)) and `img2paa -c` (compression, [#70](https://github.com/bzed/dayzmake/issues/70)).
+**Status:** `paa2img` and `img2paa` work.
 <!-- ANCHOR_END: intro -->
 
 ## Changes
 <!-- ANCHOR: changes -->
+
+### Unreleased
+
+- `dayzmake cat` accepts `-f` to overwrite its target; the "Use --force" error was already printed for it (#71).
+- `img2paa -c` and the MCP tool `image_to_paa` (`compress`) LZO-compress DXT mipmaps wider than 128 pixels (#70).
+  dayzmake already did that for every conversion, so the output does not change. New in dayzmake-core:
+  `Paa::lzo_compress`.
+- `derapify -d` and the MCP tool `config_derapify` (`indent`) set the indentation: spaces and tabs only, empty
+  allowed (#69). New in dayzmake-core: `config::WriteOptions` and `Config::write_with`.
 
 ### 3.0.1
 
@@ -264,7 +273,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
-    dayzmake cat [-v] <source> <filename> [<target>]
+    dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>
@@ -316,7 +325,7 @@ Options:
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as "key=value".
     -k --key <privatekey>       Sign the PBO with the given private key.
-    -c --compress               Compress the output PAA file.
+    -c --compress               LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility).
     -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.

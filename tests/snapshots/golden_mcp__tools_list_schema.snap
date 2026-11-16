@@ -590,6 +590,10 @@ expression: "r.result(2)[\"tools\"]"
           "description": "Overwrite existing target files.",
           "type": "boolean"
         },
+        "indent": {
+          "description": "Indentation per level: spaces and tabs only, at most 64 characters, default four spaces.",
+          "type": "string"
+        },
         "source": {
           "description": "Rapified config.",
           "type": "string"
@@ -667,7 +671,7 @@ expression: "r.result(2)[\"tools\"]"
     "inputSchema": {
       "properties": {
         "compress": {
-          "description": "Compress the output.",
+          "description": "LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility).",
           "type": "boolean"
         },
         "force": {

@@ -325,7 +325,7 @@ Write one entry of a PBO to standard output or to a file.
 <div class="synopsis">
 
 ```text
-dayzmake cat [-v] <source> <filename> [<target>]
+dayzmake cat [-v] [-f] <source> <filename> [<target>]
 ```
 
 </div>
@@ -339,10 +339,11 @@ dayzmake cat [-v] <source> <filename> [<target>]
 | Option | Default | Meaning |
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
+| `-f`, `--force` | off | Overwrite an existing `<target>`. Without a `<target>` (standard output) it has no effect. |
 
 Behaviour: the entry is decompressed when it is stored compressed. The name must match exactly (including the
-case the PBO uses); a name that is not in the PBO is an error. `cat` has no `-f`: an existing `<target>` is
-never overwritten (the error message mentions `--force`, which this command does not accept; [#71](https://github.com/bzed/dayzmake/issues/71)).
+case the PBO uses); a name that is not in the PBO is an error. An existing `<target>` is not overwritten unless
+you pass `-f`.
 
 Examples:
 

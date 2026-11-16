@@ -323,6 +323,7 @@ Convert a rapified config back to text.
 | `source` | string | yes | Rapified config. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `target` | string | no | Write the text here; absent: return it. |
+| `indent` | string | no | Indentation per level: spaces and tabs only, at most 64 characters, default four spaces. |
 
 Result: The text of the config, or `wrote <target> (<n> bytes)` with `target`.
 
@@ -359,7 +360,7 @@ Convert an image to a PAA texture.
 |---|---|---|---|
 | `source` | string | yes | Image file. |
 | `target` | string | yes | PAA file to write. |
-| `compress` | boolean | no | Compress the output. Accepted but has no effect yet ([#70](https://github.com/bzed/dayzmake/issues/70)). |
+| `compress` | boolean | no | LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility). |
 | `force` | boolean | no | Overwrite existing target files. |
 | `type` | string | no | PAA type, e.g. dxt1, dxt5 (default dxt5). |
 
