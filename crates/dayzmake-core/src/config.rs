@@ -113,7 +113,16 @@ peg::parser! {
                 })
         }
 
-        rule integer() -> i32 = i:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) {?
+        rule integer_text() -> &'input str = $((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+))
+
+        /// An integer followed by the end of an entry; the terminator is checked first, like for floats
+        /// (`99999999999x` stays an unquoted string).
+        rule integer_entry() -> i32 = i:integer_text() &(whitespace()? [';' | '}']) v:integer_value(i) { v }
+
+        /// An integer followed by the end of an array element.
+        rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
+
+        rule integer_value(i: &str) -> i32 = {?
             if i.contains("0x") {
                 i32::from_str_radix(&i.replace("0x", ""), 16)
                     .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
@@ -122,6 +131,8 @@ peg::parser! {
                     .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
             }
         }
+
+        rule integer() -> i32 = i:integer_text() v:integer_value(i) { v }
 
         rule doublequoted_string() -> String = "\"" s:$(("\"\"" / !['"'] [_])*) "\"" {
             s.to_string().replace("\"\"", "\"")
@@ -178,7 +189,7 @@ peg::parser! {
 
         rule array_element(d: usize) -> ConfigArrayElement =
             f:float_element() { ConfigArrayElement::FloatElement(f) } /
-            i:integer() &(whitespace()? [',' | '}']) { ConfigArrayElement::IntElement(i) } /
+            i:integer_element() { ConfigArrayElement::IntElement(i) } /
             a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
             v:eval_value(d) &(whitespace()? [',' | '}']) { v.into() } /
@@ -195,7 +206,7 @@ peg::parser! {
 
         rule var(d: usize) -> ConfigEntry =
             f:float_entry() { ConfigEntry::FloatEntry(f) } /
-            i:integer() { ConfigEntry::IntEntry(i) } /
+            i:integer_entry() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
             v:eval_value(d) { v.into() }
 
@@ -331,11 +342,7 @@ fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
             let name = input.read_cstring()?;
             let value = input.read_i32::<LittleEndian>()?;
             // the table ends at the first name the config grammar cannot write
-            if name.is_empty()
-                || !name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
-            {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
                 break;
             }
             out.push((name, value));

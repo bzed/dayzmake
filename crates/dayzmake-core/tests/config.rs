@@ -820,6 +820,53 @@ fn overflowing_float_followed_by_text_stays_a_string() {
 }
 
 #[test]
+fn overflowing_integer_followed_by_text_stays_a_string() {
+    let (config, w) = parse_a("class A { a = 99999999999x; b[] = {99999999999x, 0xfffffffffy}; };");
+    assert_eq!(
+        w.warnings()
+            .iter()
+            .filter(|x| x.name == Some("unquoted-string"))
+            .count(),
+        3,
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(s) if s == "99999999999x"));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [
+            ConfigArrayElement::StringElement(_),
+            ConfigArrayElement::StringElement(_)
+        ]
+    ));
+}
+
+#[test]
+fn an_overflowing_integer_alone_is_still_an_error() {
+    assert!(
+        Config::from_string(
+            "class A { a = 99999999999; };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+    assert!(
+        Config::from_string(
+            "class A { a[] = {99999999999}; };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn inf_and_nan_are_unquoted_strings_with_a_warning() {
     let (config, w) = parse_a("class A { a = inf; b = nan; };");
     assert_eq!(
