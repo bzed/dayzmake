@@ -90,7 +90,8 @@ fn smooth(size: u32) -> DynamicImage {
     }))
 }
 
-/// The file written by `from_dynamic_image`, read back: its mipmaps are held uncompressed.
+/// The file written by `from_dynamic_image`, read back. DXT mipmaps wider than 128 px that LZO shrinks
+/// stay compressed after `read`; the others are held raw.
 #[cfg(feature = "image")]
 #[expect(clippy::expect_used, reason = "tests fail by panicking")]
 fn raw_paa(size: u32, format: PaaFormat) -> (Paa, Vec<u8>) {
@@ -157,9 +158,16 @@ fn lzo_compress_leaves_small_and_non_dxt_unchanged() {
 #[cfg(feature = "image")]
 #[test]
 fn lzo_compress_twice_is_idempotent() {
-    let (mut paa, _) = raw_paa(256, PaaFormat::Dxt1);
+    // a raw (unflagged) 256 x 256 DXT1 mipmap, so the first call really compresses
+    let blocks: Vec<u8> = (0..32768u32)
+        .map(|i| u8::try_from(i / 64 % 251).unwrap_or(0))
+        .collect();
+    let mut paa =
+        Paa::read(&mut Cursor::new(hand_made_paa(&[], &[(256, 256, blocks)]))).expect("reads");
+    let raw = to_bytes(&paa);
     paa.lzo_compress().expect("compresses");
     let once = to_bytes(&paa);
+    assert_ne!(once, raw, "the first call compresses");
     paa.lzo_compress().expect("compresses");
     assert_eq!(to_bytes(&paa), once);
 }
