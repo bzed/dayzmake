@@ -10,6 +10,7 @@ use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::WarningSink;
 
@@ -211,8 +212,9 @@ fn run_command(
     stdout: &StdoutState,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
-    includefolders.push(PathBuf::from("."));
+    // the working directory is only checked directly: it can be a whole disk (#66)
+    let includefolders = IncludeFolders::new(args.flag_include.iter().map(PathBuf::from).collect())
+        .with_direct(vec![PathBuf::from(".")]);
 
     if args.cmd_mcp {
         crate::mcp::serve(std::io::stdin().lock(), stdout.writer(), args.flag_verbose)

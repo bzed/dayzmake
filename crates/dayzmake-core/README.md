@@ -32,6 +32,12 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased (since 0.2.0)
 
+New public items: `preprocess::IncludeFolders` (folders searched recursively plus folders that are only checked
+directly), `preprocess::preprocess_in`, `Config::read_in` and `PackOptions::direct_include_folders`. The recursive
+search of an include folder no longer follows directory symlinks that leave the folder or lead back into it, and
+fails with an error naming the include after visiting 1,000,000 entries. `preprocess` and `Config::read` keep
+their signatures and search every folder they get recursively.
+
 New public items: the `fileid` module (`FileId::of`, `FileId::stdout`, `is_same_file`) compares files by identity
 (device and inode, or volume and file index) instead of by name; `PackOptions::exclude_stdout` leaves out a
 file that is the redirected stdout, and `PackOptions::exclude_paths` now matches by file identity too, so the

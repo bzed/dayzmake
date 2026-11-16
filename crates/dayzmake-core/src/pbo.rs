@@ -21,6 +21,7 @@ use crate::error::{ErrorExt, printable};
 use crate::fileid::FileId;
 use crate::io::WriteExt;
 use crate::p3d;
+use crate::preprocess::IncludeFolders;
 use crate::warning::{Warning, WarningSink};
 
 struct PBOHeader {
@@ -457,6 +458,9 @@ pub struct PackOptions {
     pub exclude: Vec<String>,
     /// Folders searched for absolute includes in configs and model dependencies.
     pub include_folders: Vec<PathBuf>,
+    /// Folders checked for absolute includes only directly (`<folder>/<include path>`), never walked. The CLI puts
+    /// the current working directory here (#66).
+    pub direct_include_folders: Vec<PathBuf>,
     /// Header extensions (`key`, `value`) set after `$PBOPREFIX$` was read; they win on a clash.
     pub header_extensions: Vec<(String, String)>,
     /// Paths the folder walk skips (the output file of a build inside the source folder), compared after
@@ -931,8 +935,8 @@ impl PBO {
     /// Constructs a PBO from a directory, binarizing and rapifying where `options.build` is set.
     ///
     /// `options.exclude` contains glob patterns to exclude from the PBO, `options.include_folders`
-    /// the paths to search for absolute includes (generally including the current working
-    /// directory). `options.header_extensions` are applied after `$PBOPREFIX$`; for the same key
+    /// the paths to search recursively for absolute includes and `options.direct_include_folders` the paths
+    /// checked only directly (generally the current working directory). `options.header_extensions` are applied after `$PBOPREFIX$`; for the same key
     /// the option wins. A `$NOBIN$` file in the directory turns `build` off. Models are only
     /// binarized when a `binarizer` is given; without one they are copied as-is with a warning.
     ///
@@ -951,7 +955,14 @@ impl PBO {
     ) -> Result<PBO, Error> {
         let mut binarize = options.build;
         let exclude_patterns = &options.exclude;
-        let includefolders = &options.include_folders;
+        let includefolders = IncludeFolders::new(options.include_folders.clone())
+            .with_direct(options.direct_include_folders.clone());
+        let search_roots: Vec<PathBuf> = options
+            .include_folders
+            .iter()
+            .chain(&options.direct_include_folders)
+            .cloned()
+            .collect();
         let file_list = list_files(directory, &excluded_paths(options))?;
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut header_extensions: LinkedHashMap<String, String> = LinkedHashMap::new();
@@ -1098,7 +1109,7 @@ impl PBO {
                     &relative.to_string_lossy(),
                     &prefix,
                     &addon_files,
-                    includefolders,
+                    &search_roots,
                     warnings,
                 );
             }
@@ -1130,10 +1141,10 @@ impl PBO {
                         roots: &addon_roots,
                         inner: warnings,
                     };
-                    let config = Config::read(
+                    let config = Config::read_in(
                         &mut Cursor::new(buffer),
                         Some(path.clone()),
-                        includefolders,
+                        &includefolders,
                         &mut addon_warnings,
                     )
                     .prepend_error("Failed to parse config:")?;

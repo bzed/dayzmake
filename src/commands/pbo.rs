@@ -7,6 +7,7 @@ use dayzmake_core::binarize::Binarizer;
 use dayzmake_core::error;
 use dayzmake_core::error::{ErrorExt, printable};
 use dayzmake_core::pbo::{PBO, PackOptions, UnpackOptions, unpack};
+use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::warning::WarningSink;
 
 /// Writes what is in a PBO to the output: header extensions and the entry list.
@@ -154,7 +155,7 @@ pub fn cmd_build<O: Write>(
     output: &mut O,
     headerext: &[String],
     excludes: &[String],
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     exclude_paths: &[PathBuf],
     exclude_stdout: bool,
     binarizer: Option<&mut Binarizer>,
@@ -163,7 +164,10 @@ pub fn cmd_build<O: Write>(
     let mut options = PackOptions::build();
     options.exclude_stdout = exclude_stdout;
     options.exclude = excludes.to_vec();
-    options.include_folders = includefolders.to_vec();
+    options.include_folders.clone_from(&includefolders.search);
+    options
+        .direct_include_folders
+        .clone_from(&includefolders.direct);
     options.exclude_paths = exclude_paths.to_vec();
     options.header_extensions = parse_header_extensions(headerext)?;
     check_source_folder(input)?;

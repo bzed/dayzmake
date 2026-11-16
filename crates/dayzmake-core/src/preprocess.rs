@@ -203,6 +203,41 @@ pub(crate) enum Line {
     TokenLine(Vec<Token>),
 }
 
+/// The folders searched for absolute includes (`#include "\DZ\data\x.hpp"`).
+///
+/// A folder in `search` is searched recursively for a file whose path ends in the include path (and whose
+/// `$PBOPREFIX$` matches); the walk does not follow directory symlinks that leave the folder or lead back into it,
+/// and fails with an error naming the include after visiting 1,000,000 entries. A folder in `direct` is only
+/// checked for `<folder>/<include path>` (case-insensitively as a second pass), without walking it: use it for the
+/// current working directory, which can be a whole disk. The `search` folders are tried first, then the `direct`
+/// ones.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct IncludeFolders {
+    /// Folders searched recursively.
+    pub search: Vec<PathBuf>,
+    /// Folders checked only for the include path directly below them.
+    pub direct: Vec<PathBuf>,
+}
+
+impl IncludeFolders {
+    /// Folders searched recursively, none checked directly.
+    #[must_use]
+    pub fn new(search: Vec<PathBuf>) -> Self {
+        IncludeFolders {
+            search,
+            direct: Vec::new(),
+        }
+    }
+
+    /// Adds folders that are only checked directly.
+    #[must_use]
+    pub fn with_direct(mut self, direct: Vec<PathBuf>) -> Self {
+        self.direct = direct;
+        self
+    }
+}
+
 /// Struct for additional information about preprocessor output. Contains import stack used for
 /// loop detection and the origins of all the lines in the output.
 #[derive(Debug)]
@@ -278,6 +313,9 @@ const MAX_LINE_BYTES: usize = 64 << 20;
 /// Maximum bytes copied by the lines of one `preprocess` call (the includes count too).
 const MAX_FILE_BYTES: usize = 512 << 20;
 
+// Both step caps are 100,000: real configs need at most 34 calls on a line and far fewer than 100,000 over a
+// file, so one number is easy to remember. The line cap still has a use: it stops a single line early (and names
+// it) instead of letting that line run up to the file cap.
 /// Maximum macro resolution steps (every call of a defined macro, argument pre-expansion included) of one source line. A step
 /// that produces nothing still costs, so expansion that drops its output cannot run exponentially (#59).
 const MAX_LINE_STEPS: usize = 100_000;
@@ -317,7 +355,7 @@ impl Budget {
         }
         if self.file_steps.saturating_add(self.steps) > MAX_FILE_STEPS {
             return Err(error!(
-                "Macro \"{}\" expands to more than {MAX_FILE_STEPS} macro calls in one file",
+                "Macro \"{}\" expands to more than {MAX_FILE_STEPS} macro calls in one file and its includes",
                 printable(name)
             ));
         }
@@ -803,25 +841,68 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
     false
 }
 
-fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<PathBuf> {
-    // unreadable directories are skipped
-    if let Ok(entries) = read_dir(directory) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name() == Some(OsStr::new(".git")) {
-                    continue;
-                }
+/// Maximum directory entries one recursive include search visits below one folder before it gives up with an error
+/// (#66). Real trees are far below it (a 109,000 entry `P:` drive copy); it stops a search that wandered into a
+/// whole disk.
+const MAX_SEARCH_ENTRIES: usize = 1_000_000;
 
-                if let Some(path) = search_directory(include_path, &path, ci) {
-                    return Some(path);
-                }
-            } else if matches_include_path(&path, include_path, ci) {
-                return Some(path);
-            }
+/// State of one recursive include search below `root`.
+struct Walk<'a> {
+    include_path: &'a str,
+    root: &'a Path,
+    ci: bool,
+    visited: usize,
+    limit: usize,
+}
+
+impl Walk<'_> {
+    /// Whether the directory symlink `path`, found while walking `directory`, must not be followed: its target is
+    /// outside the search root, is `directory` or one of its parents (a loop), or cannot be resolved.
+    fn skips_link(&self, path: &Path, directory: &Path) -> bool {
+        match path.canonicalize() {
+            Ok(target) => !target.starts_with(self.root) || directory.starts_with(&target),
+            Err(_) => true,
         }
     }
 
+    fn search(&mut self, directory: &Path) -> Result<Option<PathBuf>, Error> {
+        // unreadable directories are skipped
+        if let Ok(entries) = read_dir(directory) {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                self.visited += 1;
+                if self.visited > self.limit {
+                    return Err(error!(
+                        "Include \"{}\" not found: the search below \"{}\" stopped after {} entries",
+                        printable(self.include_path),
+                        printable(&self.root.display().to_string()),
+                        self.limit
+                    ));
+                }
+                let path = entry.path();
+                let is_link = entry.file_type().is_ok_and(|t| t.is_symlink());
+                if path.is_dir() {
+                    if path.file_name() == Some(OsStr::new(".git")) {
+                        continue;
+                    }
+                    if is_link && self.skips_link(&path, directory) {
+                        continue;
+                    }
+
+                    if let Some(path) = self.search(&path)? {
+                        return Ok(Some(path));
+                    }
+                } else if matches_include_path(&path, self.include_path, self.ci) {
+                    return Ok(Some(path));
+                }
+            }
+        }
+
+        Ok(lookup_directly(self.include_path, directory, self.ci))
+    }
+}
+
+/// The include `include_path` at exactly `directory/<include path>`, without looking at any other folder.
+fn lookup_directly(include_path: &str, directory: &Path, ci: bool) -> Option<PathBuf> {
     let relative = PathBuf::from(
         include_path
             .trim_start_matches('\\')
@@ -896,30 +977,56 @@ fn warn_include_case(include_path: &str, found: &Path, warnings: &mut dyn Warnin
 fn find_include_file(
     include_path: &str,
     origin: Option<&Path>,
-    search_paths: &[PathBuf],
+    folders: &IncludeFolders,
     line: u32,
     warnings: &mut dyn WarningSink,
 ) -> Result<PathBuf, Error> {
     if include_path.starts_with('\\') {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for search_path in search_paths {
-            roots.push(search_path.canonicalize().map_err(|e| {
+        let canonical = |search_path: &PathBuf| {
+            search_path.canonicalize().map_err(|e| {
                 error!(
                     "Include folder \"{}\" is not usable: {}",
                     search_path.display(),
                     e
                 )
-            })?);
-        }
+            })
+        };
+        let roots = folders
+            .search
+            .iter()
+            .map(canonical)
+            .collect::<Result<Vec<PathBuf>, Error>>()?;
+        let direct = folders
+            .direct
+            .iter()
+            .map(canonical)
+            .collect::<Result<Vec<PathBuf>, Error>>()?;
 
         for ci in [false, true] {
+            let mut found = None;
             for root in &roots {
-                if let Some(file_path) = search_directory(include_path, root, ci) {
-                    if ci {
-                        warn_include_case(include_path, &file_path, warnings);
-                    }
-                    return Ok(file_path);
+                let mut walk = Walk {
+                    include_path,
+                    root,
+                    ci,
+                    visited: 0,
+                    limit: MAX_SEARCH_ENTRIES,
+                };
+                found = walk.search(root)?;
+                if found.is_some() {
+                    break;
                 }
+            }
+            if found.is_none() {
+                found = direct
+                    .iter()
+                    .find_map(|root| lookup_directly(include_path, root, ci));
+            }
+            if let Some(file_path) = found {
+                if ci {
+                    warn_include_case(include_path, &file_path, warnings);
+                }
+                return Ok(file_path);
             }
         }
 
@@ -982,7 +1089,7 @@ fn preprocess_rec(
     origin: Option<&Path>,
     definition_map: &mut HashMap<String, Definition>,
     info: &mut PreprocessInfo,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
@@ -1142,7 +1249,7 @@ fn preprocess_rec(
                     info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
                     if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
                         return Err(error!(
-                            "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
+                            "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file and its includes"
                         ));
                     }
 
@@ -1188,8 +1295,8 @@ fn preprocess_rec(
 /// of the lines in the output.
 ///
 /// `path` is the path to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes (see
+/// [`IncludeFolders`] for folders that are only checked directly).
 ///
 /// # Errors
 ///
@@ -1211,21 +1318,41 @@ fn preprocess_rec(
 ///
 /// assert_eq!("foo = \"abc_xyz\";", output.trim());
 /// ```
+pub fn preprocess(
+    input: String,
+    origin: Option<PathBuf>,
+    includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
+) -> Result<(String, PreprocessInfo), Error> {
+    preprocess_in(
+        input,
+        origin,
+        &IncludeFolders::new(includefolders.to_vec()),
+        warnings,
+    )
+}
+
+/// Like [`preprocess`], with the include folders given as an [`IncludeFolders`], so that some of them can be
+/// checked directly instead of searched recursively.
+///
+/// # Errors
+///
+/// Returns an error on parse failures, unreadable includes or invalid include folders.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "public API takes ownership of the input; callers pass owned strings"
 )]
-pub fn preprocess(
+pub fn preprocess_in(
     mut input: String,
     origin: Option<PathBuf>,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<(String, PreprocessInfo), Error> {
     if input.as_bytes().starts_with(&[0xef, 0xbb, 0xbf]) {
         input = input[3..].to_string();
     }
 
-    for folder in includefolders {
+    for folder in includefolders.search.iter().chain(&includefolders.direct) {
         if !folder.is_dir() {
             return Err(error!(
                 "Include folder \"{}\" does not exist or is not a directory.",
@@ -1266,6 +1393,29 @@ pub fn preprocess(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The walk stops with an error naming the include once it visited more entries than its limit (#66).
+    #[test]
+    fn search_stops_after_the_entry_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let root = dir.path().canonicalize().unwrap();
+        let mut walk = Walk {
+            include_path: "\\DZ\\gone.hpp",
+            root: &root,
+            ci: false,
+            visited: 0,
+            limit: 5,
+        };
+        let err = walk.search(&root).unwrap_err().to_string();
+        assert!(
+            err.contains("DZ") && err.contains("stopped after 5 entries"),
+            "{err}"
+        );
+    }
+
     use std::ffi::OsStr;
 
     /// Argument-count mismatches go into the buffer of the call, not into state shared by the

@@ -24,6 +24,11 @@ is maintained here.
 
 ## Changes
 
+- A missing absolute include no longer walks the whole working directory (#66): the implicit working directory is
+  only checked directly (`./DZ/data/x.hpp`), so a file buried below it is no longer found without `-i`. Folders
+  given with `-i` are still searched recursively, but the search does not follow directory symlinks that leave the
+  folder or lead back into it, and fails with an error naming the include after 1,000,000 visited entries (the
+  author's `P:` drive copy has 109,000).
 - Line numbers in warnings and errors stay right after a disabled `#ifdef`/`#ifndef` branch (plain lines, `#define`,
   `#undef`, `#include`, nested branches); they used to drift up by one per disabled line (#63).
 - Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose

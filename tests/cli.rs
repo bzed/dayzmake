@@ -2100,3 +2100,32 @@ fn per_file_macro_work_fails_fast() {
         start.elapsed()
     );
 }
+
+/// The working directory is only checked directly for an absolute include; a file buried in it is not found
+/// without `-i` (#66).
+#[test]
+fn working_directory_include_is_checked_directly_not_walked() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |relative: &str, text: &str| {
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("e.cpp", "#include \"\\DZ\\data\\x.hpp\"\n");
+    write("deep/er/DZ/data/x.hpp", "a = 1;\n");
+
+    let (code, _, err) = dayzmake(&["preprocess", "e.cpp"], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("not found"), "{err}");
+
+    // a folder given with -i is searched recursively
+    let (code, out, err) = dayzmake(&["preprocess", "-i", "deep", "e.cpp"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "a = 1;");
+
+    // the file directly below the working directory is found without -i
+    write("DZ/data/x.hpp", "a = 2;\n");
+    let (code, out, err) = dayzmake(&["preprocess", "e.cpp"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "a = 2;");
+}

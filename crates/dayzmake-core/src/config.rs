@@ -12,7 +12,7 @@ use crate::error;
 use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
-use crate::preprocess::{MAX_NESTING_DEPTH, nesting_error, preprocess};
+use crate::preprocess::{IncludeFolders, MAX_NESTING_DEPTH, nesting_error, preprocess_in};
 use crate::warning::{Warning, WarningSink};
 
 /// Refuses a name with a control character: the config grammar has no way to write one, and it
@@ -1016,8 +1016,7 @@ impl Config {
     /// Reads the unrapified config from input, preprocessing it.
     ///
     /// `path` is the path to the input if it is known and is used for relative includes and error
-    /// messages. `includefolders` are the folders searched for absolute includes and should usually at
-    /// least include the current working directory.
+    /// messages. `includefolders` are the folders searched recursively for absolute includes.
     ///
     /// # Errors
     ///
@@ -1026,6 +1025,26 @@ impl Config {
         input: &mut I,
         path: Option<PathBuf>,
         includefolders: &[PathBuf],
+        warnings: &mut dyn WarningSink,
+    ) -> Result<Config, Error> {
+        Self::read_in(
+            input,
+            path,
+            &IncludeFolders::new(includefolders.to_vec()),
+            warnings,
+        )
+    }
+
+    /// Like [`Config::read`], with the include folders given as an [`IncludeFolders`] (some of them can be checked
+    /// directly instead of searched recursively).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on preprocessing or parse failures.
+    pub fn read_in<I: Read>(
+        input: &mut I,
+        path: Option<PathBuf>,
+        includefolders: &IncludeFolders,
         warnings: &mut dyn WarningSink,
     ) -> Result<Config, Error> {
         let mut bytes = Vec::new();
@@ -1038,7 +1057,7 @@ impl Config {
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
 
-        let (preprocessed, info) = preprocess(buffer, path, includefolders, warnings)
+        let (preprocessed, info) = preprocess_in(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;
 
         let mut found = ConfigWarnings(Vec::new());
