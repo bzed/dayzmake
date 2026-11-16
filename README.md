@@ -29,12 +29,13 @@ is maintained here.
 ## Changes
 <!-- ANCHOR: changes -->
 
-### Unreleased
+### 3.0.1
 
 - Releases carry `SHA256SUMS` and `SHA512SUMS` of all archives with GPG signatures, and the public key
   (`dayzmake-release-key.asc`); see *Verifying downloads*.
 - The documentation is published as a web site with guides and a reference of every command, option, MCP tool and
   warning: <https://bzed.github.io/dayzmake/>.
+- `pack` no longer warns that models were not binarized; only `build` does (#72, fixed in dayzmake-core 0.2.1).
 
 ### 3.0.0
 
@@ -192,7 +193,14 @@ The public key is a release asset (`dayzmake-release-key.asc`) and is published 
 <https://bzed.github.io/dayzmake/release-key.asc>. Get it from the site or from a release, and compare the
 fingerprint with the one above (and with the one in the repository's `AGENTS.md`) before you trust it.
 
-On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.0-debian-trixie-x86_64.tar.gz`):
+Download the archive you want together with the checksum files and the key, from the release page or with the
+GitHub CLI:
+
+```
+gh release download v3.0.1 -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
+```
+
+On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.1-debian-trixie-x86_64.tar.gz`):
 
 ```
 gpg --import dayzmake-release-key.asc
@@ -207,13 +215,18 @@ signed it yourself, the fingerprint printed next to it is what counts. `sha256su
 the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
 `SHA512SUMS` works the same way with `sha512sum`.
 
-On Windows (PowerShell), after importing and verifying the signature with Gpg4win's `gpg`, compare the hash of
-your download with its line in `SHA256SUMS`:
+On Windows, in PowerShell with [Gpg4win](https://www.gpg4win.org/) installed, check the signature and compare the
+hash of your download with its line in `SHA256SUMS`:
 
 ```
-Get-FileHash -Algorithm SHA256 .\dayzmake-v3.0.0-windows-x86_64.zip
-Select-String dayzmake-v3.0.0-windows-x86_64.zip SHA256SUMS
+gpg --import dayzmake-release-key.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS
+$file = 'dayzmake-v3.0.1-windows-x86_64.zip'
+$expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
+(Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
+
+The last line must print `True`.
 
 <!-- ANCHOR_END: verifying -->
 
