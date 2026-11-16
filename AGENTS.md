@@ -194,5 +194,28 @@ only after CI on `main` is green).
 1. Bump the versions. `dayzmake-core` follows semver on its own; a breaking core change also bumps the
    `version` in the CLI's `dayzmake-core` dependency.
 2. `make check` (includes `make features` and `make package-check`).
-3. Tag the release.
+3. Tag the release. The tag starts the release workflow, which builds the archives, signs their checksums with the
+   release key (see below) and creates the GitHub release. If the signing step fails, no release is created.
 4. `cargo publish -p dayzmake-core`, **then** `cargo publish -p dayzmake` (the CLI depends on the published core).
+
+### Release signing key
+
+The checksums of every release (`SHA256SUMS`, `SHA512SUMS`, with detached signatures `.asc`) are signed by
+`scripts/sign-release.sh` in the `publish` job of `.github/workflows/release.yml`.
+
+- Key: `dayzmake release signing key (https://github.com/bzed/dayzmake)`, ed25519, sign only, expires
+  **2029-11-15**, fingerprint `6624 41B3 6A57 85AD 18FB  8667 DF75 3D99 D064 EB7E`.
+- The public key is `docs/book/src/release-key.asc` (published at `https://bzed.github.io/dayzmake/release-key.asc`
+  and attached to every release as `dayzmake-release-key.asc`).
+- The private key is passphrase-protected and exists only in two repository secrets: `RELEASE_GPG_PRIVATE_KEY`
+  (the ASCII-armoured secret key) and `RELEASE_GPG_PASSPHRASE`. It is never committed, logged or put on a command
+  line; the script reads both from the environment and passes the passphrase on a file descriptor.
+- After changing the script, run `scripts/test-sign-release.sh` (throwaway key, no CI job).
+- Extending the expiry (do this well before 2029-11-15): on a trusted machine import the secret key, run
+  `gpg --edit-key 662441B36A5785AD18FB8667DF753D99D064EB7E`, `expire`, choose the new date, `save`; export the public
+  key with `gpg --armor --export 662441B36A5785AD18FB8667DF753D99D064EB7E > docs/book/src/release-key.asc` and
+  commit it; export the secret key with `gpg --armor --export-secret-keys 662441B36A5785AD18FB8667DF753D99D064EB7E`
+  and store it as the new value of the secret `RELEASE_GPG_PRIVATE_KEY` (the passphrase stays). Update the expiry date
+  here and in the README section *Verifying downloads*, and delete the exported secret key afterwards. Users who
+  imported the old public key re-import the new one; the fingerprint does not change.
+- An expired key, an empty secret or a wrong passphrase make the signing step, and so the release, fail.

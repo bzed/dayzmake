@@ -1,3 +1,3 @@
 # Verifying downloads
 
-Placeholder.
+{{#include ../../../README.md:verifying}}
