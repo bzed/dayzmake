@@ -34,7 +34,8 @@ is maintained here.
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
   A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
-  (`1e999x`) it stays an unquoted string, and a float entry may end at a closing brace without a semicolon.
+  (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
+  entry may end at a closing brace without a semicolon.
 - `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,
   textures, materials, proxies, properties, selections and animations. Other ODOL versions still show the format
   and version, with a note that only v56 is decoded. A model whose LOD ranges overlap is refused.
