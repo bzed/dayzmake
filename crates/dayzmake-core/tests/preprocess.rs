@@ -510,3 +510,29 @@ fn moderate_empty_expansion_still_works() {
     src.push_str("A14\n");
     preprocess(src, None, &[], &mut Warnings::new()).unwrap();
 }
+
+/// #61: a line in a disabled branch is not expanded, so it cannot raise a macro error.
+#[test]
+fn disabled_lines_are_not_expanded() {
+    let input = "#define F(x) x\n#ifdef UNDEFINED\na = F(1, 2, 3);\nb = F(\n#endif\nc = 1;\n";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "c = 1;");
+}
+
+/// A disabled exponential line costs nothing, an enabled one is still capped.
+#[test]
+fn disabled_exponential_line_costs_nothing() {
+    let mut off = laughs(21).replace("a = E0;", "#ifdef NOPE\na = E0;\n#endif\nb = 1;");
+    let (out, _) = preprocess(off.clone(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "b = 1;");
+    off = off.replace("#ifdef NOPE", "#ifndef NOPE");
+    assert!(preprocess(off, None, &[], &mut Warnings::new()).is_err());
+}
+
+/// The #else branch of a false #ifdef is enabled and expanded; nesting is tracked while skipping.
+#[test]
+fn else_branch_is_expanded_and_nesting_is_tracked() {
+    let input = "#define F(x) x\n#ifdef A\n#ifdef B\nx = F(1,2);\n#else\ny = F(1,2);\n#endif\n#else\nz = F(7);\n#endif\n";
+    let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
+    assert_eq!(out.trim(), "z = 7;");
+}

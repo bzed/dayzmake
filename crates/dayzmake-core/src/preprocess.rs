@@ -485,8 +485,6 @@ impl Macro {
                 printable(&self.name)
             ));
         }
-        // Every resolution step costs, even one that produces nothing (#59): the work, not only the output,
-        // is bounded. Argument pre-expansion and bodies both come through here.
         let depth = depth + 1;
         match def_map.get(&self.name) {
             Some(def) => {
@@ -637,6 +635,32 @@ impl Token {
 
         (output, newlines)
     }
+}
+
+/// The newlines of a line that is not expanded: those of its strings and comments, as expansion would
+/// count them (a string inside a macro call is counted once).
+fn skipped_newlines(tokens: &[Token]) -> u32 {
+    let mut total = 0u32;
+    for token in tokens {
+        let n = match token {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) => *n,
+            Token::MacroToken(m) => {
+                let mut in_string = false;
+                let mut count = 0u32;
+                for c in m.original.chars() {
+                    match c {
+                        '"' => in_string = !in_string,
+                        '\n' if in_string => count = count.saturating_add(1),
+                        _ => {}
+                    }
+                }
+                count
+            }
+            Token::RegularToken(_) | Token::ConcatToken => 0,
+        };
+        total = total.saturating_add(n);
+    }
+    total
 }
 
 /// Reads the first line of a `$PBOPREFIX$` file.
@@ -1062,6 +1086,11 @@ fn preprocess_rec(
                 }
             }
             Line::TokenLine(tokens) => {
+                if level > level_true {
+                    // A disabled line is never expanded (#61): it can neither error nor cost time.
+                    original_lineno += skipped_newlines(&tokens);
+                    continue;
+                }
                 let stack: Vec<Definition> = Vec::new();
                 let mut mismatches: Vec<String> = Vec::new();
                 let mut budget = Budget::new();
@@ -1089,10 +1118,6 @@ fn preprocess_rec(
 
                 let before = result.len();
                 result = result.replace("\\\n", "");
-
-                if level > level_true {
-                    continue;
-                }
 
                 let file = origin.map(|p| p.display().to_string());
                 for msg in mismatches {
