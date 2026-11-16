@@ -384,7 +384,10 @@ fn empty_value_warning_points_at_the_entry_line() {
 fn empty_value_line(src: &str) -> Option<u32> {
     let mut w = Warnings::default();
     Config::from_string(src.to_string(), None, &[], &mut w).ok()?;
-    w.warnings().first().and_then(|warning| warning.line)
+    w.warnings()
+        .iter()
+        .find(|warning| warning.name == Some("empty-value"))
+        .and_then(|warning| warning.line)
 }
 
 #[test]
@@ -452,4 +455,19 @@ fn line_numbers_count_backslash_continuations_in_an_enabled_define() {
         empty_value_line("#define M(a) \\\n  a \\\n  a\nclass X { y = ; };\n"),
         Some(4)
     );
+}
+
+#[test]
+fn macro_uses_do_not_shift_line_numbers() {
+    // #65: the continuation lines of a #define are counted once, at the definition.
+    let one = "#define M(a) \\\n  a \\\n  a\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(one), Some(5));
+    let two = "#define M(a) \\\n  a \\\n  a\nx = M(1);\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(two), Some(6));
+    let nested = "#define N \\\n 1\n#define M(a) N a N\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(nested), Some(5));
+    let comment = "#define M 1 /* x\ny */\nx = M;\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(comment), Some(4));
+    let string = "#define M \"a\\\nb\"\nx = M;\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(string), Some(4));
 }

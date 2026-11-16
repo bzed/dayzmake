@@ -697,33 +697,43 @@ impl Token {
     }
 }
 
-/// The source newlines of tokens that are not expanded: those of strings and comments (a string inside a
-/// macro call is counted once) and every `\`-newline continuation, wherever it sits.
-fn skipped_newlines(tokens: &[Token]) -> u32 {
-    let mut total = 0u32;
+/// The source newlines of tokens, counted from the source and never from an expansion: `(inline,
+/// continuations)`. `inline` are those of strings and comments (a string inside a macro call is counted
+/// once), `continuations` the `\`-newlines outside strings, wherever they sit.
+fn source_newlines(tokens: &[Token]) -> (u32, u32) {
+    let (mut inline, mut continuations) = (0u32, 0u32);
     for token in tokens {
-        let n = match token {
-            Token::NewlineToken(_, n) | Token::CommentToken(n) => *n,
+        match token {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) => {
+                inline = inline.saturating_add(*n);
+            }
             Token::MacroToken(m) => {
                 let mut in_string = false;
                 let mut prev = ' ';
-                let mut count = 0u32;
                 for c in m.original.chars() {
                     match c {
                         '"' => in_string = !in_string,
-                        '\n' if in_string || prev == '\\' => count = count.saturating_add(1),
+                        '\n' if in_string => inline = inline.saturating_add(1),
+                        '\n' if prev == '\\' => continuations = continuations.saturating_add(1),
                         _ => {}
                     }
                     prev = c;
                 }
-                count
             }
-            Token::RegularToken(s) => u32::try_from(s.matches("\\\n").count()).unwrap_or(u32::MAX),
-            Token::ConcatToken => 0,
-        };
-        total = total.saturating_add(n);
+            Token::RegularToken(s) => {
+                let n = u32::try_from(s.matches("\\\n").count()).unwrap_or(u32::MAX);
+                continuations = continuations.saturating_add(n);
+            }
+            Token::ConcatToken => {}
+        }
     }
-    total
+    (inline, continuations)
+}
+
+/// All source newlines of tokens that are not expanded.
+fn skipped_newlines(tokens: &[Token]) -> u32 {
+    let (inline, continuations) = source_newlines(tokens);
+    inline.saturating_add(continuations)
 }
 
 /// Reads the first line of a `$PBOPREFIX$` file.
@@ -1263,11 +1273,12 @@ fn preprocess_rec(
                         ));
                     }
 
-                    let (mut result, newlines) = Token::concat(&resolved);
+                    // Line numbers follow the source tokens, so a macro use never shifts them.
+                    let (inline, continuations) = source_newlines(&tokens);
+                    let (mut result, _) = Token::concat(&resolved);
                     result = result.replace("\r\n", "\n");
-                    original_lineno += newlines;
+                    original_lineno += inline;
 
-                    let before = result.len();
                     result = result.replace("\\\n", "");
 
                     let file = origin.map(|p| p.display().to_string());
@@ -1285,9 +1296,7 @@ fn preprocess_rec(
 
                     info.line_origins
                         .push((original_lineno, origin.map(Path::to_path_buf)));
-                    let removed = u32::try_from((before - result.len()) / 2)
-                        .map_err(|_| error!("line number out of range"))?;
-                    original_lineno += removed;
+                    original_lineno += continuations;
                 }
             }
         }
