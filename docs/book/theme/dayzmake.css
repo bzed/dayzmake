@@ -244,6 +244,29 @@ pre > .hljs {
     color: var(--ink);
 }
 
+/* an inline code span is never broken inside (`-k` must not become `-` and `k`); on a phone it may wrap */
+:not(pre) > code {
+    white-space: nowrap;
+    hyphens: none;
+}
+
+@media (max-width: 600px) {
+    :not(pre) > code {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* a synopsis wraps instead of scrolling, with a hanging indent for the continuation lines */
+.synopsis pre code,
+.synopsis pre code.hljs {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: visible;
+    padding-inline-start: calc(1.2em + 4ch);
+    text-indent: -4ch;
+}
+
 /* the synopsis of a command is a stamped label plate */
 .synopsis pre {
     background-color: var(--plate);
