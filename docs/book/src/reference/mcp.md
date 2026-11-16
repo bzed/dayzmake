@@ -233,7 +233,7 @@ Result: The installed mods, as `dayzmake api mods` (JSON with `json`).
 
 ### pbo_inspect
 
-List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).
+List the entries of a PBO, or describe a model (P3D, MLOD or ODOL v56: format, LODs, textures, selections).
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
@@ -342,7 +342,8 @@ Result: The preprocessed text, or `wrote <target> (<n> bytes)` with `target`.
 
 ### paa_to_image
 
-Convert a PAA texture to an image (the format follows the target extension, e.g. png).
+Convert a PAA texture to an image (the format follows the target extension, e.g. png). DXT1 to DXT5, RGBA,
+ARGB4444, ARGB1555 and AI88 are read; a PNG file named `.paa` gets an error that says so.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|

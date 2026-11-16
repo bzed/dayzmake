@@ -39,6 +39,10 @@ Options:
 | `-w <wname>`, `--warning <wname>` | none | Mute a [warning](warnings.md) by name. Repeatable. |
 | `-i <includefolder>`, `--include <includefolder>` | none | Folder searched for absolute includes (`#include "\x\y.hpp"`). Repeatable. The current directory is only checked for the exact include path, never searched. |
 
+An `enum { A, B = 5, C };` block is accepted at any class level. It is no class entry: its names go, lowercase and
+in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
+one, as in C.
+
 Behaviour:
 
 - Reads `<source>`, runs the preprocessor (`#include`, `#define`, `#ifdef`, `__EVAL`, `__EXEC`, macros), parses
@@ -190,6 +194,8 @@ Behaviour:
 - The input must be a rapified config; anything else is an error `Failed to read rapified config:`.
 - Macros and includes are already expanded in a rapified config, so the text is the expanded result. Comments
   are not stored and cannot be restored.
+- The enum table of the file is printed first, as an `enum { name = value, ... };` block, with the names as stored
+  (lowercase). A table that is empty, missing or damaged produces no block and no error.
 - Class nesting depth and entry counts are limited when reading, so a hostile file cannot exhaust memory.
 
 Examples:

@@ -24,3 +24,15 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   directory at the project root (`P:\`), as BI's tools do. Its model and section flags contain `0x802020`
   (IsAlpha|IsTransparent|IsAlphaFog). Binarized without the textures, the output is identical except
   that those flags are `0` (upstream #21).
+- `paa/`: 16-bit PAA files made by `ImageToPAA.exe` (DayZ Tools, Steam app 830640, as installed 2026-11-16) under
+  Proton Hotfix on 2026-11-16. `rgbq.png` is the input: 8 × 8 RGBA, red top left, green top right, blue bottom
+  left, white with alpha 136 bottom right (4 × 4 pixel quadrants; made by a small Python script, committed as the
+  PNG). `ImageToPAA.exe` picks the output format from the file name through `TexConvert.cfg`, so the same image was
+  copied to `rgbq_4444.png`, `rgbq_1555.png` and `rgbq_88.png` (suffixes `*_4444.*` = ARGB4444, `*_1555.*` =
+  ARGB1555, `*_88.*` = AI88) and converted with
+  `proton run ImageToPAA.exe 'Z:\...\rgbq_4444.png' 'Z:\...\rgbq_4444.paa'` (likewise for `1555` and `88`; the
+  environment is the one `crates/dayzmake-core/src/binarize.rs` sets for `binarize.exe`: `STEAM_COMPAT_CLIENT_INSTALL_PATH`,
+  `STEAM_COMPAT_DATA_PATH` and the app id 830640, with `stdin` from `/dev/null`; each run takes about a minute). The
+  tool writes the magics `0x4444`, `0x1555` and `0x8080`, so `0x4444` is ARGB4444: bits 12 to 15 alpha, then 4 bits
+  each of R, G and B (the red quadrant is the word `0xFF00`). `crates/dayzmake-core/tests/bi_paa_golden.rs` decodes
+  the three files and checks the colours. Only the `.paa` files and `rgbq.png` are committed.

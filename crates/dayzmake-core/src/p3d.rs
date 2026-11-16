@@ -306,6 +306,15 @@ pub fn lod_name(resolution: f32) -> Option<&'static str> {
         .map(|(_, n)| *n)
 }
 
+/// Name of a LOD resolution: the well known name, else "Resolution N" or the number itself.
+pub(crate) fn resolution_name(resolution: f32) -> String {
+    match lod_name(resolution) {
+        Some(n) => n.to_string(),
+        None if resolution < 1.0e3 => format!("Resolution {resolution}"),
+        None => format!("{resolution:e}"),
+    }
+}
+
 impl LOD {
     /// Creates an empty LOD with the format version (28.256) MLOD files normally carry.
     #[must_use]
@@ -325,11 +334,7 @@ impl LOD {
     /// Human readable name of this LOD (e.g. "Geometry", or its resolution).
     #[must_use]
     pub fn name(&self) -> String {
-        match lod_name(self.resolution) {
-            Some(n) => n.to_string(),
-            None if self.resolution < 1.0e3 => format!("Resolution {}", self.resolution),
-            None => format!("{:e}", self.resolution),
-        }
+        resolution_name(self.resolution)
     }
 
     /// The LOD's `#Property#` taggs as (name, value) pairs.

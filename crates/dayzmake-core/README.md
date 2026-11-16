@@ -30,6 +30,24 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
+### Unreleased
+
+- Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
+  `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
+  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
+  entry may end at a closing brace without a semicolon.
+- `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per
+  LOD, vertex and face counts, textures, materials, proxies, selections and properties. Only v56 is decoded,
+  other versions are an error, and LOD ranges that overlap are refused. New dependency: `lzokay-native`
+  (decompression only).
+- `Paa::read` accepts the formats `0x4444` (`"ARGB4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
+  `Paa::to_dynamic_image` decodes them to RGBA (#83); `Paa::write` writes their stored bytes back unchanged. A
+  wrong checksum or a cut-short LZSS stream is an error, and a PNG file gives an error that names the PNG.
+- `Config` reads, keeps and writes the enum table of a rapified config (#82): the parser accepts `enum { ... };`
+  blocks, `Config::enum_values` returns the ordered `(lowercase name, value)` pairs, and `Config::to_string` prints
+  them as an `enum` block first. A bad table offset or a cut-short table is not an error.
+
 ### 0.2.2
 
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer
