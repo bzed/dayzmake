@@ -195,3 +195,14 @@ class CfgVehicles {
         .to_string(),
     );
 }
+
+/// The deepest class nesting holding the deepest `__EVAL` unary chain and a power chain still
+/// fits a 1 MiB stack: the depths of the separate limits do not add up to an overflow.
+#[test]
+fn combined_class_and_eval_nesting_fits_a_small_stack() {
+    let mut input = "class A {\n".repeat(127);
+    input += &["x = __EVAL(", &"-".repeat(127), "1);\n"].concat();
+    input += &["y = __EVAL(", &vec!["1"; 127].join("^"), ");\n"].concat();
+    input.push_str(&"};\n".repeat(127));
+    config_ok(input);
+}
