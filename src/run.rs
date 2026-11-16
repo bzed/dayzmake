@@ -29,7 +29,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
-    dayzmake cat [-v] <source> <filename> [<target>]
+    dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>

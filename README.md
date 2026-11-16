@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- `dayzmake cat` accepts `-f` to overwrite its target; the "Use --force" error was already printed for it (#71).
 - `img2paa -c` and the MCP tool `image_to_paa` (`compress`) LZO-compress DXT mipmaps wider than 128 pixels (#70).
   dayzmake already did that for every conversion, so the output does not change. New in dayzmake-core:
   `Paa::lzo_compress`.
@@ -272,7 +273,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
-    dayzmake cat [-v] <source> <filename> [<target>]
+    dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
     dayzmake paa2img [-v] [-f] <source> <target>
