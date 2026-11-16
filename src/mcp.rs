@@ -531,6 +531,17 @@ fn tools() -> Value {
         ),
         grep_tool(),
         api_tool(
+            "api_config",
+            "Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.",
+            &[(
+                "path",
+                's',
+                "The class path, for example CfgVehicles/Hatchback_02 or CfgWeapons/M4A1."
+            )],
+            &["path"],
+            (true, true)
+        ),
+        api_tool(
             "api_defines",
             "Compile-time defines of the selected indexes, optionally filtered by a regex.",
             &[("regex", 's', "Filter regular expression.")],
@@ -1088,6 +1099,17 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
         "api_defines" => Query::Defines {
             regex: opt_str(args, "regex")?,
         },
+        "api_config" => {
+            return Ok(api::config_answer(
+                &ctx,
+                &str_arg(args, "path")?,
+                max_arg(args)?,
+                json,
+                false,
+                warnings,
+            )?
+            .join("\n"));
+        }
         _ => return Err(error!("unknown tool \"{name}\"")),
     };
     Ok(api::answer(&ctx, &query, max_arg(args)?, json, false, warnings)?.join("\n"))

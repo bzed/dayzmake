@@ -38,6 +38,8 @@ pub struct ApiContext {
 /// Everything `ApiContext` points at.
 struct Located {
     scripts_pbo: PathBuf,
+    /// The game directory (the one with `dta`).
+    game: PathBuf,
     build: String,
     mods: Vec<ModSource>,
 }
@@ -89,7 +91,7 @@ pub fn mods_text(
 
 fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, Error> {
     let libs = libraries(&steam_roots());
-    let (scripts_pbo, build) = if let Some(dir) = &ctx.dayz {
+    let (scripts_pbo, build, game) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
         if !pbo.is_file() {
             return Err(error!(
@@ -97,7 +99,11 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
                 printable(&pbo.display().to_string())
             ));
         }
-        (pbo, format!("{} build unknown", ctx.branch.name()))
+        (
+            pbo,
+            format!("{} build unknown", ctx.branch.name()),
+            dir.clone(),
+        )
     } else {
         let game = find_game(ctx.branch, &libs).ok_or_else(|| {
             error!(
@@ -109,6 +115,7 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
         (
             game.dir.join("dta/scripts.pbo"),
             format!("{} build {id}", ctx.branch.name()),
+            game.dir.clone(),
         )
     };
     let mut mods: Vec<ModSource> = Vec::new();
@@ -157,6 +164,7 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
     unique_names(&mut mods);
     Ok(Located {
         scripts_pbo,
+        game,
         build,
         mods,
     })
@@ -635,6 +643,10 @@ pub mod steam;
 
 /// The JSON cache of the indexes.
 pub mod cache;
+/// The config index: classes of every config merged the way the engine merges them.
+pub mod config_index;
+/// Lookup of one config class in the config index.
+pub mod config_query;
 /// Script sources: the PBOs of the game and of mods.
 pub mod source;
 
@@ -840,4 +852,109 @@ pub fn src_cat(
     } else {
         cat_sources(ctx, name, warnings)
     }
+}
+
+/// The merged config index: vanilla first, then the selected mods in order, each source cached on its own.
+/// With `lines`, one `# config <source>: <n> classes, <build>` line per source is added for `-v`.
+///
+/// # Errors
+///
+/// Returns an error when the install or a selected mod is missing, the game has no PBOs or the cache cannot
+/// be read. A mod or PBO that cannot be read is skipped with a warning.
+pub fn load_config(
+    ctx: &ApiContext,
+    lines: &mut Vec<String>,
+    warnings: &mut dyn WarningSink,
+) -> Result<config_index::ConfigLayer, Error> {
+    let found = locate(ctx, warnings)?;
+    let pbos = config_index::vanilla_config_pbos(&found.game)?;
+    let inputs: Vec<PathBuf> = pbos.iter().map(|(p, _)| p.clone()).collect();
+    let key = format!("config-vanilla-{}", ctx.branch.name());
+    let mut merged = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+        config_index::build_layer("vanilla", &found.build, &pbos, w)
+    })?;
+    lines.push(format!(
+        "# config vanilla: {} classes, {}",
+        merged.class_count(),
+        merged.build
+    ));
+    for m in &found.mods {
+        let mod_pbos: Vec<(PathBuf, String)> = m
+            .pbos
+            .iter()
+            .map(|p| {
+                let rel = p
+                    .strip_prefix(&m.dir)
+                    .unwrap_or(p)
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                (p.clone(), rel)
+            })
+            .collect();
+        let inputs: Vec<PathBuf> = mod_pbos.iter().map(|(p, _)| p.clone()).collect();
+        let key = format!("config-{}", mod_key(m, ctx.branch));
+        let layer = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+            config_index::build_layer(&m.name, ctx.branch.name(), &mod_pbos, w)
+        });
+        match layer {
+            Ok(layer) => {
+                lines.push(format!(
+                    "# config {}: {} classes",
+                    printable(&layer.name),
+                    layer.class_count()
+                ));
+                if !merged.merge(layer) {
+                    warnings.warn(
+                        Warning::new(
+                            Some("api-config-limit"),
+                            format!(
+                                "the merged config is too large; the rest of {} is skipped",
+                                printable(&m.name)
+                            ),
+                        )
+                        .in_file(m.dir.display().to_string()),
+                    );
+                }
+            }
+            Err(e) => warnings.warn(
+                Warning::new(
+                    Some("api-bad-mod"),
+                    format!("skipping mod {}: {e}", printable(&m.name)),
+                )
+                .in_file(m.dir.display().to_string()),
+            ),
+        }
+    }
+    Ok(merged)
+}
+
+/// `dayzmake api config`: the class at `path` with its inheritance chain, resolved properties, subclasses and
+/// PBOs, as JSON (one line) or text (at most `max` lines, with `# config ...` lines when `verbose`).
+///
+/// # Errors
+///
+/// Returns an error when the config index cannot be loaded or the class does not exist or has an inheritance
+/// cycle.
+pub fn config_answer(
+    ctx: &ApiContext,
+    path: &str,
+    max: usize,
+    json: bool,
+    verbose: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<String>, Error> {
+    let mut header = Vec::new();
+    let layer = load_config(ctx, &mut header, warnings)?;
+    let answer = config_query::lookup(&layer, path)?;
+    if json {
+        return Ok(vec![config_query::render_json(&answer, max)?]);
+    }
+    let mut lines = Vec::new();
+    if verbose {
+        lines.extend(header);
+    }
+    lines.extend(config_query::render_text(&answer, max));
+    Ok(lines)
 }

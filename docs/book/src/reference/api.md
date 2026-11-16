@@ -1,7 +1,8 @@
 # Script API: api
 
 `dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a
-declaration lives, compile-time defines) from the installed game, without extracting anything. It reads
+declaration lives, compile-time defines) and about its configs (`api config`) from the installed game, without
+extracting anything. It reads
 `dta/scripts.pbo` of the game and, when asked with `-m`, the script PBOs of mods, builds an index once and
 caches it. The [guide](../guides/script-api.md) shows typical sessions; this page lists every command.
 
@@ -447,6 +448,93 @@ no matching define
 ```
 
 See also: [api class](#dayzmake-api-class).
+
+## dayzmake api config
+
+Look up a config class: its inheritance chain, its own and inherited properties, its subclasses and the PBOs that
+define it.
+
+<div class="synopsis">
+
+```text
+dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
+```
+
+</div>
+
+| Argument | Meaning |
+|---|---|
+| `<path>` | A `/`-separated class path such as `CfgVehicles/Hatchback_02`, matched ignoring case. |
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-v`, `--verbose` | off | Print a `# config <source>: <n> classes` line for vanilla and each mod. |
+| `--experimental` | off | Use the experimental branch instead of stable. |
+| `--dayz <dir>` | Steam install | A DayZ client or server directory (it must have `dta/scripts.pbo`). |
+| `-m <mods>`, `--mod <mods>` | vanilla only | Also merge the configs of mods; see [Selecting mods](#selecting-mods). |
+| `--refresh` | off | Rebuild the cached config indexes before answering. |
+| `--max <n>` | 120 | Print at most n lines; with `--json` at most n properties, n subclasses and n nested classes. |
+| `--json` | off | Print one JSON object instead of text. |
+
+Which configs: every rapified `config.bin` and every plain `config.cpp` of the PBOs in the `dta` and `addons`
+folders of the game (any case), including the ones in folders of a PBO (the weapon PBOs keep one per weapon), and
+of the `addons` folder of each selected mod. Everything else in the PBOs is left unread.
+
+Load order and merging, as the engine does it:
+
+- Vanilla loads first, then the mods in `-m` order. Inside the game, and inside each mod, the PBOs are sorted
+  by `CfgPatches.*.requiredAddons` (an addon after the PBO that provides the addons it requires); sorted path order
+  breaks ties. A cycle in `requiredAddons` is a warning (`api-config-order`) and the PBOs involved load in path order.
+- A class defined again extends the earlier definition: its properties are added or overwritten and it keeps its
+  base class unless the new definition names one. `delete X;` removes the class with everything inside it.
+  `x[] += {...};` appends to the array of the earlier definition or, when the class has none, of the base class.
+  A forward declaration (`class X;`) creates nothing.
+
+Inheritance: for `class B: A` the base `A` is looked up in the scope that holds `B` first (never `B` itself), then
+in the classes that scope inherits from, then in the scopes around it, up to the top level. That is how
+`class HitPoints: HitPoints` inside a derived class finds the `HitPoints` of its base. A base that is defined
+nowhere ends the chain with `(not found)`; a base that leads back to the class itself is an error
+(`inheritance cycle`).
+
+Output: the class path, the chain (`Hatch : Base`), the PBOs that define or modify the class (`[<source>] <pbo>`,
+in load order), the resolved properties sorted by name, each tagged `(from <class>)` with the nearest class that
+sets it (the last one that extended it, for `+=`), the classes declared inside the class (`classes`) and its direct
+subclasses (classes whose base resolves to it). Long values are cut in text output. JSON is
+`{"path", "name", "chain": [{"name", "path"}], "chain_end": "root" or "unknown base <name>",
+"properties": [{"name", "value", "origin", "origin_path"}], "subclasses", "classes", "pbos": [{"source", "pbo"}],
+"truncated": N}`.
+
+The index is cached like the script index: one file per source (`config-vanilla-<branch>.json`,
+`config-mod-<name>-<branch>-<hash>.json`) that is rebuilt when a PBO changes, with `--refresh`, or after an update of
+dayzmake; the sources are merged on each call. A PBO or config that cannot be read is skipped with a warning
+(`api-bad-config`); a source over the size limit (2 million classes or 10 million properties) is cut with
+`api-config-limit`. `api update` does not build it.
+
+Example:
+
+```text
+$ dayzmake api --dayz dz config CfgVehicles/Hatch
+CfgVehicles/Hatch
+chain: Hatch : Base
+defined in (2):
+  [vanilla] Addons/zz_a.pbo
+  [vanilla] Addons/aa_b.pbo
+properties (4):
+  displayName = "Hatch B"  (from Hatch)
+  extra = 5  (from Hatch)
+  scope = 2  (from Hatch)
+  tags = {"a", "b", "b_tag"}  (from Hatch)
+classes (0):
+subclasses (1):
+  Newcar
+$ dayzmake api --dayz dz config CfgVehicles/Doomed
+error: no config class "CfgVehicles/Doomed"; the deepest class found is "CfgVehicles"
+```
+
+Here `aa_b.pbo` requires the addon of `zz_a.pbo`, so it loads after it although it sorts before. `Doomed` is
+deleted by the second addon.
+
+See also: [api class](#dayzmake-api-class), [api mods](#dayzmake-api-mods).
 
 ## dayzmake api update
 

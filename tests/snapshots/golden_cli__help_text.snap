@@ -28,6 +28,7 @@ Usage:
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
@@ -56,6 +57,7 @@ Commands:
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
                 with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 

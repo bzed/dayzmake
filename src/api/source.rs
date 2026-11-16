@@ -113,7 +113,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// A child of `dir` whose name equals `name` ignoring ASCII case.
-fn child_ignore_case(dir: &Path, name: &str) -> Option<PathBuf> {
+pub(crate) fn child_ignore_case(dir: &Path, name: &str) -> Option<PathBuf> {
     let mut found: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)

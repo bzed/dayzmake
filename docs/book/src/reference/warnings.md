@@ -15,7 +15,7 @@ Each section lists the commands that can raise the warning, what triggers it and
 
 Raised by: `api`, `mcp`.
 
-A mod PBO has a `config.bin` that cannot be read, so its `defines[]` are not collected. The scripts of the PBO are still indexed.
+A `config.bin` or `config.cpp` cannot be read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
 
 ```text
 In file …/badmod/addons/entry.pbo: warning: cannot read config.bin: failed to fill whole buffer [api-bad-config]
@@ -59,6 +59,26 @@ The cache folder cannot be found, created or written, or a cache file cannot be 
 
 ```text
 warning: cannot create the cache directory /proc/nope/x: No such file or directory (os error 2); the index is built without a cache [api-cache]
+```
+
+## api-config-limit
+
+Raised by: `api config`, `mcp`.
+
+The config of one source (the game or a mod) has more than 2 million classes or 10 million properties, or the merge of the selected sources does. The rest is skipped; the classes read so far can still be looked up.
+
+```text
+In file …/mod/addons/huge.pbo: warning: the config of mod is too large (more than 2000000 classes or 10000000 properties); the rest is skipped [api-config-limit]   (the message format; no synthetic file in this manual triggers it)
+```
+
+## api-config-order
+
+Raised by: `api config`, `mcp`.
+
+The `requiredAddons` of the `CfgPatches` of some PBOs of one source depend on each other in a cycle, so no order satisfies them. The PBOs of the cycle load after the others, in path order.
+
+```text
+warning: requiredAddons form a cycle between 2 configs (Addons/c1.pbo, Addons/c2.pbo); they load in path order [api-config-order]
 ```
 
 ## api-unsafe-entry

@@ -208,6 +208,22 @@ Full-text search over the script bodies (every .c file of vanilla and the select
 
 Result: The matching lines, as `dayzmake api grep`.
 
+### api_config
+
+Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `path` | string | yes | The class path, for example CfgVehicles/Hatchback_02 or CfgWeapons/M4A1. |
+| `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
+| `experimental` | boolean | no | Use the experimental branch instead of stable. |
+| `json` | boolean | no | Return JSON instead of text. |
+| `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
+| `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
+| `refresh` | boolean | no | Rebuild the cached index first. |
+
+Result: The class, as `dayzmake api config`.
+
 ### api_defines
 
 Compile-time defines of the selected indexes, optionally filtered by a regex.

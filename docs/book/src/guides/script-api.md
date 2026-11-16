@@ -65,6 +65,28 @@ class Entity
   void SetHealth(float value)
 ```
 
+## What does this config class inherit?
+
+`api config` is the same lookup for configs (`config.bin` and `config.cpp`): what does `CfgVehicles/Hatchback_02`
+inherit, and what is its resolved `displayName`? It merges the configs of the game and of the mods in load order,
+as the engine does, so the answer includes what mods change.
+
+```text
+$ dayzmake api config CfgVehicles/Hatchback_02 --max 6
+CfgVehicles/Hatchback_02
+chain: Hatchback_02 : CarScript : Car : Transport : All
+defined in (2):
+  [vanilla] Addons/vehicles_wheeled.pbo
+  [vanilla] Addons/sounds_hpp.pbo
+properties (77):
+... 80 more lines (raise --max or narrow the query)
+```
+
+Every property is tagged with the class it comes from (`displayName = "..."  (from Hatchback_02)`), and the lines
+after the properties list the classes declared inside the class and its subclasses. Add `-m <mods>` to see a class
+as the mods leave it, `--json` for a structured object. The first run builds one cached index per source, which
+takes a moment for the game; later runs read the cache. See [api config](../reference/api.md#dayzmake-api-config).
+
 ## Where is it, and what derives from it?
 
 ```text

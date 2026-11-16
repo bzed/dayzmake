@@ -339,6 +339,7 @@ fn cli_usage_lists_api() {
         "dayzmake api sub",
         "dayzmake api enum",
         "dayzmake api chain",
+        "dayzmake api config",
         "dayzmake api src",
         "dayzmake api defines",
         "dayzmake api update",

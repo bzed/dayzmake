@@ -31,6 +31,14 @@ is maintained here.
 
 ### Unreleased
 
+- `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
+  inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
+  that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
+  ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
+  `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
+  earlier one, properties overwrite, `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
+  output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
+  error. The MCP tool is `api_config`; new warnings `api-config-order` and `api-config-limit` (#89).
 - `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the
   `dta` and `addons` folders of a DayZ install or mod, or a single PBO, into `<targetfolder>/<prefix>/`, optionally
   derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix, TAB, PBO path). The tree is
@@ -325,6 +333,7 @@ Usage:
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
@@ -353,6 +362,7 @@ Commands:
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
                 with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
@@ -436,6 +446,7 @@ dayzmake api src AIAgent --cat                # the full source files
 dayzmake api src AIAgent --context 5          # five lines around each declaration
 dayzmake api grep 'GetGame\(\)\.GetMission\(\)'   # call sites: a text search over the script bodies
 dayzmake api defines [regex]
+dayzmake api config CfgVehicles/Hatchback_02   # a config class: chain, resolved properties, subclasses
 dayzmake api update                           # rebuild the cache now
 ```
 

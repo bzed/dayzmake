@@ -132,6 +132,7 @@ fn mcp_initialize_and_list_tools() {
         "api_subclasses",
         "api_enum",
         "api_chain",
+        "api_config",
         "api_source",
         "api_defines",
         "api_update",
@@ -154,7 +155,7 @@ fn mcp_initialize_and_list_tools() {
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 25);
+    assert_eq!(names.len(), 26);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());

@@ -46,6 +46,7 @@ Usage:
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
@@ -74,6 +75,7 @@ Commands:
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
                 with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
@@ -152,6 +154,7 @@ pub struct Args {
     cmd_src: bool,
     cmd_grep: bool,
     cmd_defines: bool,
+    cmd_config: bool,
     cmd_update: bool,
     cmd_mods: bool,
     flag_experimental: bool,
@@ -169,6 +172,7 @@ pub struct Args {
     flag_lines: Option<String>,
     flag_json: bool,
     arg_name: String,
+    arg_path: String,
     arg_regex: Option<String>,
     flag_verbose: bool,
     flag_force: bool,
@@ -437,9 +441,9 @@ fn run_grep(
     Ok(())
 }
 
-/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
-fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
-    let ctx = api::ApiContext {
+/// What the `api` options select.
+fn api_context(args: &Args) -> api::ApiContext {
+    api::ApiContext {
         branch: if args.flag_experimental {
             Branch::Experimental
         } else {
@@ -448,7 +452,33 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
         dayz: args.flag_dayz.as_ref().map(PathBuf::from),
         mods: args.flag_mod.clone().unwrap_or_default(),
         refresh: args.flag_refresh || args.cmd_update,
-    };
+    }
+}
+
+/// `dayzmake api config`: the class, its chain and resolved properties, or the JSON object.
+fn run_config(
+    args: &Args,
+    ctx: &api::ApiContext,
+    max: usize,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
+    for line in api::config_answer(
+        ctx,
+        &args.arg_path,
+        max,
+        args.flag_json,
+        args.flag_verbose,
+        warnings,
+    )? {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
+fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
+    let ctx = api_context(args);
     {
         if args.cmd_mods {
             let text = api::mods_text(&ctx, args.flag_json, warnings)?;
@@ -493,6 +523,9 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
                 write!(out, "{text}")?;
             }
             return Ok(());
+        }
+        if args.cmd_config {
+            return run_config(args, &ctx, max, out, warnings);
         }
         let name = args.arg_name.clone();
         let query = if args.cmd_class {
