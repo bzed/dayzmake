@@ -29,7 +29,10 @@ is maintained here.
 ## Changes
 <!-- ANCHOR: changes -->
 
-### Unreleased
+### 3.0.2
+
+With dayzmake-core 0.2.2.
+
 
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer
   flags a short raw mipmap as compressed (#76) and `Paa::to_dynamic_image` decodes a `Paa` built by
@@ -211,13 +214,13 @@ The public key is a release asset (`dayzmake-release-key.asc`) and is published 
 fingerprint with the one above (and with the one in the repository's `AGENTS.md`) before you trust it.
 
 Download the archive you want together with the checksum files and the key, from the release page or with the
-GitHub CLI:
+GitHub CLI (without a tag it downloads the latest release):
 
 ```
-gh release download v3.0.1 -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
+gh release download -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
 ```
 
-On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.1-debian-trixie-x86_64.tar.gz`):
+On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.2-debian-trixie-x86_64.tar.gz`):
 
 ```
 gpg --import dayzmake-release-key.asc
@@ -238,7 +241,7 @@ hash of your download with its line in `SHA256SUMS`:
 ```
 gpg --import dayzmake-release-key.asc
 gpg --verify SHA256SUMS.asc SHA256SUMS
-$file = 'dayzmake-v3.0.1-windows-x86_64.zip'
+$file = 'dayzmake-v3.0.2-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
