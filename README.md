@@ -24,6 +24,12 @@ is maintained here.
 
 ## Changes
 
+### 3.0.0
+
+The changes since 2.0.0. Breaking: a missing `#include` no longer searches the working directory (it is only
+checked directly; pass `-i` for folders to search), stricter key and PBO checks (see below), and new errors on
+hostile config input. `dayzmake` 3.0.0 needs `dayzmake-core` 0.2.0.
+
 - Backslash line continuations count as source lines: in a `#define` and in disabled lines they used to be
   lost, and a macro use no longer shifts the line numbers after it, so warnings and errors point at the right line
   (#65).

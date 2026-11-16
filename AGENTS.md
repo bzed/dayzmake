@@ -186,7 +186,8 @@ original copyright holders); the licence is declared once, in `Cargo.toml` and `
 
 ## Releasing
 
-Publishing is done by the maintainer, never by an agent.
+Publishing is done by the maintainer, or by an agent only when the maintainer explicitly asks for that release (and
+only after CI on `main` is green).
 
 1. Bump the versions. `dayzmake-core` follows semver on its own; a breaking core change also bumps the
    `version` in the CLI's `dayzmake-core` dependency.
