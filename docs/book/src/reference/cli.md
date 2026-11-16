@@ -18,7 +18,7 @@ section per command.
 | Option | Meaning |
 |---|---|
 | `-h`, `--help` | Print the usage text and exit with status 0. |
-| `--version` | Print the version (`v3.0.0` for this release) and exit with status 0. |
+| `--version` | Print the version (for example `v3.0.2`) and exit with status 0. |
 
 An unknown command or option prints `Invalid arguments.` followed by the usage text and exits with status 1.
 

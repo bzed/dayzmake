@@ -30,7 +30,7 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
-### Unreleased
+### 0.2.2
 
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer
   flags a short raw mipmap as compressed (#76) and `Paa::to_dynamic_image` decodes a `Paa` built by
