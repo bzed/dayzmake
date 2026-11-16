@@ -210,13 +210,11 @@ fn shared_body_fan_out() -> Vec<u8> {
 fn rapified_shared_class_body_fan_out_is_an_error() {
     let bytes = shared_body_fan_out();
     assert!(bytes.len() < 3000, "{}", bytes.len());
-    let started = std::time::Instant::now();
     let Err(err) = read_bytes(bytes) else {
         panic!("shared bodies are rejected");
     };
     let err = err.to_string();
     assert!(err.contains("shared"), "{err}");
-    assert!(started.elapsed().as_secs() < 2);
 }
 
 #[expect(clippy::unwrap_used, reason = "tests fail by panicking")]

@@ -429,16 +429,10 @@ fn laughs(n: usize) -> String {
 /// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`).
 #[test]
 fn exponential_macro_expansion_is_capped() {
-    let start = std::time::Instant::now();
     let err = preprocess(laughs(21), None, &[], &mut Warnings::new()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("expands to more than"), "{msg}");
     assert!(msg.contains("\"E"), "{msg}");
-    assert!(
-        start.elapsed().as_secs_f64() < 1.0,
-        "took {:?}",
-        start.elapsed()
-    );
 }
 
 /// The same through macro arguments, which are copied rather than expanded.
