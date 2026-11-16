@@ -2218,7 +2218,7 @@ fn extract_unpacks_an_install_by_prefix_with_a_map() {
     assert_eq!(out, "extracted 3 files from 2 PBOs to out\n");
     assert_eq!(
         std::fs::read(dir.path().join("out/pbo-map.tsv")).unwrap(),
-        b"a\tdta/a.pbo\nb\\sub\tAddons/b.pbo\n"
+        b"a\tdta/a.pbo\nb/sub\tAddons/b.pbo\n"
     );
     assert!(dir.path().join("out/a/x.txt").is_file());
     assert!(dir.path().join("out/b/sub/y.txt").is_file());

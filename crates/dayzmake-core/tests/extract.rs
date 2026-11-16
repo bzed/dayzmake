@@ -94,7 +94,7 @@ fn extracts_by_prefix_and_writes_the_map() {
     );
     assert_eq!(
         fs::read(target.join("pbo-map.tsv")).unwrap(),
-        b"a\tdta/a.pbo\nb\\sub\tAddons/b.pbo\n"
+        b"a\tdta/a.pbo\nb/sub\tAddons/b.pbo\n"
     );
     assert_eq!(summary.pbos(), 2);
     assert_eq!(summary.files(), 3);
@@ -585,4 +585,45 @@ fn a_non_utf8_entry_name_warns() {
     )
     .unwrap();
     assert_eq!(names(&warnings), ["non-utf8-filename"]);
+}
+
+/// Every `\` of the map starts an escape: the prefix is written with `/`, a literal `\n` of a name is `\\n`.
+#[test]
+fn the_map_writes_slashes_and_escapes_the_backslash() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a.pbo");
+    // `dz\gear\navigation` must not read back as an LF; the TAB makes the prefix unsafe as a folder
+    write_pbo(&pbo, "dz\\gear\\navigation\tz", &[("ok.txt", b"o")]);
+    let target = tmp.path().join("out");
+    extract(
+        &pbo,
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(target.join("pbo-map.tsv")).unwrap(),
+        b"dz/gear/navigation\\tz\ta.pbo\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_backslash_in_the_pbo_path_is_escaped_in_the_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("we\\nird.pbo");
+    write_pbo(&pbo, "p", &[("ok.txt", b"o")]);
+    let target = tmp.path().join("out");
+    extract(
+        &tmp.path().join("we\\nird.pbo"),
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(target.join("pbo-map.tsv")).unwrap(),
+        b"p\twe\\\\nird.pbo\n"
+    );
 }

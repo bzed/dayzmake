@@ -232,10 +232,12 @@ fn derapify(data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(text)
 }
 
-/// `bytes` with TAB, CR and LF escaped as `\t`, `\r` and `\n`.
+/// `bytes` with `\`, TAB, CR and LF escaped as `\\`, `\t`, `\r` and `\n`, so that every `\` of the output starts an
+/// escape.
 fn escape(bytes: &[u8], out: &mut Vec<u8>) {
     for &b in bytes {
         match b {
+            b'\\' => out.extend_from_slice(b"\\\\"),
             b'\t' => out.extend_from_slice(b"\\t"),
             b'\r' => out.extend_from_slice(b"\\r"),
             b'\n' => out.extend_from_slice(b"\\n"),
@@ -303,6 +305,11 @@ impl Run<'_> {
             (_, Some(raw)) => raw,
             (_, None) => prefix.unwrap_or_default().as_bytes().to_vec(),
         };
+        // `/` separators like the tree, so that the file needs no `\` of its own
+        let map_prefix: Vec<u8> = map_prefix
+            .iter()
+            .map(|&b| if b == b'\\' { b'/' } else { b })
+            .collect();
         self.map.push((map_prefix, source.relative.clone()));
         let folder = folder.filter(|f| {
             !f.components().next().is_some_and(|c| {
@@ -566,12 +573,17 @@ fn swap(staging: &mut Staging, target: &Path, warnings: &mut dyn WarningSink) ->
 /// The tree is written to a staging folder next to `target` and then replaces it with one rename, so a
 /// re-run drops files that no longer exist and a failure leaves the old tree alone. The file `pbo-map.tsv`
 /// in the target has one line per PBO, `prefix<TAB>path of the PBO relative to source` with `/`
-/// separators, sorted by prefix; TAB, CR and LF in the prefix are written as `\t`, `\r` and `\n`.
+/// separators, sorted by prefix. The prefix is written with `/` instead of `\` (like the tree below the target); then
+/// `\`, TAB, CR and LF in either column are written as `\\`, `\t`, `\r` and `\n`, so every `\` in the file starts
+/// an escape. The bytes of the prefix as stored are in the `--json` output of `inspect`.
 ///
 /// # Errors
 ///
-/// Returns an error if the source has no PBO or cannot be read, a PBO is malformed, the target exists
-/// and `options.force` is not set, is not a folder or contains the source, or the tree cannot be written.
+/// Returns an error if the source has no PBO or cannot be read, a PBO is malformed or an entry is truncated
+/// (its data ends past the end of the file), an entry cannot be read or decompressed, the target exists and
+/// `options.force` is not set, the target is not a folder, is inside the source or contains it, the target
+/// folder is neither empty nor the result of an earlier extract (no `pbo-map.tsv`), or the tree cannot be
+/// written. A failure leaves an existing target alone.
 pub fn extract(
     source: &Path,
     target: &Path,
