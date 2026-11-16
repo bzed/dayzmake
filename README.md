@@ -38,7 +38,7 @@ is maintained here.
 - `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,
   textures, materials, proxies, properties, selections and animations. Other ODOL versions still show the format
   and version, with a note that only v56 is decoded. A model whose LOD ranges overlap is refused.
-- PAA reads RGBA4444, ARGB1555 and AI88 (#83): `paa2img` and `paa_to_image` decode the 19 such textures the game
+- PAA reads ARGB4444, ARGB1555 and AI88 (#83): `paa2img` and `paa_to_image` decode the 19 such textures the game
   ships (LZSS mipmaps with a checksum); a wrong checksum or a cut-short stream is an error. A PNG file named
   `.paa` is reported as a PNG file.
 - Config enum blocks (#82): `rapify` accepts `enum { A, B = 5, C };` at any class level (values count up from

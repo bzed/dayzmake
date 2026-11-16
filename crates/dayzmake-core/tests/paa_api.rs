@@ -372,15 +372,15 @@ fn packed_4x4(magic: u16, pixels: &[[u8; 2]; 16]) -> Vec<u8> {
 #[cfg(feature = "image")]
 #[test]
 fn rgba4444_decodes_to_rgba() {
-    // nibbles from low to high: R, G, B, A
+    // nibbles from high to low: A, R, G, B (as ImageToPAA writes them, see tests/bi_paa_golden.rs)
     let mut pixels = [[0x21, 0x43]; 16];
     pixels[1] = [0xFF, 0xFF];
     pixels[2] = [0x00, 0x00];
     let paa = Paa::read(&mut Cursor::new(packed_4x4(0x4444, &pixels))).expect("reads");
-    assert_eq!(paa.compression(), "RGBA4444");
+    assert_eq!(paa.compression(), "ARGB4444");
     let img = paa.to_dynamic_image().expect("decodes").to_rgba8();
     assert_eq!((img.width(), img.height()), (4, 4));
-    assert_eq!(img.get_pixel(0, 0).0, [17, 34, 51, 68]);
+    assert_eq!(img.get_pixel(0, 0).0, [51, 34, 17, 68]);
     assert_eq!(img.get_pixel(1, 0).0, [255; 4]);
     assert_eq!(img.get_pixel(2, 0).0, [0; 4]);
 }
@@ -436,7 +436,7 @@ fn packed_formats_are_written_back_unchanged() {
     let paa = Paa::read(&mut Cursor::new(&bytes)).expect("reads");
     let written = to_bytes(&paa);
     let again = Paa::read(&mut Cursor::new(&written)).expect("reads back");
-    assert_eq!(again.compression(), "RGBA4444");
+    assert_eq!(again.compression(), "ARGB4444");
     assert_eq!(to_bytes(&again), written);
     // the mipmap's stored bytes are in the output
     let raw = [1u8, 2].repeat(16);

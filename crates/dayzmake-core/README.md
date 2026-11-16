@@ -40,7 +40,7 @@ need to be GPL-2.0-or-later compatible.
   LOD, vertex and face counts, textures, materials, proxies, selections and properties. Only v56 is decoded,
   other versions are an error, and LOD ranges that overlap are refused. New dependency: `lzokay-native`
   (decompression only).
-- `Paa::read` accepts the formats `0x4444` (`"RGBA4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
+- `Paa::read` accepts the formats `0x4444` (`"ARGB4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
   `Paa::to_dynamic_image` decodes them to RGBA (#83); `Paa::write` writes their stored bytes back unchanged. A
   wrong checksum or a cut-short LZSS stream is an error, and a PNG file gives an error that names the PNG.
 - `Config` reads, keeps and writes the enum table of a rapified config (#82): the parser accepts `enum { ... };`

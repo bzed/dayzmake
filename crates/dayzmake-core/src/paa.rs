@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! u16  magic (compression: 0xff01 DXT1, 0xff02 DXT2, 0xff03 DXT3,
-//!             0xff04 DXT4, 0xff05 DXT5, 0x8888 RGBA, 0x4444 RGBA4444,
+//!             0xff04 DXT4, 0xff05 DXT5, 0x8888 RGBA, 0x4444 ARGB4444,
 //!             0x1555 ARGB1555, 0x8080 AI88)
 //! taggs: 8-byte signature (e.g. "GGATSFFO") + u32 data size + data,
 //!        repeated until a zero byte (which is the low byte of the
@@ -108,7 +108,7 @@ fn decompress_mipmap(
 
 /// The formats whose mipmaps are an LZSS stream of 2-byte pixels followed by a checksum.
 fn is_packed16(compression: &str) -> bool {
-    matches!(compression, "RGBA4444" | "ARGB1555" | "AI88")
+    matches!(compression, "ARGB4444" | "ARGB1555" | "AI88")
 }
 
 /// Checks a 16-bit format mipmap (its stored bytes: the LZSS stream and the 4 byte checksum) and
@@ -280,10 +280,11 @@ fn unpack_pixels(compression: &str, pixels: &[u8]) -> Vec<u8> {
         // a 4 or 5 bit field (at most 31) expanded to 8 bits; the result fits a byte
         let expand = |field: u16, max: u16| u8::try_from(field * 255 / max).unwrap_or(u8::MAX);
         match compression {
-            "RGBA4444" => rgba.extend([
-                expand(v & 0xF, 15),
-                expand((v >> 4) & 0xF, 15),
+            // bits 12 to 15 alpha, then 4 bits each of R, G, B (as ImageToPAA writes it)
+            "ARGB4444" => rgba.extend([
                 expand((v >> 8) & 0xF, 15),
+                expand((v >> 4) & 0xF, 15),
+                expand(v & 0xF, 15),
                 expand(v >> 12, 15),
             ]),
             "ARGB1555" => rgba.extend([
@@ -311,7 +312,7 @@ impl Paa {
         self.height
     }
 
-    /// Compression format name as read from the file, e.g. `"DXT5"`, `"RGBA4444"`, `"ARGB1555"` or `"AI88"`.
+    /// Compression format name as read from the file, e.g. `"DXT5"`, `"ARGB4444"`, `"ARGB1555"` or `"AI88"`.
     #[must_use]
     pub fn compression(&self) -> &str {
         &self.compression
@@ -350,7 +351,7 @@ impl Paa {
             0xff04 => "DXT4",
             0xff05 => "DXT5",
             0x8888 => "RGBA",
-            0x4444 => "RGBA4444",
+            0x4444 => "ARGB4444",
             0x1555 => "ARGB1555",
             0x8080 => "AI88",
             // the first two bytes of a PNG signature
@@ -717,7 +718,7 @@ impl Paa {
             "DXT5" => 0xff05,
             "RGBA" => 0x8888,
             // the stored LZSS bytes are written back as they were read
-            "RGBA4444" => 0x4444,
+            "ARGB4444" => 0x4444,
             "ARGB1555" => 0x1555,
             "AI88" => 0x8080,
             _ => {

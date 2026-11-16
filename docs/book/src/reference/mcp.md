@@ -343,7 +343,7 @@ Result: The preprocessed text, or `wrote <target> (<n> bytes)` with `target`.
 ### paa_to_image
 
 Convert a PAA texture to an image (the format follows the target extension, e.g. png). DXT1 to DXT5, RGBA,
-RGBA4444, ARGB1555 and AI88 are read; a PNG file named `.paa` gets an error that says so.
+ARGB4444, ARGB1555 and AI88 are read; a PNG file named `.paa` gets an error that says so.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|

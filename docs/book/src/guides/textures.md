@@ -37,7 +37,7 @@ $ file back.png
 back.png: PNG image data, 64 x 64, 8-bit/color RGBA, non-interlaced
 ```
 
-`paa2img` also reads the 16-bit formats RGBA4444, ARGB1555 and AI88 (grey with alpha) that the game uses for
+`paa2img` also reads the 16-bit formats ARGB4444, ARGB1555 and AI88 (grey with alpha) that the game uses for
 noise and detail maps. A `.paa` that is really a PNG file gets an error that says so; convert the image with
 `img2paa`.
 

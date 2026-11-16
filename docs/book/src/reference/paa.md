@@ -29,7 +29,7 @@ dayzmake paa2img [-v] [-f] <source> <target>
 Behaviour:
 
 - The largest mipmap is decoded to 8-bit RGBA. DXT1, DXT3, DXT5 and uncompressed RGBA PAAs are supported, with
-  or without LZO-compressed mipmaps. The 16-bit formats RGBA4444, ARGB1555 and AI88 (grey with alpha) are
+  or without LZO-compressed mipmaps. The 16-bit formats ARGB4444, ARGB1555 and AI88 (grey with alpha) are
   read too: their mipmaps are LZSS-compressed, and a wrong checksum or a cut-short stream is an error.
   Writing these formats is not supported (`img2paa -t` offers DXT1, DXT3, DXT5 and RGBA).
 - A file that starts with the PNG signature is reported as a PNG file, not as an unknown PAA.
