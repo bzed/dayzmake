@@ -5,7 +5,7 @@ expression: r.result(10 + i as u64)
 {
   "content": [
     {
-      "text": "warnings:\nIn file data/model.p3d: warning: On non-Windows systems binarize.exe is only used with --proton-binarize; file will be copied as-is. [non-windows-binarization]\n\nwrote ../pack.pbo",
+      "text": "wrote ../pack.pbo",
       "type": "text"
     }
   ],

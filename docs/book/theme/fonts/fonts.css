@@ -1,0 +1,49 @@
+/* @font-face rules of the dayzmake theme; the font files and their SIL OFL 1.1 licences are in this folder. */
+
+@font-face {
+    font-family: "Big Shoulders Stencil Display";
+    font-style: normal;
+    font-weight: 800;
+    font-display: swap;
+    src: url('{{ resource "fonts/big-shoulders-stencil-display-latin-800-normal.woff2" }}') format("woff2");
+}
+
+@font-face {
+    font-family: "Atkinson Hyperlegible Next";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('{{ resource "fonts/atkinson-hyperlegible-next-latin-400-normal.woff2" }}') format("woff2");
+}
+
+@font-face {
+    font-family: "Atkinson Hyperlegible Next";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('{{ resource "fonts/atkinson-hyperlegible-next-latin-700-normal.woff2" }}') format("woff2");
+}
+
+@font-face {
+    font-family: "Atkinson Hyperlegible Next";
+    font-style: italic;
+    font-weight: 400;
+    font-display: swap;
+    src: url('{{ resource "fonts/atkinson-hyperlegible-next-latin-400-italic.woff2" }}') format("woff2");
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('{{ resource "fonts/jetbrains-mono-latin-400-normal.woff2" }}') format("woff2");
+}
+
+@font-face {
+    font-family: "JetBrains Mono";
+    font-style: normal;
+    font-weight: 700;
+    font-display: swap;
+    src: url('{{ resource "fonts/jetbrains-mono-latin-700-normal.woff2" }}') format("woff2");
+}

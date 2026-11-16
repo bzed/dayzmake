@@ -19,6 +19,7 @@ input as hostile.
 | `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
 | `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
 | `fuzz/` | `cargo-fuzz` crate: targets for the untrusted-input readers, with seed corpora |
+| `docs/book/` | the HTML documentation (mdBook): guides, command reference, theme; published to GitHub Pages by `.github/workflows/pages.yml` |
 | `docs/superpowers/` | design notes and plans |
 
 The repository is a Cargo workspace (root crate `dayzmake` plus `crates/dayzmake-core`); lints are set once in
@@ -153,7 +154,10 @@ The lints are configured once, in `[workspace.lints]` in the root `Cargo.toml`; 
 ## Documentation
 
 - Public items have rustdoc comments (`missing_docs` is on); `make doc` builds them with warnings as errors.
-- A commit that changes behaviour or the CLI updates `README.md` and the `USAGE` text in `src/run.rs` together.
+- A commit that changes behaviour or the CLI updates `README.md` and the `USAGE` text in `src/run.rs` together, and
+  the HTML documentation in `docs/book/src/reference/` and `docs/book/src/guides/` (a command, option, MCP tool or
+  warning without its page fails `tests/book_sources.rs`; examples and described behaviour are not checked, so
+  re-run them).
 
 ## Commits
 
@@ -173,6 +177,7 @@ Run `make check`. It must pass, because CI runs the same steps:
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
 | features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
 | docs.rs | `make docsrs` | `cargo +nightly doc -p dayzmake-core --all-features` with `--cfg docsrs` and warnings as errors; skipped without nightly |
+| book | `make book` | `mdbook build docs/book` into the target dir; skipped without `mdbook`. `tests/book_sources.rs` (in `make test`) fails when a command, option, MCP tool or warning has no page in `docs/book/src/reference/` |
 | packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |
 | tests | `make test` | all targets plus doctests; includes the fuzz seeds |
 | fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |
@@ -192,5 +197,28 @@ only after CI on `main` is green).
 1. Bump the versions. `dayzmake-core` follows semver on its own; a breaking core change also bumps the
    `version` in the CLI's `dayzmake-core` dependency.
 2. `make check` (includes `make features` and `make package-check`).
-3. Tag the release.
+3. Tag the release. The tag starts the release workflow, which builds the archives, signs their checksums with the
+   release key (see below) and creates the GitHub release. If the signing step fails, no release is created.
 4. `cargo publish -p dayzmake-core`, **then** `cargo publish -p dayzmake` (the CLI depends on the published core).
+
+### Release signing key
+
+The checksums of every release (`SHA256SUMS`, `SHA512SUMS`, with detached signatures `.asc`) are signed by
+`scripts/sign-release.sh` in the `publish` job of `.github/workflows/release.yml`.
+
+- Key: `dayzmake release signing key (https://github.com/bzed/dayzmake)`, ed25519, sign only, expires
+  **2029-11-15**, fingerprint `6624 41B3 6A57 85AD 18FB  8667 DF75 3D99 D064 EB7E`.
+- The public key is `docs/book/src/release-key.asc` (published at `https://bzed.github.io/dayzmake/release-key.asc`
+  and attached to every release as `dayzmake-release-key.asc`).
+- The private key is passphrase-protected and exists only in two repository secrets: `RELEASE_GPG_PRIVATE_KEY`
+  (the ASCII-armoured secret key) and `RELEASE_GPG_PASSPHRASE`. It is never committed, logged or put on a command
+  line; the script reads both from the environment and passes the passphrase on a file descriptor.
+- After changing the script, run `scripts/test-sign-release.sh` (throwaway key, no CI job).
+- Extending the expiry (do this well before 2029-11-15): on a trusted machine import the secret key, run
+  `gpg --edit-key 662441B36A5785AD18FB8667DF753D99D064EB7E`, `expire`, choose the new date, `save`; export the public
+  key with `gpg --armor --export 662441B36A5785AD18FB8667DF753D99D064EB7E > docs/book/src/release-key.asc` and
+  commit it; export the secret key with `gpg --armor --export-secret-keys 662441B36A5785AD18FB8667DF753D99D064EB7E`
+  and store it as the new value of the secret `RELEASE_GPG_PRIVATE_KEY` (the passphrase stays). Update the expiry date
+  here and in the README section *Verifying downloads*, and delete the exported secret key afterwards. Users who
+  imported the old public key re-import the new one; the fingerprint does not change.
+- An expired key, an empty secret or a wrong passphrase make the signing step, and so the release, fail.

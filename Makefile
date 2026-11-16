@@ -10,7 +10,7 @@ FUZZ_TIME ?= 10
 # cargo-fuzz binaries from prebuilt releases default to a musl target, where sanitizers do not work.
 FUZZ_HOST = $(shell rustc +nightly -vV | sed -n "s/^host: //p")
 
-.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri features docsrs package-check check
+.PHONY: fmt fmt-check lint doc deny test fuzz cover coverage-check miri features docsrs book package-check check
 
 fmt:
 	$(CARGO) fmt --all
@@ -66,6 +66,14 @@ docsrs:
 	  echo "skipping docsrs: nightly missing"; \
 	fi
 
+# The HTML documentation (mdBook, docs/book). The output goes below the target dir, never into the source tree.
+book:
+	@if command -v mdbook >/dev/null 2>&1; then \
+	  mdbook build docs/book -d $(CARGO_TARGET_DIR)/book; \
+	else \
+	  echo "skipping book: mdbook missing"; \
+	fi
+
 # Packages both crates (the CLI against the packaged core). CI runs it without --allow-dirty.
 #
 # cargo verifies the CLI against a temporary local registry: it unpacks the packaged dayzmake-core into
@@ -78,4 +86,4 @@ package-check:
 	$(CARGO) clean -p dayzmake-core --profile dev
 	$(CARGO) package --workspace $(LOCKED) --allow-dirty
 
-check: fmt-check lint doc deny test features docsrs package-check fuzz coverage-check
+check: fmt-check lint doc deny test features docsrs book package-check fuzz coverage-check

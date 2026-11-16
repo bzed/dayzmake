@@ -8,6 +8,9 @@ dayzmake
 [![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 [![](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
+Documentation: <https://bzed.github.io/dayzmake/> (guides and a reference of every command, option, MCP tool and warning).
+
+<!-- ANCHOR: intro -->
 DayZ modding tools written in Rust: PBO packing and unpacking, config
 preprocessing and rapification, model inspection and binarization, PAA
 conversion and signature handling.
@@ -20,9 +23,18 @@ targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
 
-**Status:** PAA commands not implemented, some options not implemented, testing.
+**Status:** `paa2img` and `img2paa` work. Two options are accepted but have no effect yet: `derapify -d` (indentation, [#69](https://github.com/bzed/dayzmake/issues/69)) and `img2paa -c` (compression, [#70](https://github.com/bzed/dayzmake/issues/70)).
+<!-- ANCHOR_END: intro -->
 
 ## Changes
+<!-- ANCHOR: changes -->
+
+### Unreleased
+
+- Releases carry `SHA256SUMS` and `SHA512SUMS` of all archives with GPG signatures, and the public key
+  (`dayzmake-release-key.asc`); see *Verifying downloads*.
+- The documentation is published as a web site with guides and a reference of every command, option, MCP tool and
+  warning: <https://bzed.github.io/dayzmake/>.
 
 ### 3.0.0
 
@@ -146,7 +158,9 @@ hostile config input. `dayzmake` 3.0.0 needs `dayzmake-core` 0.2.0.
 - `build` matches the model extensions `.p3d`, `.rtm` and `.p3do` case-insensitively (`N.P3D` is binarized like
   `n.p3d`; `xp3d` is not a model) (#34).
 
+<!-- ANCHOR_END: changes -->
 ## Building
+<!-- ANCHOR: building -->
 
 The build requires `cargo`, Rust's package manager. No system libraries are needed: everything, including the RSA
 code for `sign` and `keygen`, is pure Rust.
@@ -162,7 +176,49 @@ To build a release, use:
 cargo build --release
 ```
 
+<!-- ANCHOR_END: building -->
+## Verifying downloads
+<!-- ANCHOR: verifying -->
+Every release lists `SHA256SUMS` and `SHA512SUMS` of its archives, each with a detached GPG signature
+(`SHA256SUMS.asc`, `SHA512SUMS.asc`). The signing key is
+
+```
+dayzmake release signing key (https://github.com/bzed/dayzmake)
+ed25519, expires 2029-11-15
+6624 41B3 6A57 85AD 18FB  8667 DF75 3D99 D064 EB7E
+```
+
+The public key is a release asset (`dayzmake-release-key.asc`) and is published at
+<https://bzed.github.io/dayzmake/release-key.asc>. Get it from the site or from a release, and compare the
+fingerprint with the one above (and with the one in the repository's `AGENTS.md`) before you trust it.
+
+On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.0-debian-trixie-x86_64.tar.gz`):
+
+```
+gpg --import dayzmake-release-key.asc
+gpg --fingerprint 662441B36A5785AD18FB8667DF753D99D064EB7E
+gpg --verify SHA256SUMS.asc SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+`gpg --verify` must say `Good signature from "dayzmake release signing key (https://github.com/bzed/dayzmake)"`;
+the warning that the key is not certified with a trusted signature is expected as long as you have not
+signed it yourself, the fingerprint printed next to it is what counts. `sha256sum -c --ignore-missing` checks
+the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
+`SHA512SUMS` works the same way with `sha512sum`.
+
+On Windows (PowerShell), after importing and verifying the signature with Gpg4win's `gpg`, compare the hash of
+your download with its line in `SHA256SUMS`:
+
+```
+Get-FileHash -Algorithm SHA256 .\dayzmake-v3.0.0-windows-x86_64.zip
+Select-String dayzmake-v3.0.0-windows-x86_64.zip SHA256SUMS
+```
+
+<!-- ANCHOR_END: verifying -->
+
 ## Testing
+<!-- ANCHOR: testing -->
 
 Unit tests:
 
@@ -178,8 +234,9 @@ app 1042420 with `--both`) to prove the mod loads and runs:
 testharness/run.sh --both
 ```
 
-See [testharness/README.md](testharness/README.md) for details.
+See [testharness/README.md](https://github.com/bzed/dayzmake/blob/main/testharness/README.md) for details.
 
+<!-- ANCHOR_END: testing -->
 ## Usage
 
 ```
@@ -276,6 +333,7 @@ See `dayzmake --help` for more.
 `build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both; an entry generated from source (the rapified `config.cpp`, a `.p3do`) wins over a plain `config.bin` or `.p3d` of the same name. Model extensions (`.p3d`, `.rtm`) are matched case-insensitively, and `.p3do` files are packed as `.p3d` (a colliding `m.p3d` and `m.p3do` is reported, and the `.p3do` wins). A file that cannot be opened or read fails the build with an error naming it.
 
 ## Using dayzmake-core as a library
+<!-- ANCHOR: library -->
 
 The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
 (`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures, with no CLI dependencies. It never
@@ -291,6 +349,7 @@ default; `default-features = false` builds without them. The
 The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
 independently of the CLI.
 
+<!-- ANCHOR_END: library -->
 ## Script API index
 
 `dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a

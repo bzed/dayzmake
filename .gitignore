@@ -4,3 +4,4 @@
 **/*.rs.bk
 /fuzz/target
 /fuzz/artifacts
+docs/book/book/
