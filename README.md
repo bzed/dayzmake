@@ -31,6 +31,14 @@ is maintained here.
 
 ### Unreleased
 
+- PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer
+  flags a short raw mipmap as compressed (#76) and `Paa::to_dynamic_image` decodes a `Paa` built by
+  `Paa::from_dynamic_image` or `Paa::lzo_compress` without a write/read round trip (#78). `Paa::read` drops the
+  `GGATSFFO` offset tagg, so a re-written PAA has it once (#75); `Paa::tagg("GGATSFFO")` now returns `None` after
+  `read`.
+- `Paa::write` and `img2paa` reject a mipmap of 16 MiB or more (its length field has 3 bytes), for example RGBA
+  2048×2048 and larger or a DXT5 4096×4096 texture that LZO cannot shrink, instead of writing a wrong length, and `Paa::read`
+  keeps an LZO-compressed mipmap compressed, so a read and re-written PAA stays readable (#79).
 - `dayzmake cat` accepts `-f` to overwrite its target; the "Use --force" error was already printed for it (#71).
 - `img2paa -c` and the MCP tool `image_to_paa` (`compress`) LZO-compress DXT mipmaps wider than 128 pixels (#70).
   dayzmake already did that for every conversion, so the output does not change. New in dayzmake-core:
