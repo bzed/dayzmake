@@ -19,6 +19,7 @@ input as hostile.
 | `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
 | `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
 | `fuzz/` | `cargo-fuzz` crate: targets for the untrusted-input readers, with seed corpora |
+| `docs/book/` | the HTML documentation (mdBook): guides, command reference, theme; published to GitHub Pages by `.github/workflows/pages.yml` |
 | `docs/superpowers/` | design notes and plans |
 
 The repository is a Cargo workspace (root crate `dayzmake` plus `crates/dayzmake-core`); lints are set once in
@@ -173,6 +174,7 @@ Run `make check`. It must pass, because CI runs the same steps:
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
 | features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
 | docs.rs | `make docsrs` | `cargo +nightly doc -p dayzmake-core --all-features` with `--cfg docsrs` and warnings as errors; skipped without nightly |
+| book | `make book` | `mdbook build docs/book` into the target dir; skipped without `mdbook`. `tests/book_sources.rs` (in `make test`) fails when a command, option, MCP tool or warning has no page in `docs/book/src/reference/` |
 | packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |
 | tests | `make test` | all targets plus doctests; includes the fuzz seeds |
 | fuzzing | `make fuzz` | `cargo +nightly fuzz`, 10 s per target (`FUZZ_TIME=60` for longer) |
