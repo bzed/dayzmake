@@ -86,7 +86,12 @@ impl<'a> Resolver<'a> {
         };
         self.memo.insert(key.to_string(), None);
         let found = self.find_base(key, &parent, depth);
-        self.memo.insert(key.to_string(), Some(found.clone()));
+        if found == Base::TooDeep {
+            // depends on where the lookup started, so it must not stick
+            self.memo.remove(key);
+        } else {
+            self.memo.insert(key.to_string(), Some(found.clone()));
+        }
         found
     }
 
@@ -193,6 +198,19 @@ pub struct ResolvedProp {
     pub origin_path: String,
 }
 
+/// A redefinition that changed the base class of the class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BaseChangeRef {
+    /// The base before; `None` for no base.
+    pub from: Option<String>,
+    /// The base after; `None` for no base.
+    pub to: Option<String>,
+    /// The index of the PBO of the redefinition.
+    pub source: String,
+    /// The PBO, relative to its install or mod directory.
+    pub pbo: String,
+}
+
 /// The answer of a config lookup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigAnswer {
@@ -212,6 +230,8 @@ pub struct ConfigAnswer {
     pub classes: Vec<ClassRef>,
     /// The PBOs that define or modify the class, in load order.
     pub pbos: Vec<PboRef>,
+    /// Redefinitions that replaced the base class (including with none), in load order.
+    pub base_changes: Vec<BaseChangeRef>,
 }
 
 /// The path of `key` with the names as written.
@@ -437,6 +457,19 @@ pub fn lookup(layer: &ConfigLayer, path: &str) -> Result<ConfigAnswer, Error> {
     };
     let properties = resolve_props(layer, &keys);
     let subclasses = subclasses_of(layer, &mut resolver, &key, node);
+    let base_changes = node
+        .base_changes
+        .iter()
+        .filter_map(|c| {
+            let p = layer.pbos.get(usize::try_from(c.pbo).ok()?)?;
+            Some(BaseChangeRef {
+                from: c.from.clone(),
+                to: c.to.clone(),
+                source: p.source.clone(),
+                pbo: p.pbo.clone(),
+            })
+        })
+        .collect();
     let pbos = node
         .pbos
         .iter()
@@ -455,6 +488,7 @@ pub fn lookup(layer: &ConfigLayer, path: &str) -> Result<ConfigAnswer, Error> {
             .map(|k| class_ref(layer, k))
             .collect(),
         pbos,
+        base_changes,
     })
 }
 
@@ -508,6 +542,16 @@ pub fn render_text(answer: &ConfigAnswer, max: usize) -> Vec<String> {
         chain.push(format!("{} (not found)", printable(name)));
     }
     lines.push(format!("chain: {}", chain.join(" : ")));
+    let shown = |b: &Option<String>| b.as_deref().map_or_else(|| "(none)".to_string(), printable);
+    lines.extend(answer.base_changes.iter().map(|c| {
+        format!(
+            "Base changed: {} -> {} by [{}] {}",
+            shown(&c.from),
+            shown(&c.to),
+            printable(&c.source),
+            printable(&c.pbo)
+        )
+    }));
     lines.push(format!("defined in ({}):", answer.pbos.len()));
     lines.extend(
         answer
@@ -570,6 +614,7 @@ pub fn render_json(answer: &ConfigAnswer, max: usize) -> Result<String, Error> {
         "subclasses": subs,
         "classes": nested,
         "pbos": answer.pbos,
+        "base_changes": answer.base_changes,
         "truncated": truncated,
     }))
     .map_err(|e| error!("cannot serialize: {e}"))

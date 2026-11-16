@@ -532,7 +532,7 @@ fn tools() -> Value {
         grep_tool(),
         api_tool(
             "api_config",
-            "Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.",
+            "Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it; a redefinition that changes or drops the base class (as the engine does) is reported as a base change. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.",
             &[(
                 "path",
                 's',

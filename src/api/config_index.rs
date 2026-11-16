@@ -91,6 +91,21 @@ pub struct ConfigNode {
     /// The class was deleted and defined again: the content of the layers before this one is dropped.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reset: bool,
+    /// Redefinitions that replaced the base class, in load order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub base_changes: Vec<BaseChange>,
+}
+
+/// A redefinition that gave a class another base class (or none): the engine takes the base of the last
+/// definition, so a mod that writes `class X {..}` without `: Base` cuts X off from its base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseChange {
+    /// The base before, `None` for no base.
+    pub from: Option<String>,
+    /// The base after, `None` for no base.
+    pub to: Option<String>,
+    /// The PBO of the redefinition, an index into [`ConfigLayer::pbos`].
+    pub pbo: u32,
 }
 
 /// The classes of one source, or of all selected sources merged.
@@ -201,17 +216,21 @@ impl ConfigLayer {
                 pbos: Vec::new(),
                 deleted: true,
                 reset: false,
+                base_changes: Vec::new(),
             },
         );
     }
 
-    /// A definition of the class `key`: creates it, extends it, or revives a deleted one.
+    /// A definition of the class `key`: creates it, extends it, or revives a deleted one. A definition with a
+    /// body sets the base class to what it names, none included (the engine does the same); the returned flag
+    /// says the base changed, and the change is recorded with `pbo`. An external declaration never gets here.
     fn define_class(
         &mut self,
         key: &str,
         name: &str,
         parent: Option<&str>,
-    ) -> Result<&mut ConfigNode, LimitHit> {
+        pbo: u32,
+    ) -> Result<(&mut ConfigNode, bool), LimitHit> {
         let fresh = |reset: bool| ConfigNode {
             name: name.to_string(),
             parent: parent.map(str::to_string),
@@ -219,20 +238,60 @@ impl ConfigLayer {
             pbos: Vec::new(),
             deleted: false,
             reset,
+            base_changes: Vec::new(),
         };
-        if !self.nodes.contains_key(key) && self.nodes.len() >= MAX_CLASSES {
+        let existed = self.nodes.contains_key(key);
+        if !existed && self.nodes.len() >= MAX_CLASSES {
             return Err(LimitHit);
         }
         let node = self
             .nodes
             .entry(key.to_string())
             .or_insert_with(|| fresh(false));
+        let mut changed = false;
         if node.deleted {
             *node = fresh(true);
-        } else if let Some(p) = parent {
-            node.parent = Some(p.to_string());
+        } else if existed {
+            let same = match (&node.parent, parent) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                node.base_changes.push(BaseChange {
+                    from: node.parent.take(),
+                    to: parent.map(str::to_string),
+                    pbo,
+                });
+                node.parent = parent.map(str::to_string);
+                changed = true;
+            }
         }
-        Ok(node)
+        Ok((node, changed))
+    }
+
+    /// The `api-config-base-changed` warning for the last base change of `key`, made in `pbo`.
+    fn base_changed_warning(&self, key: &str, pbo: u32) -> Warning {
+        let node = self.nodes.get(key);
+        let change = node.and_then(|n| n.base_changes.last());
+        let shown = |b: Option<&String>| b.map_or_else(|| "(none)".to_string(), |b| printable(b));
+        let file = self
+            .pbos
+            .get(usize::try_from(pbo).unwrap_or(usize::MAX))
+            .map(|p| format!("{}: {}", p.source, p.pbo));
+        let warning = Warning::new(
+            Some("api-config-base-changed"),
+            format!(
+                "class {} changes its base class: {} -> {}",
+                printable(key),
+                shown(change.and_then(|c| c.from.as_ref())),
+                shown(change.and_then(|c| c.to.as_ref()))
+            ),
+        );
+        match file {
+            Some(f) => warning.in_file(f),
+            None => warning,
+        }
     }
 
     /// Sets the property `name` of the class `key`; `append` extends an existing array (`+=`).
@@ -282,12 +341,13 @@ impl ConfigLayer {
     ///
     /// The PBOs of `over` are added to the PBO table. A layer that reaches a size limit stops taking classes
     /// and the function returns `false`.
-    pub fn merge(&mut self, over: ConfigLayer) -> bool {
+    pub fn merge(&mut self, over: ConfigLayer, warnings: &mut dyn WarningSink) -> bool {
         let map: Vec<u32> = over
             .pbos
             .iter()
             .map(|p| self.pbo_index(p.clone()))
             .collect();
+        let mapped = |p: u32| map.get(usize::try_from(p).unwrap_or(usize::MAX)).copied();
         for (key, node) in over.nodes {
             if node.deleted {
                 self.delete_class(&key, &node.name);
@@ -296,16 +356,34 @@ impl ConfigLayer {
             if node.reset {
                 self.delete_class(&key, &node.name);
             }
-            let Ok(mine) = self.define_class(&key, &node.name, node.parent.as_deref()) else {
+            let pbo = node.pbos.last().and_then(|p| mapped(*p)).unwrap_or(0);
+            let Ok((mine, changed)) =
+                self.define_class(&key, &node.name, node.parent.as_deref(), pbo)
+            else {
                 return false;
             };
             mine.reset |= node.reset;
             for p in node.pbos {
-                if let Some(&at) = map.get(usize::try_from(p).unwrap_or(usize::MAX))
+                if let Some(at) = mapped(p)
                     && !mine.pbos.contains(&at)
                 {
                     mine.pbos.push(at);
                 }
+            }
+            // the changes inside `over`, without the one the layer boundary just recorded
+            for c in node.base_changes {
+                let Some(at) = mapped(c.pbo) else { continue };
+                if mine
+                    .base_changes
+                    .last()
+                    .is_none_or(|l| l.from != c.from || l.to != c.to)
+                {
+                    mine.base_changes.push(BaseChange { pbo: at, ..c });
+                }
+            }
+            if changed {
+                let warning = self.base_changed_warning(&key, pbo);
+                warnings.warn(warning);
             }
             for (_, prop) in node.props {
                 if self
@@ -395,9 +473,16 @@ fn apply_class(
                 } else if c.is_external() {
                     // a forward declaration: it only tells the parser where the base class is
                 } else if depth < MAX_DEPTH {
-                    let node = layer.define_class(&key, name, c.parent())?;
+                    let (node, changed) = layer.define_class(&key, name, c.parent(), pbo)?;
                     if !node.pbos.contains(&pbo) {
                         node.pbos.push(pbo);
+                    }
+                    if changed {
+                        warnings.warn(
+                            layer
+                                .base_changed_warning(&key, pbo)
+                                .in_file(origin.to_string()),
+                        );
                     }
                     apply_class(layer, &key, c, pbo, depth + 1, warnings, origin)?;
                 }

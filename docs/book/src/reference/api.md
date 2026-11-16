@@ -478,17 +478,22 @@ dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh]
 
 Which configs: every rapified `config.bin` and every plain `config.cpp` of the PBOs in the `dta` and `addons`
 folders of the game (any case), including the ones in folders of a PBO (the weapon PBOs keep one per weapon), and
-of the `addons` folder of each selected mod. Everything else in the PBOs is left unread.
+of the `addons` folder of each selected mod. `-m all` selects the installed mods that have scripts, so a mod with
+only a config must be named. Everything else in the PBOs is left unread.
 
 Load order and merging, as the engine does it:
 
 - Vanilla loads first, then the mods in `-m` order. Inside the game, and inside each mod, the PBOs are sorted
   by `CfgPatches.*.requiredAddons` (an addon after the PBO that provides the addons it requires); sorted path order
   breaks ties. A cycle in `requiredAddons` is a warning (`api-config-order`) and the PBOs involved load in path order.
-- A class defined again extends the earlier definition: its properties are added or overwritten and it keeps its
-  base class unless the new definition names one. `delete X;` removes the class with everything inside it.
+- A class defined again extends the earlier definition: its properties are added or overwritten. Like the engine,
+  the base class becomes whatever the new definition names, and no base when it names none: a mod that writes
+  `class Hatchback_02 { ... }` without `: CarScript` cuts the class off from its base (the game logs
+  `Updating base class`). The lookup shows it as `Base changed: CarScript -> (none) by [<source>] <pbo>`, JSON has
+  `base_changes`, and the warning `api-config-base-changed` is raised when the index is built or merged. `delete X;`
+  removes the class with everything inside it.
   `x[] += {...};` appends to the array of the earlier definition or, when the class has none, of the base class.
-  A forward declaration (`class X;`) creates nothing.
+  A forward declaration (`class X;`) creates nothing and changes nothing.
 
 Inheritance: for `class B: A` the base `A` is looked up in the scope that holds `B` first (never `B` itself), then
 in the classes that scope inherits from, then in the scopes around it, up to the top level. That is how

@@ -1,5 +1,6 @@
 //! `dayzmake api config`: lookup of config classes with their inheritance chain and resolved properties.
 #![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
+// the CLI is run with unix-style environment variables and paths only
 #![cfg(unix)]
 
 use std::fs;
@@ -444,4 +445,89 @@ fn a_required_addons_cycle_still_loads_everything() {
     let (code, _, err) = w.run(&["api", "config", "CfgVehicles/C2Car"]);
     assert_eq!(code, 0, "{err}");
     assert!(err.contains("api-config-order"), "{err}");
+}
+
+fn base_world(extra_b: &str) -> World {
+    let w = World::new();
+    write(
+        &w.game.join("Addons/rebase.pbo"),
+        &config_pbo(
+            &format!(
+                "class CfgPatches {{ class R_Patch {{ requiredAddons[] = {{\"B_Patch\"}}; }}; }};\n\
+                 class CfgVehicles {{ {extra_b} }};"
+            ),
+            true,
+        ),
+    );
+    w
+}
+
+#[test]
+fn a_redefinition_without_a_base_drops_it_and_records_the_change() {
+    let w = base_world("class Hatch { displayName = \"Cut\"; };");
+    // the first run builds the index, and warns
+    let (code, out, err) = w.run(&["api", "config", "CfgVehicles/Hatch"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("api-config-base-changed"), "{err}");
+    let v = json(&w, "CfgVehicles/Hatch", &[]);
+    assert_eq!(v["chain"].as_array().expect("chain").len(), 1);
+    assert_eq!(v["chain_end"], "root");
+    assert_eq!(v["base_changes"][0]["from"], "Base");
+    assert!(v["base_changes"][0]["to"].is_null());
+    assert_eq!(v["base_changes"][0]["pbo"], "Addons/rebase.pbo");
+    // nothing inherited is left
+    assert!(
+        v["properties"]
+            .as_array()
+            .expect("p")
+            .iter()
+            .all(|p| p["name"] != "tags" || p["origin"] == "Hatch")
+    );
+    assert!(
+        out.contains("Base changed: Base -> (none) by [vanilla] Addons/rebase.pbo"),
+        "{out}"
+    );
+}
+
+#[test]
+fn a_redefinition_with_another_base_is_recorded_and_with_the_same_base_is_not() {
+    let w = base_world("class Hatch: Other { };");
+    let v = json(&w, "CfgVehicles/Hatch", &[]);
+    assert_eq!(v["base_changes"][0]["from"], "Base");
+    assert_eq!(v["base_changes"][0]["to"], "Other");
+    let w = base_world("class Hatch: BASE { x = 1; };");
+    let v = json(&w, "CfgVehicles/Hatch", &[]);
+    assert_eq!(v["base_changes"].as_array().expect("changes").len(), 0);
+    let (_, out, err) = w.run(&["api", "config", "CfgVehicles/Hatch"]);
+    assert!(
+        !out.contains("Base changed") && !err.contains("base-changed"),
+        "{out}{err}"
+    );
+}
+
+#[test]
+fn an_extern_declaration_changes_nothing() {
+    let w = base_world("class Hatch;");
+    let v = json(&w, "CfgVehicles/Hatch", &[]);
+    assert_eq!(v["chain"].as_array().expect("chain").len(), 2);
+    assert_eq!(v["base_changes"].as_array().expect("changes").len(), 0);
+}
+
+#[test]
+fn a_mod_that_drops_the_base_is_reported_across_sources() {
+    let w = World::new();
+    let dir = w.home.join("@Cut");
+    write(
+        &dir.join("addons/c.pbo"),
+        &config_pbo(
+            "class CfgPatches { class C_Patch { requiredAddons[] = {\"B_Patch\"}; }; }; class CfgVehicles { class Hatch { y = 1; }; };",
+            false,
+        ),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
+    assert_eq!(v["chain_end"], "root");
+    assert_eq!(v["chain"].as_array().expect("chain").len(), 1);
+    assert_eq!(v["base_changes"][0]["from"], "Base");
+    assert_ne!(v["base_changes"][0]["source"], "vanilla");
 }

@@ -905,7 +905,7 @@ pub fn load_config(
                     printable(&layer.name),
                     layer.class_count()
                 ));
-                if !merged.merge(layer) {
+                if !merged.merge(layer, warnings) {
                     warnings.warn(
                         Warning::new(
                             Some("api-config-limit"),

@@ -61,6 +61,16 @@ The cache folder cannot be found, created or written, or a cache file cannot be 
 warning: cannot create the cache directory /proc/nope/x: No such file or directory (os error 2); the index is built without a cache [api-cache]
 ```
 
+## api-config-base-changed
+
+Raised by: `api config`, `mcp`.
+
+A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. The warning is raised when the index of a source is built and when the sources are merged.
+
+```text
+In file …/addons/rebase.pbo: warning: class cfgvehicles/hatch changes its base class: Base -> (none) [api-config-base-changed]
+```
+
 ## api-config-limit
 
 Raised by: `api config`, `mcp`.
