@@ -31,6 +31,7 @@ use dayzmake_core::config::{
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
 use dayzmake_core::pbo::{EntryFilter, PBO};
+use dayzmake_core::preprocess::{IncludeFolders, MemoryIncludes};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
 /// Version of the config index layout. Bump it on every change of the model; the cache treats other values as
@@ -540,17 +541,29 @@ fn patches_of(config: &Config) -> Patches {
 /// A config entry of a PBO and what reading it gave.
 type ReadConfig = (String, Result<Config, Error>);
 
+/// Whether a PBO entry can be the target of an `#include` of a config (a header or text file).
+fn is_includable(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    ["hpp", "h", "inc", "hh", "hxx", "cpp", "ext", "txt", "cfg"]
+        .iter()
+        .any(|e| lower.rsplit_once('.').is_some_and(|(_, x)| x == *e))
+}
+
 /// The configs of a PBO: `config.bin` (rapified) or `config.cpp` (text) of the top level and of every folder
 /// below it, `config.bin` winning where a folder has both. The top level comes first, then the folders in path
 /// order. A config that cannot be read is an `Err` in its place.
 fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Error> {
     let mut file =
         File::open(path).map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
-    let selection = PBO::read_entries(&mut file, |n| filter.matches(n))
+    // the configs, and the text files they may include: includes are resolved among the entries of this PBO only
+    let selection = PBO::read_entries(&mut file, |n| filter.matches(n) || is_includable(n))
         .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
     // folder (lowercase, `/`-separated, with a trailing `/`) -> (is config.bin, entry index)
     let mut chosen: BTreeMap<String, (bool, usize)> = BTreeMap::new();
     for (i, entry) in selection.entries().iter().enumerate() {
+        if !filter.matches(entry.name()) {
+            continue;
+        }
         let name = entry.name().replace('\\', "/").to_lowercase();
         let (folder, file_name) = name
             .rsplit_once('/')
@@ -561,6 +574,16 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
             *slot = (true, i);
         }
     }
+    let includes = MemoryIncludes::new(
+        selection.header_extension("prefix").unwrap_or("").to_string(),
+        selection
+            .entries()
+            .iter()
+            .filter(|e| is_includable(e.name()))
+            .filter_map(|e| Some((e.name().to_string(), e.data().ok()?.to_vec())))
+            .collect(),
+    );
+    let folders = IncludeFolders::new(Vec::new()).with_memory(includes);
     let mut out = Vec::new();
     for (_, (is_bin, i)) in chosen {
         let Some(entry) = selection.entries().get(i) else {
@@ -576,10 +599,10 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
                     Config::read_rapified(&mut Cursor::new(bytes))
                 } else {
                     // the preprocessor warnings say nothing about the classes, only about how they were written
-                    Config::from_string(
+                    Config::from_string_in(
                         String::from_utf8_lossy(bytes).into_owned(),
-                        None,
-                        &[],
+                        Some(PathBuf::from(&name)),
+                        &folders,
                         &mut Warnings::new(),
                     )
                 }

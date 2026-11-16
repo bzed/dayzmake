@@ -622,3 +622,42 @@ fn base_names_compare_ignoring_case_across_sources() {
     let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
     assert!(change_list(&v).is_empty(), "{v}");
 }
+
+/// A mod PBO whose `config.cpp` includes `include`; `extra` are more entries of the PBO.
+fn include_mod(w: &World, include: &str, extra: &[(&str, &[u8])]) -> String {
+    let dir = w.home.join("@Inc");
+    let text = format!(
+        "class CfgPatches {{ class I_Patch {{ requiredAddons[] = {{}}; }}; }};\nclass Leaked {{\n#include \"{include}\"\n}};\n"
+    );
+    let mut entries: Vec<(&str, &[u8])> = vec![("config.cpp", text.as_bytes())];
+    entries.extend_from_slice(extra);
+    write(
+        &dir.join("addons/i.pbo"),
+        &support::raw_pbo(&entries, &[("prefix", "inc")]),
+    );
+    dir.to_string_lossy().into_owned()
+}
+
+/// `#include` in a mod config never reads the file system (#97): an absolute path, `..` and a file of the
+/// working directory are refused with a warning, a sibling entry of the PBO is resolved.
+#[test]
+fn includes_come_from_the_pbo_only() {
+    let w = World::new();
+    let secret = w.home.join("secret.hpp");
+    fs::write(&secret, "token = \"s3cr3t\";\n").expect("secret");
+    fs::write(w.home.join("cwdonly.hpp"), "token = \"s3cr3t\";\n").expect("cwd file");
+    for include in [
+        secret.to_string_lossy().into_owned(),
+        "..\\secret.hpp".to_string(),
+        "cwdonly.hpp".to_string(),
+        "\\other\\cwdonly.hpp".to_string(),
+    ] {
+        let m = include_mod(&w, &include, &[]);
+        let (code, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+        assert!(!out.contains("s3cr3t") && !err.contains("s3cr3t"), "{include}: {out}{err}");
+        assert!(err.contains("api-bad-config") || code != 0, "{include}: code {code} out {out} err {err}");
+    }
+    let m = include_mod(&w, "sub\\a.hpp", &[("sub\\a.hpp", b"found = 7;\n")]);
+    let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+    assert!(out.contains("found = 7"), "{out}{err}");
+}
