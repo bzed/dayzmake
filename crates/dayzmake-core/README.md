@@ -34,8 +34,12 @@ need to be GPL-2.0-or-later compatible.
 
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
+  A float that does not fit an f32 (`1e999`, `inf`, `nan`) is an error, never infinity or NaN; followed by text
+  (`1e999x`) it stays an unquoted string, and a float entry may end at a closing brace without a semicolon.
 - `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per
-  LOD, vertex and face counts, textures, materials, proxies, selections and properties. Other versions are an error.
+  LOD, vertex and face counts, textures, materials, proxies, selections and properties. Only v56 is decoded,
+  other versions are an error, and LOD ranges that overlap are refused. New dependency: `lzokay-native`
+  (decompression only).
 - `Paa::read` accepts the formats `0x4444` (`"RGBA4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
   `Paa::to_dynamic_image` decodes them to RGBA (#83); `Paa::write` writes their stored bytes back unchanged. A
   wrong checksum or a cut-short LZSS stream is an error, and a PNG file gives an error that names the PNG.
