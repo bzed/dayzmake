@@ -250,10 +250,11 @@ pre > .hljs {
     hyphens: none;
 }
 
+/* phones: inline code may wrap so three-column option tables fit the screen */
 @media (max-width: 600px) {
     :not(pre) > code {
         white-space: normal;
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
     }
 }
 
@@ -261,7 +262,7 @@ pre > .hljs {
 .synopsis pre code,
 .synopsis pre code.hljs {
     white-space: pre-wrap;
-    overflow-wrap: anywhere;
+    overflow-wrap: break-word;
     overflow-x: visible;
     padding-inline-start: calc(1.2em + 4ch);
     text-indent: -4ch;

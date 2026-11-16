@@ -1,6 +1,5 @@
 ---
 source: tests/golden_mcp.rs
-assertion_line: 235
 expression: r.result(10 + i as u64)
 ---
 {
