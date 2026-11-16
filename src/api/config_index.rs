@@ -575,7 +575,7 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
         }
     }
     let includes = MemoryIncludes::new(
-        selection.header_extension("prefix").unwrap_or("").to_string(),
+        selection.header_extension("prefix").unwrap_or(""),
         selection
             .entries()
             .iter()

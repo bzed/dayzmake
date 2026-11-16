@@ -10,8 +10,9 @@ use dayzmake_core::warning::WarningSink;
 ///
 /// # Errors
 ///
-/// Returns an error if the source has no PBO or a PBO is malformed, the target exists without
-/// `options.force`, or the tree cannot be written.
+/// Returns an error if the source has no PBO or cannot be read, a PBO is malformed or an entry is truncated or does
+/// not decompress, the target exists without `options.force`, is not a folder, is inside the source or contains it,
+/// is a folder that is neither empty nor an earlier extract result (no `pbo-map.tsv`), or the tree cannot be written.
 pub fn cmd_extract(
     source: &Path,
     target: &Path,

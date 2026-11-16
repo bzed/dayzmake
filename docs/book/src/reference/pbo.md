@@ -396,8 +396,10 @@ Behaviour:
   and a `.bin` that cannot be derapified are skipped, with a warning.
 - `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
   <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
-  name without `.pbo`. The prefix bytes are written as they are, except TAB, CR and LF, which are written
-  as `\t`, `\r` and `\n`. The PBOs whose files were skipped because of their prefix are listed too.
+  name without `.pbo`. The prefix is written with `/` instead of `\` (like the folders of the tree), and then `\`, TAB, CR and
+  LF in either column are written as `\\`, `\t`, `\r` and `\n`, so every `\` in the file starts an escape and a
+  line reads back unambiguously (a prefix `dz\gear\navigation` is `dz/gear/navigation`). The prefix as stored is in
+  `inspect --json`. The PBOs whose files were skipped because of their prefix are listed too.
 - Memory: an entry that is stored uncompressed is copied from the PBO to its file in pieces. Only compressed entries
   and, with `--derapify`, `*.bin` files that start with the rapified signature are read into memory, up to 512 MiB
   each (a compressed entry over that is an error), so the largest PBOs extract in a small amount of memory.
@@ -407,8 +409,8 @@ Example:
 ```text
 $ dayzmake extract --derapify --only '*.c' --only '*.bin' --only '*.cpp' ~/dayz-server game
 $ cat game/pbo-map.tsv
-dz\gear\camping	addons/gear_camping.pbo
-dz\scripts	dta/scripts.pbo
+dz/gear/camping	addons/gear_camping.pbo
+dz/scripts	dta/scripts.pbo
 $ ls game/dz/scripts
 3_game  4_world  5_mission  config.cpp
 ```

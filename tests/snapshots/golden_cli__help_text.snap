@@ -56,7 +56,7 @@ Commands:
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
-                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
                 config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).

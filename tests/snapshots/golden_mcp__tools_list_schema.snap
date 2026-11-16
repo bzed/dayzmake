@@ -578,7 +578,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "array"
         },
         "force": {
-          "description": "Overwrite existing target files.",
+          "description": "Replace an earlier extract result or an empty folder.",
           "type": "boolean"
         },
         "only": {

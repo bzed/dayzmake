@@ -15,7 +15,7 @@ Each section lists the commands that can raise the warning, what triggers it and
 
 Raised by: `api`, `mcp`.
 
-A `config.bin` or `config.cpp` cannot be read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
+A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` component or a file that is not in the PBO makes the config unreadable, and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
 
 ```text
 In file …/badmod/addons/entry.pbo: warning: cannot read config.bin: failed to fill whole buffer [api-bad-config]
@@ -43,7 +43,7 @@ warning: skipping mod <name>: <reason> [api-bad-mod]   (the message format)
 
 ## api-bad-pbo
 
-Raised by: `api`, `mcp`.
+Raised by: `api` (also `api grep`), `mcp`.
 
 A PBO of a mod is not readable as a PBO. It is skipped.
 
@@ -128,7 +128,7 @@ Raised by: `extract --derapify`, and the MCP tool `extract`.
 A `*.bin` starts with the rapified signature but cannot be read as a config. It is written as it is, with its `.bin` name.
 
 ```text
-warning: Keeping "config.bin" as it is: File doesn't seem to be a rapified config. [derapify-failed]
+warning: Keeping "config.bin" as it is: failed to fill whole buffer [derapify-failed]
 ```
 
 ## duplicate-entry
@@ -173,7 +173,7 @@ warning: Include "Inc/Common.HPP" only matched ".../w/inc/common.hpp" ignoring c
 
 ## leading-separator
 
-Raised by: `unpack`.
+Raised by: `unpack`, `extract`.
 
 A PBO entry name starts with `\` or `/`. It is extracted without it.
 
@@ -223,7 +223,7 @@ In file data/broken.p3d: warning: Cannot check textures and materials: not an ML
 
 ## non-utf8-filename
 
-Raised by: `unpack`.
+Raised by: `unpack`, `extract`.
 
 A PBO entry name is not valid UTF-8. It is extracted as Windows-1252.
 

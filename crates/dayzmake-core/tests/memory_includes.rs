@@ -1,5 +1,4 @@
 //! `#include` resolved from the entries of one PBO only (#97): the file system is never read.
-#![expect(clippy::expect_used, reason = "a failing expect is a failing test")]
 use std::fs;
 use std::path::PathBuf;
 
@@ -15,8 +14,8 @@ fn files(list: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
 }
 
 fn run(prefix: &str, list: &[(&str, &str)], origin: &str, input: &str) -> Result<String, String> {
-    let folders = IncludeFolders::new(Vec::new())
-        .with_memory(MemoryIncludes::new(prefix.to_string(), files(list)));
+    let folders =
+        IncludeFolders::new(Vec::new()).with_memory(MemoryIncludes::new(prefix, files(list)));
     preprocess_in(
         input.to_string(),
         Some(PathBuf::from(origin)),

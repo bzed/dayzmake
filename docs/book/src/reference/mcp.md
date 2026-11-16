@@ -315,7 +315,7 @@ Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree `
 |---|---|---|---|
 | `source` | string | yes | DayZ client or server folder, mod folder (`dta/` and `addons/` are searched) or one PBO. |
 | `target` | string | yes | Folder to write the tree to. |
-| `force` | boolean | no | Overwrite existing target files. |
+| `force` | boolean | no | Replace an earlier extract result or an empty folder. |
 | `derapify` | boolean | no | Write every rapified `.bin` as a `.cpp` of the same name. |
 | `exclude` | array of strings | no | Glob patterns of entries to leave out (case-insensitive, `/` separators). |
 | `only` | array of strings | no | Glob patterns: write only the entries that match one (`exclude` wins). |

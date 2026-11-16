@@ -364,6 +364,12 @@ const MAX_ARG: (&str, char, &str) = (
     "At most this many lines or items (default 120).",
 );
 const FORCE_ARG: (&str, char, &str) = ("force", 'b', "Overwrite existing target files.");
+/// `extract` only replaces an empty folder or an earlier result, not any existing target.
+const EXTRACT_FORCE_ARG: (&str, char, &str) = (
+    "force",
+    'b',
+    "Replace an earlier extract result or an empty folder.",
+);
 const OFFSET_ARG: (&str, char, &str) = (
     "offset",
     'i',
@@ -634,7 +640,7 @@ fn tools() -> Value {
                     "DayZ client or server folder, mod folder (dta/ and addons/ are searched) or one PBO."
                 ),
                 ("target", 's', "Folder to write the tree to."),
-                FORCE_ARG,
+                EXTRACT_FORCE_ARG,
                 (
                     "derapify",
                     'b',

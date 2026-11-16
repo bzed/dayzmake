@@ -654,8 +654,14 @@ fn includes_come_from_the_pbo_only() {
     ] {
         let m = include_mod(&w, &include, &[]);
         let (code, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
-        assert!(!out.contains("s3cr3t") && !err.contains("s3cr3t"), "{include}: {out}{err}");
-        assert!(err.contains("api-bad-config") || code != 0, "{include}: code {code} out {out} err {err}");
+        assert!(
+            !out.contains("s3cr3t") && !err.contains("s3cr3t"),
+            "{include}: {out}{err}"
+        );
+        assert!(
+            err.contains("api-bad-config") || code != 0,
+            "{include}: code {code} out {out} err {err}"
+        );
     }
     let m = include_mod(&w, "sub\\a.hpp", &[("sub\\a.hpp", b"found = 7;\n")]);
     let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);

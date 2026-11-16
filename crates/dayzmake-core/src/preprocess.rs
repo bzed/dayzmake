@@ -243,7 +243,7 @@ impl MemoryIncludes {
     /// An include source over `files` (name, content) of an archive with the given `prefix` (may be empty).
     /// The first of several entries with the same name (ignoring case and separator) wins.
     #[must_use]
-    pub fn new(prefix: String, files: Vec<(String, Vec<u8>)>) -> Self {
+    pub fn new(prefix: &str, files: Vec<(String, Vec<u8>)>) -> Self {
         let mut map = std::collections::BTreeMap::new();
         for (name, content) in files {
             map.entry(name.replace('\\', "/").to_lowercase())
@@ -285,7 +285,9 @@ impl MemoryIncludes {
             }
             below.to_string()
         } else {
-            if include_path.starts_with('/') || crate::pbo::safe_relative_path(include_path).is_none() {
+            if include_path.starts_with('/')
+                || crate::pbo::safe_relative_path(include_path).is_none()
+            {
                 return Err(bad("absolute, drive, `..` or invalid path"));
             }
             let rel = include_path.replace('\\', "/").to_lowercase();

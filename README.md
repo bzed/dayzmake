@@ -36,12 +36,12 @@ is maintained here.
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
   ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
   `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
-  earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
+  earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by [<source>] <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
   output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
-  error. The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
+  error. An `#include` in a mod `config.cpp` is resolved from the entries of the same PBO only, never from the file system (#97). The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
 - `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the
   `dta` and `addons` folders of a DayZ install or mod, or a single PBO, into `<targetfolder>/<prefix>/`, optionally
-  derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix, TAB, PBO path). The tree is
+  derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix with `/` separators, TAB, PBO path; `\`, TAB, CR and LF are escaped as `\\`, `\t`, `\r`, `\n`). The tree is
   written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree; `-f`
   only replaces an empty folder or an earlier result (one with a `pbo-map.tsv`) and never one that contains or lies
   inside the source. Entries are streamed, not read whole, and an I/O or decompression error fails the extract. The MCP
@@ -361,7 +361,7 @@ Commands:
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
-                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
                 config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
@@ -480,8 +480,9 @@ claude mcp add dayzmake -- dayzmake mcp
 Tools:
 
 - `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_grep`, `api_defines`,
-  `api_update`, `api_mods`: the script API index (see above). The first nine take `mods`, `experimental`, `dayz` and
-  `refresh`; `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
+  `api_config`, `api_update`, `api_mods`: the script API index (see above). All but `api_grep` and `api_mods` take
+  `mods`, `experimental`, `dayz` and `refresh`; `api_grep` takes the same without `refresh` (it reads the PBOs and
+  builds no index); `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
   `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
   tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with
   `mods=all` warms them.
