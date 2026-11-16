@@ -6,7 +6,8 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let input = String::from_utf8_lossy(data).into_owned();
-    // Includes read host files (cwd-relative or absolute); they have their own tests. The grammar
+    // Includes read host files (cwd-relative or absolute); they have their own tests (include cycles and depth: `tests/preprocess.rs`).
+    // The preprocessor has no in-memory include resolver, so the target cannot feed it files. The grammar
     // accepts `#include`, `# include` and `#\tinclude`, so skip every input with "include".
     if input.contains("include") {
         return;

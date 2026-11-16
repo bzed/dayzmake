@@ -320,3 +320,73 @@ fn macro_expansion_depth_is_limited() {
         "{message}"
     );
 }
+
+fn run_file(path: &std::path::Path) -> std::io::Result<(String, PreprocessInfo)> {
+    let input = std::fs::read_to_string(path)?;
+    preprocess(
+        input,
+        Some(path.to_path_buf()),
+        &[],
+        &mut Warnings::default(),
+    )
+}
+
+/// A file that includes itself is an error naming the chain, not a stack overflow.
+#[test]
+fn include_self_cycle_is_an_error() {
+    let dir = tempdir().unwrap();
+    let a = dir.path().join("self.hpp");
+    std::fs::write(&a, "#include \"self.hpp\"\n").unwrap();
+    let err = run_file(&a).unwrap_err().to_string();
+    assert!(err.contains("cycle"), "{err}");
+    assert!(err.contains("self.hpp"), "{err}");
+}
+
+/// A -> B -> A, reached through `../` spellings of the same file.
+#[test]
+fn include_two_file_cycle_is_an_error() {
+    let dir = tempdir().unwrap();
+    create_dir(dir.path().join("sub")).unwrap();
+    let a = dir.path().join("a.hpp");
+    std::fs::write(&a, "#include \"sub\\b.hpp\"\n").unwrap();
+    std::fs::write(
+        dir.path().join("sub").join("b.hpp"),
+        "#include \"..\\a.hpp\"\n",
+    )
+    .unwrap();
+    let err = run_file(&a).unwrap_err().to_string();
+    assert!(err.contains("cycle"), "{err}");
+    assert!(err.contains("b.hpp"), "{err}");
+}
+
+fn chain(dir: &std::path::Path, files: usize) -> std::io::Result<PathBuf> {
+    for i in 0..files {
+        let body = if i + 1 < files {
+            format!("#include \"f{}.hpp\"\n", i + 1)
+        } else {
+            "x = 1;\n".to_string()
+        };
+        std::fs::write(dir.join(format!("f{i}.hpp")), body)?;
+    }
+    Ok(dir.join("f0.hpp"))
+}
+
+/// 33 nested includes exceed the limit of 32.
+#[test]
+fn include_chain_over_the_limit_is_an_error() {
+    let dir = tempdir().unwrap();
+    // f0 is the root; f1..f33 are 33 nested includes.
+    let root = chain(dir.path(), 34).unwrap();
+    let err = run_file(&root).unwrap_err().to_string();
+    assert!(err.contains("too deep"), "{err}");
+    assert!(err.contains("32"), "{err}");
+}
+
+/// 32 nested includes are still fine.
+#[test]
+fn include_chain_at_the_limit_works() {
+    let dir = tempdir().unwrap();
+    let root = chain(dir.path(), 33).unwrap();
+    let (out, _) = run_file(&root).unwrap();
+    assert!(out.contains("x = 1;"));
+}

@@ -202,6 +202,8 @@ pub struct PreprocessInfo {
     /// original input to `preprocess` and `origin` was not given.
     pub(crate) line_origins: Vec<(u32, Option<PathBuf>)>,
     import_stack: Vec<PathBuf>,
+    /// Number of `#include`s currently being processed (the root file does not count).
+    include_depth: usize,
 }
 
 impl PreprocessInfo {
@@ -216,6 +218,14 @@ impl PreprocessInfo {
 
 /// Maximum nesting of macro expansions; deeper input is an error, not a stack overflow.
 const MAX_EXPANSION_DEPTH: usize = 64;
+
+/// Maximum nesting of `#include`s; deeper input is an error, not a stack overflow.
+const MAX_INCLUDE_DEPTH: usize = 32;
+
+/// The file as the cycle check compares it: canonical when the file system can say, else as given.
+fn identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
 
 fn parse_macro(input: &str) -> Result<Macro, Error> {
     let without_original = preprocess_grammar::macro_proper(input)
@@ -797,12 +807,6 @@ fn preprocess_rec(
                             continue;
                         }
 
-                        //let import_tree = &mut info.import_tree;
-                        //let includer = import_tree.get(&path);
-                        //if let Some(path) = includer {
-                        //    // @todo: complain
-                        //}
-
                         let file_path = find_include_file(
                             &path,
                             origin,
@@ -811,7 +815,25 @@ fn preprocess_rec(
                             warnings,
                         )?;
 
+                        let wanted = identity(&file_path);
+                        if info.import_stack.iter().any(|p| identity(p) == wanted) {
+                            let chain: Vec<String> = info
+                                .import_stack
+                                .iter()
+                                .chain(std::iter::once(&file_path))
+                                .map(|p| printable(&p.display().to_string()))
+                                .collect();
+                            return Err(error!("Include cycle: {}", chain.join(" -> ")));
+                        }
+                        if info.include_depth >= MAX_INCLUDE_DEPTH {
+                            return Err(error!(
+                                "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                                printable(&path)
+                            ));
+                        }
+
                         info.import_stack.push(file_path.clone());
+                        info.include_depth += 1;
 
                         let mut content = String::new();
                         File::open(&file_path)?.read_to_string(&mut content)?;
@@ -829,6 +851,7 @@ fn preprocess_rec(
                         ))?;
 
                         info.import_stack.pop();
+                        info.include_depth -= 1;
 
                         output += &result;
                     }
@@ -986,6 +1009,7 @@ pub fn preprocess(
     let mut info = PreprocessInfo {
         line_origins: Vec::new(),
         import_stack: Vec::new(),
+        include_depth: 0,
     };
 
     if let Some(ref path) = origin {
