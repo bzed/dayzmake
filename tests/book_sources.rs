@@ -45,8 +45,12 @@ fn includes(text: &str) -> Vec<(String, String)> {
         let after = &rest[start + "{{#include ".len()..];
         let Some(end) = after.find("}}") else { break };
         let spec = after[..end].trim();
-        if let Some((path, anchor)) = spec.rsplit_once(':') {
-            found.push((path.to_string(), anchor.to_string()));
+        match spec.rsplit_once(':') {
+            Some((path, anchor)) if !path.is_empty() && !anchor.contains(['/', '\\']) => {
+                found.push((path.to_string(), anchor.to_string()));
+            }
+            // no `:anchor`: the whole file would be included; includes_resolve reports it
+            _ => found.push((spec.to_string(), String::new())),
         }
         rest = &after[end..];
     }
@@ -129,6 +133,12 @@ fn includes_resolve() {
                 problems.push(format!("{name}: {path} does not exist (anchor {anchor})"));
                 continue;
             };
+            if anchor.is_empty() {
+                problems.push(format!(
+                    "{name}: the include of {path} has no :anchor (it would pull in the whole file)"
+                ));
+                continue;
+            }
             let lines: Vec<&str> = content.lines().collect();
             if anchor_range(&lines, &anchor).is_none() {
                 problems.push(format!(
@@ -239,12 +249,23 @@ fn reference_section(heading: &str) -> Option<String> {
 
 /// The usage lines of the CLI as `(heading name, line)`, e.g. `("api class", "dayzmake api class ...")`.
 fn usage_commands() -> Vec<(String, String)> {
+    // the lines between `Usage:` and the first blank line, whatever their indentation
+    let block: Vec<&str> = dayzmake::run::USAGE
+        .lines()
+        .skip_while(|l| l.trim() != "Usage:")
+        .skip(1)
+        .take_while(|l| !l.trim().is_empty())
+        .map(str::trim_start)
+        .collect();
+    let lines = block.iter().filter(|l| l.starts_with("dayzmake ")).count();
     let mut commands = Vec::new();
-    for line in dayzmake::run::USAGE.lines() {
-        let Some(rest) = line.trim().strip_prefix("dayzmake ") else {
+    let mut global = 0;
+    for line in &block {
+        let Some(rest) = line.strip_prefix("dayzmake ") else {
             continue;
         };
-        if !line.starts_with("    dayzmake ") || rest.starts_with(['(', '-']) {
+        if rest.starts_with(['(', '-']) {
+            global += 1; // `dayzmake (-h | --help)` and `dayzmake --version`
             continue;
         }
         let mut words = rest.split_whitespace();
@@ -254,8 +275,19 @@ fn usage_commands() -> Vec<(String, String)> {
         } else {
             first.to_string()
         };
-        commands.push((name, line.trim().to_string()));
+        commands.push((name, (*line).to_string()));
     }
+    // a changed layout of USAGE must not make the parsing pass without checking anything
+    assert_eq!(
+        commands.len() + global,
+        lines,
+        "every `dayzmake ` line of the usage block must be a command or a global form"
+    );
+    assert!(
+        commands.len() >= 24,
+        "only {} commands found in the usage block of dayzmake::run::USAGE",
+        commands.len()
+    );
     commands
 }
 
@@ -350,7 +382,7 @@ fn mcp_tools() -> Vec<(String, Vec<String>)> {
         .expect("write the request");
     let out = child.wait_with_output().expect("server output");
     let reply: serde_json::Value = serde_json::from_slice(&out.stdout).expect("one JSON-RPC reply");
-    reply["result"]["tools"]
+    let tools: Vec<(String, Vec<String>)> = reply["result"]["tools"]
         .as_array()
         .expect("a tool list")
         .iter()
@@ -361,7 +393,9 @@ fn mcp_tools() -> Vec<(String, Vec<String>)> {
                 .unwrap_or_default();
             (t["name"].as_str().expect("tool name").to_string(), props)
         })
-        .collect()
+        .collect();
+    assert!(!tools.is_empty(), "tools/list returned no tools");
+    tools
 }
 
 #[test]
