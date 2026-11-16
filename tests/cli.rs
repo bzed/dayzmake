@@ -786,6 +786,17 @@ fn build_writes_to_a_windows_device_name_directly() {
     assert_eq!(left, ["m"], "no temp file or NUL file is left");
 }
 
+/// #62: a target named like one of the newer device names is written as a device, not as a file.
+#[cfg(windows)]
+#[test]
+fn build_writes_to_a_conout_device_name_directly() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "m/a.txt", "hello");
+    let (code, _, err) = dayzmake(&["build", "m", "CONOUT$"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(!dir.path().join("CONOUT$").exists());
+}
+
 /// A regular file reached under a device name through a verbatim path (`\\?\C:\tmp\NUL`).
 #[cfg(windows)]
 #[expect(clippy::unwrap_used, reason = "test helper")]

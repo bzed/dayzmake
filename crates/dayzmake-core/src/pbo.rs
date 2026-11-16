@@ -1369,8 +1369,8 @@ fn entry_name(relative: &Path, binarize: bool) -> (String, String, bool) {
     (pre, name, generated)
 }
 
-/// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, ...), which
-/// Windows opens instead of a file whatever the extension.
+/// Whether a path component names a Windows device (`CON`, `NUL.txt`, `COM1`, `COM\u{b9}`, `LPT0`, `CONIN$`,
+/// ...), which Windows opens instead of a file whatever the extension and case.
 #[must_use]
 pub fn is_device_name(component: &str) -> bool {
     let stem = component
@@ -1379,11 +1379,18 @@ pub fn is_device_name(component: &str) -> bool {
         .unwrap_or_default()
         .trim_end_matches(' ')
         .to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ["COM", "LPT"].iter().any(|p| {
-            stem.strip_prefix(p)
-                .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|p| {
+        stem.strip_prefix(p).is_some_and(|n| {
+            let mut chars = n.chars();
+            matches!(
+                (chars.next(), chars.next()),
+                (Some('0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}'), None)
+            )
         })
+    })
 }
 
 /// Maps an untrusted PBO entry name or prefix to a relative path that cannot leave the folder it
@@ -1657,6 +1664,59 @@ pub fn unpack<I: Read>(
 
 #[cfg(test)]
 mod tests {
+    /// #62: the full list of Windows device names, in any case, with and without an extension.
+    #[test]
+    fn device_names_are_complete() {
+        for name in [
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM0",
+            "COM1",
+            "COM9",
+            "LPT0",
+            "LPT1",
+            "LPT9",
+            "COM\u{b9}",
+            "COM\u{b2}",
+            "COM\u{b3}",
+            "LPT\u{b9}",
+            "LPT\u{b2}",
+            "LPT\u{b3}",
+            "CONIN$",
+            "CONOUT$",
+        ] {
+            for variant in [
+                name.to_string(),
+                name.to_lowercase(),
+                format!("{name}.txt"),
+                format!("{}.cfg", name.to_lowercase()),
+                format!("{name} .x"),
+            ] {
+                assert!(super::is_device_name(&variant), "{variant}");
+                assert!(
+                    super::safe_relative_path(&format!("a\\{variant}")).is_none(),
+                    "{variant}"
+                );
+            }
+        }
+        for name in [
+            "COM",
+            "COM10",
+            "COM\u{b9}\u{b9}",
+            "CONIN",
+            "CONOUT",
+            "CONIN$$",
+            "LPT",
+            "COMA",
+            "ACON",
+            "x.CON",
+        ] {
+            assert!(!super::is_device_name(name), "{name}");
+        }
+    }
+
     use super::*;
 
     fn p(s: &str) -> Option<PathBuf> {
