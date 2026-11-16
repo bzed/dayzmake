@@ -91,14 +91,34 @@ Raised by: `build --proton-binarize`, `binarize`, and the MCP tools `pbo_build` 
 warning: <model>: <the line binarize.exe printed> [binarize-missing-texture]   (needs DayZ Tools; not reproducible without it)
 ```
 
+## derapify-failed
+
+Raised by: `extract --derapify`, and the MCP tool `extract`.
+
+A `*.bin` starts with the rapified signature but cannot be read as a config. It is written as it is, with its `.bin` name.
+
+```text
+warning: Keeping "config.bin" as it is: File doesn't seem to be a rapified config. [derapify-failed]
+```
+
 ## duplicate-entry
 
-Raised by: `build`, `pack`, `unpack`.
+Raised by: `build`, `pack`, `unpack`, `extract`.
 
 Two files map to the same PBO entry name ignoring case (`A.txt` and `a.txt`), or, when unpacking, a PBO has two entries with the same path. The first in sorted order is used and the other skipped. An entry generated from source (the rapified `config.bin`) wins over a plain file of the same name.
 
 ```text
 warning: Skipping "data/a.txt": an entry named "data\A.txt" was already packed. [duplicate-entry]
+```
+
+## duplicate-path
+
+Raised by: `extract`.
+
+Two PBOs of the source write the same path ignoring case. The PBO that comes later in sorted order wins; the warning names both.
+
+```text
+warning: "a/x.txt" is in Addons/c.pbo and in dta/a.pbo; keeping the one of dta/a.pbo. [duplicate-path]
 ```
 
 ## empty-value
@@ -201,6 +221,16 @@ A model or animation is already binarized (`ODOL`, `BMTR`). It is copied unchang
 In file data/odol.p3d: warning: File is already binarized (ODOL v58); copying it as-is. [prebinarized-file]
 ```
 
+## old-tree-left
+
+Raised by: `extract`.
+
+The new tree is in place, but the old target folder that was moved away could not be removed. Delete the folder the warning names.
+
+```text
+warning: Could not remove the old tree ".out.extract-4242-0.old": Permission denied (os error 13) [old-tree-left]
+```
+
 ## prefix-slash
 
 Raised by: `build`, `pack`.
@@ -243,9 +273,9 @@ warning: Header extension "note" contains control characters; replaced them with
 
 ## unsafe-path
 
-Raised by: `build`, `pack`, `unpack`.
+Raised by: `build`, `pack`, `unpack`, `extract`.
 
-A file name is not usable as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name such as `CON` or `NUL`, `..`), or, when unpacking, an entry would leave the target folder or go through a symbolic link. The file or entry is skipped.
+A file name is not usable as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name such as `CON` or `NUL`, `..`), or, when unpacking, an entry would leave the target folder or go through a symbolic link. The file or entry is skipped. `extract` also skips a whole PBO whose prefix is not a safe folder name or is `pbo-map.tsv`.
 
 ```text
 warning: Skipping "data/bad:name.txt": unsafe entry name. [unsafe-path]

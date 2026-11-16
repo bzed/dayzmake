@@ -5,6 +5,8 @@
 pub mod binarize;
 /// Rapify, derapify and preprocess.
 pub mod config;
+/// `dayzmake extract`.
+pub mod extract;
 /// `dayzmake inspect` for models.
 pub mod p3d;
 /// PAA conversion.

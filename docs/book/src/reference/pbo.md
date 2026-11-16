@@ -1,4 +1,4 @@
-# PBOs: build, pack, inspect, unpack, cat
+# PBOs: build, pack, inspect, unpack, extract, cat
 
 A PBO is the archive format of DayZ: a header with the *prefix* and other [header
 extensions](header-extensions.md), a list of entries and a checksum. `build` makes the PBO of a mod folder the way
@@ -340,6 +340,80 @@ warning: Entry "\scripts\hello.c" starts with a path separator; extracting it as
 ```
 
 See also: [cat](#dayzmake-cat), [Header extensions and prefixes](header-extensions.md).
+
+## dayzmake extract
+
+Unpack a whole DayZ install, a mod or a single PBO into one tree organised by prefix, optionally derapified, with a
+map from prefix to PBO.
+
+<div class="synopsis">
+
+```text
+dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
+```
+
+</div>
+
+| Argument | Meaning |
+|---|---|
+| `<source>` | A DayZ client or server folder, a mod folder (`@Foo` or a workshop folder) or a single `.pbo`. |
+| `<targetfolder>` | The folder for the tree; the parent is created when missing. |
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-v`, `--verbose` | off | Print a summary (files, PBOs). |
+| `-f`, `--force` | off | Replace an existing target folder. |
+| `--derapify` | off | Write every rapified `*.bin` as text, with the extension `.cpp`. |
+| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. Repeatable. |
+| `--only <pattern>` | none | Glob pattern: write only the entries that match one. Repeatable. |
+
+Behaviour:
+
+- For a folder, every `*.pbo` directly in its `dta` and `addons` subfolders is read; the folder names match in any
+  case (DayZ uses `Addons`), other folders and deeper levels are not searched, and a folder without PBOs is an
+  error. PBOs are processed in sorted order of their path relative to `<source>`, so the result is deterministic.
+- The entries of a PBO go to `<targetfolder>/<prefix>/<entry>`. An empty prefix means the file name of the PBO
+  without `.pbo`. Entry names are validated like those of [unpack](#dayzmake-unpack): unsafe names are skipped
+  with a warning (`unsafe-path`), and so is a PBO whose prefix is not a safe folder name or is `pbo-map.tsv`;
+  `$PBOPREFIX$` is not written, the map holds the prefixes.
+- When two PBOs write the same path, ignoring case, the later one in sorted order wins and the warning
+  `duplicate-path` names both PBOs. Two entries of one PBO with the same path give `duplicate-entry`.
+- `--derapify`: a `*.bin` that starts with the rapified signature (`config.bin` or any other) is written as
+  `.cpp` of the same name, in the text that [derapify](config.md#dayzmake-derapify) prints. One that cannot be
+  read stays a `.bin`, with the warning `derapify-failed`. `--only` and `-x` match the entry name in the PBO
+  (`config.bin`), as for `unpack`.
+- The tree is written to a staging folder next to `<targetfolder>` (same parent, named
+  `.<name>.extract-<pid>-<n>`) and replaces `<targetfolder>` with a rename when everything succeeded, then the old
+  tree is removed. A re-run therefore drops files that no longer exist, and a failure (a PBO that cannot be read)
+  leaves the old tree untouched and removes the staging folder.
+- Without `-f`, an existing `<targetfolder>` is an error. With `-f` it must be a folder (not a file or a
+  symbolic link) that does not contain `<source>`; it is deleted after the swap, so point it only at a
+  folder that `extract` made.
+- `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
+  <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
+  name without `.pbo`. The prefix bytes are written as they are, except TAB, CR and LF, which are written
+  as `\t`, `\r` and `\n`. The PBOs whose files were skipped because of their prefix are listed too.
+- Memory: only the selected entries of one PBO are held at a time, so `--only` keeps the extraction of an
+  install small.
+
+Example:
+
+```text
+$ dayzmake extract --derapify --only '*.c' --only '*.bin' --only '*.cpp' ~/dayz-server game
+$ cat game/pbo-map.tsv
+dz\gear\camping	addons/gear_camping.pbo
+dz\scripts	dta/scripts.pbo
+$ ls game/dz/scripts
+3_game  4_world  5_mission  config.cpp
+```
+
+```text
+$ dayzmake extract install out
+error: Target folder "out" already exists. Use --force to replace it.
+```
+
+See also: [unpack](#dayzmake-unpack), [derapify](config.md#dayzmake-derapify),
+[Looking up the script API](../guides/script-api.md#reading-the-game-sources).
 
 ## dayzmake cat
 

@@ -6,9 +6,10 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::cli_io::{AtomicTarget, Input, Output, StdoutState, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
-use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
+use dayzmake_core::extract::ExtractOptions;
 use dayzmake_core::p3d::model_magic;
 use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
@@ -30,6 +31,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [--json] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
+    dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -62,6 +64,8 @@ Commands:
     inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
+    extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
+                optionally derapified, with a prefix -> PBO map (pbo-map.tsv).
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
     sign        Sign a PBO with the given private key.
@@ -79,7 +83,8 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern of entries to leave out (matched against the entry path).
+                                      For unpack and extract: pattern of entries to leave out (matched against the
+                                      entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as \"key=value\".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -88,7 +93,8 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
-    --only <pattern>            unpack: write only the entries that match a pattern (-x wins).
+    --only <pattern>            unpack, extract: write only the entries that match a pattern (-x wins).
+    --derapify                  extract: write every rapified .bin as a .cpp of the same name.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
@@ -129,6 +135,7 @@ pub struct Args {
     cmd_pack: bool,
     cmd_inspect: bool,
     cmd_unpack: bool,
+    cmd_extract: bool,
     cmd_cat: bool,
     cmd_keygen: bool,
     cmd_sign: bool,
@@ -166,6 +173,7 @@ pub struct Args {
     flag_verbose: bool,
     flag_force: bool,
     flag_use_prefix: bool,
+    flag_derapify: bool,
     flag_only: Vec<String>,
     flag_warning: Vec<String>,
     flag_include: Vec<String>,
@@ -350,6 +358,24 @@ fn run_command(
             &options,
             warnings,
         )
+    } else if args.cmd_extract {
+        let mut options = ExtractOptions::default();
+        options.force = args.flag_force;
+        options.derapify = args.flag_derapify;
+        options.exclude.clone_from(&args.flag_exclude);
+        options.only.clone_from(&args.flag_only);
+        let target = PathBuf::from(&args.arg_targetfolder);
+        let summary = extract::cmd_extract(&required_source(args)?, &target, &options, warnings)?;
+        if args.flag_verbose {
+            writeln!(
+                stdout.writer(),
+                "extracted {} files from {} PBOs to {}",
+                summary.files(),
+                summary.pbos(),
+                target.display()
+            )?;
+        }
+        Ok(())
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
     } else if args.cmd_sign {

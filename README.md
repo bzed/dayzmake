@@ -31,6 +31,11 @@ is maintained here.
 
 ### Unreleased
 
+- `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the
+  `dta` and `addons` folders of a DayZ install or mod, or a single PBO, into `<targetfolder>/<prefix>/`, optionally
+  derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix, TAB, PBO path). The tree is
+  written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree. The MCP
+  tool is `extract` (#87).
 - `api grep <regex>` searches the lines of every `.c` file of vanilla and of the selected mods, straight from the
   PBOs, and prints `[<source>] <prefix>\<path>:<line>: <text>` sorted by source, path and line. `--ignore-case`
   matches case-insensitively, `--max` cuts the output (all further matches are still counted for the
@@ -303,6 +308,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [--json] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
+    dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -335,6 +341,8 @@ Commands:
     inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
+    extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
+                optionally derapified, with a prefix -> PBO map (pbo-map.tsv).
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
     sign        Sign a PBO with the given private key.
@@ -352,7 +360,8 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern of entries to leave out (matched against the entry path).
+                                      For unpack and extract: pattern of entries to leave out (matched against the
+                                      entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as "key=value".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -361,7 +370,8 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
-    --only <pattern>            unpack: write only the entries that match a pattern (-x wins).
+    --only <pattern>            unpack, extract: write only the entries that match a pattern (-x wins).
+    --derapify                  extract: write every rapified .bin as a .cpp of the same name.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
@@ -462,7 +472,7 @@ Tools:
   `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
   tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with
   `mods=all` warms them.
-- `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
+- `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `extract`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
   commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
 

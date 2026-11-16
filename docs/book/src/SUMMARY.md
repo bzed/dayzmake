@@ -19,7 +19,7 @@
 - [Command line](reference/cli.md)
   - [Configs: rapify, preprocess, derapify](reference/config.md)
   - [Models: binarize](reference/binarize.md)
-  - [PBOs: build, pack, inspect, unpack, cat](reference/pbo.md)
+  - [PBOs: build, pack, inspect, unpack, extract, cat](reference/pbo.md)
   - [Keys and signatures: keygen, sign, verify](reference/signing.md)
   - [Textures: paa2img, img2paa](reference/paa.md)
   - [Script API: api](reference/api.md)

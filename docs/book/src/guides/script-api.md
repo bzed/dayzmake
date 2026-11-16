@@ -24,6 +24,20 @@ scripts\3_Game\Sandstorm.c:115: \t\t\tGetGame().GetMission().GetWorldData().Weat
 Add `--ignore-case` for a case-insensitive match and `-m cf` to search a mod's scripts too. See
 [api grep](../reference/api.md#dayzmake-api-grep).
 
+## Reading the game sources
+
+For everything the index does not answer, extract the sources once and use your editor and `grep`. `extract` unpacks
+every PBO of an install under its prefix and derapifies the configs, so `dz\scripts` ends up in `dz/scripts`
+and every `config.bin` is a `config.cpp`:
+
+```text
+$ dayzmake extract --derapify --only '*.c' --only '*.bin' --only '*.cpp' --only '*.h' ~/DayZ game-sources
+```
+
+`game-sources/pbo-map.tsv` tells which PBO a prefix came from. Run it again with `-f` after a game update: the old
+tree is replaced in one step and files that no longer exist are gone. A mod folder (`@Foo`) or a single PBO works
+the same. See [extract](../reference/pbo.md#dayzmake-extract).
+
 ## What does this class have?
 
 ```text

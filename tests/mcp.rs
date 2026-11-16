@@ -150,10 +150,11 @@ fn mcp_initialize_and_list_tools() {
         "pbo_sign",
         "pbo_verify",
         "binarize",
+        "extract",
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 24);
+    assert_eq!(names.len(), 25);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());
@@ -1055,4 +1056,45 @@ fn mcp_unpack_filters_with_exclude_and_only() {
     assert!(!p.join("both/scripts/a.c").exists());
     assert!(p.join("both/model.p3d").is_file());
     assert!(!p.join("both/config.bin").exists());
+}
+
+#[test]
+fn extract_tool_unpacks_an_install_and_replaces_with_force() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::create_dir_all(tmp.path().join("install/dta")).expect("mkdir");
+    fs::write(
+        tmp.path().join("install/dta/a.pbo"),
+        support::raw_pbo(&[("x.txt", b"x"), ("y.c", b"y")], &[("prefix", "p")]),
+    )
+    .expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "extract",
+                &json!({"source":"install","target":"out","only":["*.c"]}),
+            ),
+            call(2, "extract", &json!({"source":"install","target":"out"})),
+            call(
+                3,
+                "extract",
+                &json!({"source":"install","target":"out","force":true}),
+            ),
+        ],
+        tmp.path(),
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert_eq!(text(&r.replies[0]), "extracted 1 files from 1 PBOs to out");
+    assert!(is_error(&r.replies[1]));
+    assert!(
+        text(&r.replies[1]).contains("force"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(!is_error(&r.replies[2]), "{}", text(&r.replies[2]));
+    assert!(tmp.path().join("out/p/x.txt").is_file());
+    assert_eq!(
+        fs::read(tmp.path().join("out/pbo-map.tsv")).expect("map"),
+        b"p\tdta/a.pbo\n"
+    );
 }

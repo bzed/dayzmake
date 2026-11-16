@@ -18,9 +18,10 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
 use crate::cli_io::AtomicTarget;
-use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
+use dayzmake_core::extract::ExtractOptions;
 use dayzmake_core::p3d::model_magic;
 use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
@@ -613,6 +614,35 @@ fn tools() -> Value {
             &["pbo", "target"],
         ),
         tool(
+            "extract",
+            "Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree <target>/<prefix>/<entry>, optionally derapified, and write the prefix -> PBO map pbo-map.tsv. The tree replaces an existing target atomically with force.",
+            &[
+                (
+                    "source",
+                    's',
+                    "DayZ client or server folder, mod folder (dta/ and addons/ are searched) or one PBO."
+                ),
+                ("target", 's', "Folder to write the tree to."),
+                FORCE_ARG,
+                (
+                    "derapify",
+                    'b',
+                    "Write every rapified .bin as a .cpp of the same name."
+                ),
+                (
+                    "exclude",
+                    'a',
+                    "Glob patterns of entries to leave out (case-insensitive, / separators)."
+                ),
+                (
+                    "only",
+                    'a',
+                    "Glob patterns: write only the entries that match one (exclude wins)."
+                ),
+            ],
+            &["source", "target"],
+        ),
+        tool(
             "pbo_pack",
             "Pack a folder into a PBO without binarizing or rapifying.",
             &pack_props,
@@ -822,6 +852,21 @@ fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
             Ok(format!(
                 "unpacked {} to {}",
                 pbo_path.display(),
+                target.display()
+            ))
+        }
+        "extract" => {
+            let (source, target) = (path_arg(args, "source")?, path_arg(args, "target")?);
+            let mut options = ExtractOptions::default();
+            options.force = bool_arg(args, "force")?;
+            options.derapify = bool_arg(args, "derapify")?;
+            options.exclude = strs_arg(args, "exclude")?;
+            options.only = strs_arg(args, "only")?;
+            let summary = extract::cmd_extract(&source, &target, &options, warnings)?;
+            Ok(format!(
+                "extracted {} files from {} PBOs to {}",
+                summary.files(),
+                summary.pbos(),
                 target.display()
             ))
         }

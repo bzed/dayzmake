@@ -13,6 +13,7 @@ Usage:
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake inspect [-v] [--json] [<source>]
     dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
+    dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -45,6 +46,8 @@ Commands:
     inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
+    extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
+                optionally derapified, with a prefix -> PBO map (pbo-map.tsv).
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
     sign        Sign a PBO with the given private key.
@@ -62,7 +65,8 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern of entries to leave out (matched against the entry path).
+                                      For unpack and extract: pattern of entries to leave out (matched against the
+                                      entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as "key=value".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -71,7 +75,8 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
-    --only <pattern>            unpack: write only the entries that match a pattern (-x wins).
+    --only <pattern>            unpack, extract: write only the entries that match a pattern (-x wins).
+    --derapify                  extract: write every rapified .bin as a .cpp of the same name.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).

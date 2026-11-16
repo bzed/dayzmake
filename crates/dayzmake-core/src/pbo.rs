@@ -323,6 +323,7 @@ impl SelectedEntry {
 #[derive(Debug)]
 pub struct PboSelection {
     header_extensions: LinkedHashMap<String, String>,
+    prefix_bytes: Option<Vec<u8>>,
     names: Vec<String>,
     entries: Vec<SelectedEntry>,
 }
@@ -345,6 +346,11 @@ impl PboSelection {
     #[must_use]
     pub fn header_extension(&self, key: &str) -> Option<&str> {
         self.header_extensions.get(key).map(String::as_str)
+    }
+
+    /// The bytes the prefix is stored as.
+    pub(crate) fn prefix_bytes(&self) -> Option<&[u8]> {
+        self.prefix_bytes.as_deref()
     }
 
     /// The header extensions (`key=value`) in file order.
@@ -977,7 +983,14 @@ impl PBO {
             }
             offset = end;
         }
+        let prefix_bytes = (block.raw_pairs.len() == block.extensions.len())
+            .then(|| {
+                let at = block.extensions.keys().position(|k| k == "prefix")?;
+                block.raw_pairs.get(at).map(|(_, value)| value.clone())
+            })
+            .flatten();
         Ok(PboSelection {
+            prefix_bytes,
             header_extensions: block.extensions,
             names: block.headers.into_iter().map(|h| h.filename).collect(),
             entries,
@@ -1559,13 +1572,13 @@ fn write_prefix_file(
 /// The relative path an unpacked entry is written to, and whether leading separators were
 /// stripped from its name (`\scripts\x.c` is written as `scripts/x.c`). Everything else
 /// [`safe_relative_path`] rejects stays rejected.
-fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
+pub(crate) fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
     let stripped = name.trim_start_matches(['\\', '/']);
     safe_relative_path(stripped).map(|relative| (relative, stripped.len() != name.len()))
 }
 
 /// Warns that an entry name starts with a separator that was stripped.
-fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
+pub(crate) fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
     warnings.warn(Warning::new(
         Some("leading-separator"),
         format!(
@@ -1576,18 +1589,35 @@ fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn Warnin
     ));
 }
 
+/// The folder, relative to the output folder, a PBO with this `prefix` is unpacked into: `None` for no
+/// prefix, an empty one or one of only separators.
+///
+/// # Errors
+///
+/// Returns an error if the prefix is not a safe relative path.
+pub(crate) fn prefix_relative(prefix: Option<&str>) -> Result<Option<PathBuf>, Error> {
+    match prefix {
+        Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(None),
+        Some(prefix) => {
+            // other tools may write a trailing separator; a leading or doubled one is rejected
+            safe_relative_path(prefix.trim_end_matches(['\\', '/']))
+                .map(Some)
+                .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))
+        }
+        None => Ok(None),
+    }
+}
+
 /// The folder a PBO is unpacked into: `output`, or with `use_prefix` `<output>/<prefix>`. An empty
 /// prefix (or one of only separators) means no prefix.
 fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Error> {
     if !use_prefix {
         return Ok(output.to_path_buf());
     }
-    match pbo.header_extensions.get("prefix") {
-        Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(output.to_path_buf()),
-        Some(prefix) => {
-            // other tools may write a trailing separator; a leading or doubled one is rejected
-            let relative = safe_relative_path(prefix.trim_end_matches(['\\', '/']))
-                .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
+    let prefix = pbo.header_extensions.get("prefix").map(String::as_str);
+    match prefix_relative(prefix)? {
+        None => Ok(output.to_path_buf()),
+        Some(relative) => {
             if crosses_symlink(output, &relative) {
                 return Err(error!(
                     "PBO prefix {prefix:?} goes through a symlink; refusing to unpack."
@@ -1595,7 +1625,6 @@ fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Er
             }
             Ok(output.join(relative))
         }
-        None => Ok(output.to_path_buf()),
     }
 }
 

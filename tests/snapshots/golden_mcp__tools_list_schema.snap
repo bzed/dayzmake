@@ -522,6 +522,49 @@ expression: "r.result(2)[\"tools\"]"
     "name": "pbo_unpack"
   },
   {
+    "description": "Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree <target>/<prefix>/<entry>, optionally derapified, and write the prefix -> PBO map pbo-map.tsv. The tree replaces an existing target atomically with force.",
+    "inputSchema": {
+      "properties": {
+        "derapify": {
+          "description": "Write every rapified .bin as a .cpp of the same name.",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "Glob patterns of entries to leave out (case-insensitive, / separators).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "description": "Overwrite existing target files.",
+          "type": "boolean"
+        },
+        "only": {
+          "description": "Glob patterns: write only the entries that match one (exclude wins).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "DayZ client or server folder, mod folder (dta/ and addons/ are searched) or one PBO.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Folder to write the tree to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "extract"
+  },
+  {
     "description": "Pack a folder into a PBO without binarizing or rapifying.",
     "inputSchema": {
       "properties": {

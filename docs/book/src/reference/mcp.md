@@ -291,6 +291,21 @@ Unpack a PBO into a folder, all of it or the entries selected by `only` and `exc
 
 Result: `unpacked <pbo> to <target>`.
 
+### extract
+
+Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree `<target>`/`<prefix>`/`<entry>`, optionally derapified, and write the prefix to PBO map `pbo-map.tsv`. The tree replaces an existing target atomically with `force`.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `source` | string | yes | DayZ client or server folder, mod folder (`dta/` and `addons/` are searched) or one PBO. |
+| `target` | string | yes | Folder to write the tree to. |
+| `force` | boolean | no | Overwrite existing target files. |
+| `derapify` | boolean | no | Write every rapified `.bin` as a `.cpp` of the same name. |
+| `exclude` | array of strings | no | Glob patterns of entries to leave out (case-insensitive, `/` separators). |
+| `only` | array of strings | no | Glob patterns: write only the entries that match one (`exclude` wins). |
+
+Result: `extracted <n> files from <m> PBOs to <target>`. See [extract](pbo.md#dayzmake-extract).
+
 ### pbo_pack
 
 Pack a folder into a PBO without binarizing or rapifying.
