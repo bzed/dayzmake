@@ -36,7 +36,7 @@ is maintained here.
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
   ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
   `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
-  earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by <pbo>` and `api-config-base-changed` warns), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
+  earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
   output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
   error. The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
 - `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the

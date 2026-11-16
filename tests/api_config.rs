@@ -465,10 +465,10 @@ fn base_world(extra_b: &str) -> World {
 #[test]
 fn a_redefinition_without_a_base_drops_it_and_records_the_change() {
     let w = base_world("class Hatch { displayName = \"Cut\"; };");
-    // the first run builds the index, and warns
+    // the first run builds the index; a change made by vanilla is shown but is no warning
     let (code, out, err) = w.run(&["api", "config", "CfgVehicles/Hatch"]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("api-config-base-changed"), "{err}");
+    assert!(!err.contains("api-config-base-changed"), "{err}");
     let v = json(&w, "CfgVehicles/Hatch", &[]);
     assert_eq!(v["chain"].as_array().expect("chain").len(), 1);
     assert_eq!(v["chain_end"], "root");
@@ -525,9 +525,31 @@ fn a_mod_that_drops_the_base_is_reported_across_sources() {
         ),
     );
     let m = dir.to_string_lossy().into_owned();
+    // a mod's change warns (the sources are merged on every call)
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Hatch"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("api-config-base-changed"), "{err}");
     let v = json(&w, "CfgVehicles/Hatch", &["-m", &m]);
     assert_eq!(v["chain_end"], "root");
     assert_eq!(v["chain"].as_array().expect("chain").len(), 1);
     assert_eq!(v["base_changes"][0]["from"], "Base");
     assert_ne!(v["base_changes"][0]["source"], "vanilla");
+}
+
+#[test]
+fn a_base_change_inside_one_mod_warns_when_its_index_is_built() {
+    let w = World::new();
+    let dir = w.home.join("@Own");
+    write(
+        &dir.join("addons/o.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class P {}; class Q: P {}; class Q {}; };",
+            true,
+        ),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let (code, out, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Q"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("api-config-base-changed"), "{err}");
+    assert!(out.contains("Base changed: P -> (none)"), "{out}");
 }

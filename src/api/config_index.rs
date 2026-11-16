@@ -477,7 +477,8 @@ fn apply_class(
                     if !node.pbos.contains(&pbo) {
                         node.pbos.push(pbo);
                     }
-                    if changed {
+                    // the game's own layout changes bases on purpose; only a mod's change is worth a warning
+                    if changed && layer.name != "vanilla" {
                         warnings.warn(
                             layer
                                 .base_changed_warning(&key, pbo)

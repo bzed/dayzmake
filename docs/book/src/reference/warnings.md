@@ -65,10 +65,10 @@ warning: cannot create the cache directory /proc/nope/x: No such file or directo
 
 Raised by: `api config`, `mcp`.
 
-A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. The warning is raised when the index of a source is built and when the sources are merged.
+A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. Only a change made by a mod (a `-m` source) is warned about, when the index of the mod is built and whenever it is merged over the game; the game changes some bases on purpose, and the lookup shows those changes without a warning.
 
 ```text
-In file …/addons/rebase.pbo: warning: class cfgvehicles/hatch changes its base class: Base -> (none) [api-config-base-changed]
+In file …/mod/addons/rebase.pbo: warning: class cfgvehicles/hatch changes its base class: Base -> (none) [api-config-base-changed]
 ```
 
 ## api-config-limit

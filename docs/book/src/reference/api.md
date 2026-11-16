@@ -490,7 +490,7 @@ Load order and merging, as the engine does it:
   the base class becomes whatever the new definition names, and no base when it names none: a mod that writes
   `class Hatchback_02 { ... }` without `: CarScript` cuts the class off from its base (the game logs
   `Updating base class`). The lookup shows it as `Base changed: CarScript -> (none) by [<source>] <pbo>`, JSON has
-  `base_changes`, and the warning `api-config-base-changed` is raised when the index is built or merged. `delete X;`
+  `base_changes`, and a mod's change raises the warning `api-config-base-changed` (the game's own changes are only shown). `delete X;`
   removes the class with everything inside it.
   `x[] += {...};` appends to the array of the earlier definition or, when the class has none, of the base class.
   A forward declaration (`class X;`) creates nothing and changes nothing.
