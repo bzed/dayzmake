@@ -98,7 +98,7 @@ peg::parser! {
 
         /// A float followed by the end of an entry. The terminator is checked before the value is,
         /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
-        rule float_entry() -> f32 = f:float_text() &(whitespace()? ";") v:float_value(f) { v }
+        rule float_entry() -> f32 = f:float_text() &(whitespace()? [';' | '}']) v:float_value(f) { v }
 
         /// A float followed by the end of an array element.
         rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }

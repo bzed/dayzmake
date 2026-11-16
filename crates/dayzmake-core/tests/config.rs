@@ -802,3 +802,42 @@ fn overflowing_float_followed_by_text_stays_a_string() {
         [ConfigArrayElement::StringElement(_)]
     ));
 }
+
+#[test]
+fn floats_ending_at_a_closing_brace_stay_floats() {
+    let (config, w) = parse_a("class A { x = 1.5 };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1.5_f32.to_bits())
+    );
+    let (config, w) = parse_a("class A {\n x = 1e5\n};");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1e5_f32.to_bits())
+    );
+    let err = Config::from_string(
+        "class A { x = 1e999 };".to_string(),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default();
+    assert!(err.contains("out of range"), "{err:?}");
+}
+
+#[test]
+fn array_floats_accept_whitespace_before_terminators() {
+    let (config, w) = parse_a("class A { x[] = {1.5 , 2e1 , 1e-5 }; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "x") else {
+        panic!("not an array");
+    };
+    assert!(
+        a.elements()
+            .iter()
+            .all(|e| matches!(e, ConfigArrayElement::FloatElement(_)))
+    );
+    assert_eq!(a.elements().len(), 3);
+}
