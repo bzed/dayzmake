@@ -782,3 +782,23 @@ fn hex_and_leading_dot_exponent() {
         [ConfigArrayElement::IntElement(485), ConfigArrayElement::FloatElement(f)] if f.to_bits() == 500.0_f32.to_bits()
     ));
 }
+
+#[test]
+fn overflowing_float_followed_by_text_stays_a_string() {
+    let (config, w) = parse_a("class A { a = 1e999x; b[] = {1e999x}; };");
+    assert!(
+        w.warnings()
+            .iter()
+            .any(|x| x.name == Some("unquoted-string")),
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(_)));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [ConfigArrayElement::StringElement(_)]
+    ));
+}

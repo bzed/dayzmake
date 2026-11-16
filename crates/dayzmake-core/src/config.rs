@@ -94,7 +94,16 @@ peg::parser! {
 
         rule exponent() = ['e' | 'E'] ['-' | '+']? ['0'..='9']+
 
-        rule float() -> f32 = f:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) {?
+        rule float_text() -> &'input str = $((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent())))
+
+        /// A float followed by the end of an entry. The terminator is checked before the value is,
+        /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
+        rule float_entry() -> f32 = f:float_text() &(whitespace()? ";") v:float_value(f) { v }
+
+        /// A float followed by the end of an array element.
+        rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }
+
+        rule float_value(f: &str) -> f32 = {?
             // `parse` gives infinity on overflow; that would not survive a derapify/rapify round trip
             f.parse::<f32>()
                 .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
@@ -168,7 +177,7 @@ peg::parser! {
         rule string() -> String = doublequoted_string() / singlequoted_string()
 
         rule array_element(d: usize) -> ConfigArrayElement =
-            f:float()   &(whitespace()? [',' | '}']) { ConfigArrayElement::FloatElement(f) } /
+            f:float_element() { ConfigArrayElement::FloatElement(f) } /
             i:integer() &(whitespace()? [',' | '}']) { ConfigArrayElement::IntElement(i) } /
             a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
@@ -185,7 +194,7 @@ peg::parser! {
         }
 
         rule var(d: usize) -> ConfigEntry =
-            f:float()   { ConfigEntry::FloatEntry(f) } /
+            f:float_entry() { ConfigEntry::FloatEntry(f) } /
             i:integer() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
             v:eval_value(d) { v.into() }
