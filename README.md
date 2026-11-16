@@ -23,7 +23,7 @@ targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
 
-**Status:** `paa2img` and `img2paa` work. One option is accepted but has no effect yet: `img2paa -c` (compression, [#70](https://github.com/bzed/dayzmake/issues/70)).
+**Status:** `paa2img` and `img2paa` work.
 <!-- ANCHOR_END: intro -->
 
 ## Changes
@@ -31,6 +31,9 @@ is maintained here.
 
 ### Unreleased
 
+- `img2paa -c` and the MCP tool `image_to_paa` (`compress`) LZO-compress DXT mipmaps wider than 128 pixels (#70).
+  dayzmake already did that for every conversion, so the output does not change. New in dayzmake-core:
+  `Paa::lzo_compress`.
 - `derapify -d` and the MCP tool `config_derapify` (`indent`) set the indentation: spaces and tabs only, empty
   allowed (#69). New in dayzmake-core: `config::WriteOptions` and `Config::write_with`.
 

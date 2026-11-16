@@ -125,6 +125,16 @@ fn read_mipmap<I: Read>(
     }
 }
 
+/// The size of an uncompressed mipmap of a DXT texture, `None` for other formats.
+fn raw_mipmap_size(compression: &str, width: usize, height: usize) -> Option<usize> {
+    match compression {
+        "DXT1" => Some(Format::Bc1.compressed_size(width, height)),
+        "DXT2" | "DXT3" => Some(Format::Bc2.compressed_size(width, height)),
+        "DXT4" | "DXT5" => Some(Format::Bc3.compressed_size(width, height)),
+        _ => None,
+    }
+}
+
 /// A format a PAA can be created in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -468,7 +478,7 @@ impl Paa {
         for level in &levels {
             let (w, h) = level.dimensions();
             let data = level.as_raw().clone();
-            let mut mipmap = match compression.as_str() {
+            let mipmap = match compression.as_str() {
                 "DXT1" => {
                     let mut out = vec![0; Format::Bc1.compressed_size(w as usize, h as usize)];
                     Format::Bc1.compress(&data, w as usize, h as usize, params, &mut out);
@@ -491,15 +501,6 @@ impl Paa {
                     ));
                 }
             };
-            // LZO compress large mipmaps like the engine's own tools do.
-            if compression != "RGBA" && w > 128 {
-                let compressed = lzo1x::compress(&mipmap, lzo1x::CompressLevel::default());
-                // The stream already ends with the LZO end marker (11 00 00); a byte after it makes the
-                // game reject the mipmap.
-                if compressed.len() < mipmap.len() {
-                    mipmap = compressed;
-                }
-            }
             mipmaps.push(mipmap);
         }
 
@@ -510,14 +511,46 @@ impl Paa {
         let to_u16 =
             |dim: u32| u16::try_from(dim).map_err(|_| error!("image too large for PAA: {dim}px"));
 
-        Ok(Paa {
+        let mut paa = Paa {
             taggs: LinkedHashMap::new(),
             palette: None,
             mipmaps,
             width: to_u16(width)?,
             height: to_u16(height)?,
             compression,
-        })
+        };
+        // LZO compress large mipmaps like the engine's own tools do.
+        paa.lzo_compress()?;
+        Ok(paa)
+    }
+
+    /// LZO-compresses the mipmaps wider than 128 pixels of a DXT texture.
+    ///
+    /// A mipmap is replaced by its compressed form only if that is shorter, so the others stay raw
+    /// (and [`Paa::write`] leaves them unmarked). Mipmaps that are already compressed, mipmaps of 128
+    /// pixels or less and textures of other formats are left unchanged; that is not an error, and
+    /// calling this twice has no further effect.
+    ///
+    /// # Errors
+    ///
+    /// Currently never fails; the result leaves room for limits on the compressed size.
+    pub fn lzo_compress(&mut self) -> Result<(), Error> {
+        let (mut width, mut height) = (usize::from(self.width), usize::from(self.height));
+        let compression = self.compression.clone();
+        for mipmap in &mut self.mipmaps {
+            let raw = raw_mipmap_size(&compression, width, height);
+            if width > 128 && raw.is_some_and(|raw| mipmap.len() >= raw) {
+                // The stream already ends with the LZO end marker (11 00 00); a byte after it makes
+                // the game reject the mipmap.
+                let compressed = lzo1x::compress(mipmap, lzo1x::CompressLevel::default());
+                if compressed.len() < mipmap.len() {
+                    *mipmap = compressed;
+                }
+            }
+            width = (width / 2).max(1);
+            height = (height / 2).max(1);
+        }
+        Ok(())
     }
 
     /// Writes the PAA texture.
@@ -622,18 +655,11 @@ impl Paa {
             let mut w = current_width;
             // Only mipmaps that are smaller than their uncompressed size are LZO streams; the others
             // (LZO did not help) are stored raw and must not be marked.
-            let raw = match self.compression.as_str() {
-                "DXT1" => Some(
-                    Format::Bc1.compressed_size(current_width as usize, current_height as usize),
-                ),
-                "DXT2" | "DXT3" => Some(
-                    Format::Bc2.compressed_size(current_width as usize, current_height as usize),
-                ),
-                "DXT4" | "DXT5" => Some(
-                    Format::Bc3.compressed_size(current_width as usize, current_height as usize),
-                ),
-                _ => None,
-            };
+            let raw = raw_mipmap_size(
+                &self.compression,
+                usize::from(current_width),
+                usize::from(current_height),
+            );
             if current_width > 128 && raw.is_some_and(|raw| mipmap.len() < raw) {
                 w |= 0x8000; // LZO compressed
             }

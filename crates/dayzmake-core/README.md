@@ -32,6 +32,8 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- `Paa::lzo_compress` LZO-compresses the DXT mipmaps wider than 128 pixels that are still raw (#70).
+  `Paa::from_dynamic_image` is unchanged: it already compresses them.
 - `config::WriteOptions` and `Config::write_with` write a config with a chosen indentation (#69). `Config::write`
   is unchanged (four spaces).
 

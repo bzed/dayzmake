@@ -908,3 +908,28 @@ fn mcp_config_derapify_indent() {
         text(&r.replies[2])
     );
 }
+
+#[test]
+fn mcp_image_to_paa_compress() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    image::RgbImage::from_fn(256, 256, |x, y| {
+        image::Rgb([
+            u8::try_from(x / 4).unwrap_or(255),
+            u8::try_from(y / 4).unwrap_or(255),
+            9,
+        ])
+    })
+    .save(p.join("in.png"))
+    .expect("png");
+    let r = run(
+        &[call(
+            1,
+            "image_to_paa",
+            &json!({"source":"in.png","target":"o.paa","type":"dxt1","compress":true}),
+        )],
+        p,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(p.join("o.paa").is_file());
+}
