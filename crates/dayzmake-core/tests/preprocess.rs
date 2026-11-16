@@ -426,7 +426,7 @@ fn laughs(n: usize) -> String {
 }
 
 /// #57: exponential expansion stops early. N=21 expands to about 2M tokens (a few hundred MB) even if the
-/// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`). with an error naming the macro.
+/// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`).
 #[test]
 fn exponential_macro_expansion_is_capped() {
     let start = std::time::Instant::now();

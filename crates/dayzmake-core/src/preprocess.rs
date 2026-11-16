@@ -217,6 +217,8 @@ pub struct PreprocessInfo {
     include_depth: usize,
     /// Tokens produced by macro expansion so far, over the file and its includes.
     expanded: usize,
+    /// Bytes of token text copied by macro expansion so far.
+    expanded_bytes: usize,
 }
 
 impl PreprocessInfo {
@@ -258,7 +260,6 @@ fn parse_checked<T, E>(
 /// Maximum nesting of macro expansions; deeper input is an error, not a stack overflow.
 const MAX_EXPANSION_DEPTH: usize = 64;
 
-/// Maximum nesting of `#include`s; deeper input is an error, not a stack overflow.
 /// Maximum tokens one source line may produce while its macros expand (every token copied at any level
 /// counts). Real configs stay far below it (see the #57 measurements in the README); an exponential
 /// definition chain hits it after a few milliseconds instead of exhausting memory.
@@ -267,17 +268,34 @@ const MAX_LINE_EXPANSION: usize = 500_000;
 /// Maximum tokens all lines of one `preprocess` call (the includes count too) may produce.
 const MAX_FILE_EXPANSION: usize = 16_000_000;
 
-/// Counts the tokens macro expansion produces, so that exponential expansion stops early.
+/// Maximum bytes of token text one source line may copy while its macros expand. Stringification
+/// collapses many tokens into one long string, so the token count alone does not bound memory.
+const MAX_LINE_BYTES: usize = 64 << 20;
+
+/// Maximum bytes copied by the lines of one `preprocess` call (the includes count too).
+const MAX_FILE_BYTES: usize = 512 << 20;
+
+/// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
 struct Budget {
-    used: usize,
+    tokens: usize,
+    bytes: usize,
 }
 
 impl Budget {
-    fn spend(&mut self, n: usize, name: &str) -> Result<(), Error> {
-        self.used = self.used.saturating_add(n);
-        if self.used > MAX_LINE_EXPANSION {
+    fn new() -> Budget {
+        Budget {
+            tokens: 0,
+            bytes: 0,
+        }
+    }
+
+    /// Charges `tokens` tokens and `bytes` bytes of text, produced by the expansion of `name`.
+    fn spend(&mut self, tokens: usize, bytes: usize, name: &str) -> Result<(), Error> {
+        self.tokens = self.tokens.saturating_add(tokens);
+        self.bytes = self.bytes.saturating_add(bytes);
+        if self.tokens > MAX_LINE_EXPANSION || self.bytes > MAX_LINE_BYTES {
             return Err(error!(
-                "Macro \"{}\" expands to more than {MAX_LINE_EXPANSION} tokens in one line",
+                "Macro \"{}\" expands to more than {MAX_LINE_EXPANSION} tokens or {MAX_LINE_BYTES} bytes in one line",
                 printable(name)
             ));
         }
@@ -285,6 +303,16 @@ impl Budget {
     }
 }
 
+/// The bytes a token costs: its text, at least 1.
+fn token_bytes(token: &Token) -> usize {
+    match token {
+        Token::RegularToken(s) | Token::NewlineToken(s, _) => s.len().max(1),
+        Token::MacroToken(m) => m.original.len().max(1),
+        Token::CommentToken(_) | Token::ConcatToken => 1,
+    }
+}
+
+/// Maximum nesting of `#include`s; deeper input is an error, not a stack overflow.
 const MAX_INCLUDE_DEPTH: usize = 32;
 
 /// The file as the cycle check compares it: canonical when the file system can say, else as given.
@@ -505,6 +533,12 @@ impl Macro {
 
                 if let Some(tokens) = value {
                     if self.quoted {
+                        // charge before `concat` allocates the collapsed string
+                        budget.spend(
+                            tokens.len(),
+                            tokens.iter().map(token_bytes).sum(),
+                            &self.name,
+                        )?;
                         let (concatted, newlines) = Token::concat(&tokens);
                         let mut tokens: Vec<Token> = Vec::new();
                         tokens.push(Token::NewlineToken(
@@ -536,10 +570,18 @@ impl Macro {
         for token in tokens {
             if let Token::MacroToken(m) = token {
                 let resolved = m.resolve(def_map, stack, depth, mismatches, budget)?;
-                budget.spend(resolved.len(), &m.name)?;
+                budget.spend(
+                    resolved.len(),
+                    resolved.iter().map(token_bytes).sum(),
+                    &m.name,
+                )?;
                 result.extend(resolved);
             } else {
-                budget.spend(1, stack.last().map_or("", |d| d.name.as_str()))?;
+                budget.spend(
+                    1,
+                    token_bytes(token),
+                    stack.last().map_or("", |d| d.name.as_str()),
+                )?;
                 result.push(token.clone());
             }
         }
@@ -1001,7 +1043,7 @@ fn preprocess_rec(
             Line::TokenLine(tokens) => {
                 let stack: Vec<Definition> = Vec::new();
                 let mut mismatches: Vec<String> = Vec::new();
-                let mut budget = Budget { used: 0 };
+                let mut budget = Budget::new();
                 let resolved = Macro::resolve_all(
                     &tokens,
                     definition_map,
@@ -1012,10 +1054,11 @@ fn preprocess_rec(
                 )
                 .prepend_error("Failed to resolve macros:");
                 let resolved = resolved?;
-                info.expanded = info.expanded.saturating_add(budget.used);
-                if info.expanded > MAX_FILE_EXPANSION {
+                info.expanded = info.expanded.saturating_add(budget.tokens);
+                info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
+                if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
                     return Err(error!(
-                        "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens in one file"
+                        "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
                     ));
                 }
 
@@ -1115,6 +1158,7 @@ pub fn preprocess(
         import_stack: Vec::new(),
         include_depth: 0,
         expanded: 0,
+        expanded_bytes: 0,
     };
 
     if let Some(ref path) = origin {
@@ -1156,12 +1200,12 @@ mod tests {
         let tokens = vec![Token::MacroToken(parse_macro("F(1,2)").unwrap())];
 
         let mut first = Vec::new();
-        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget { used: 0 }).unwrap();
+        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new()).unwrap();
         assert_eq!(first.len(), 1);
 
         let plain = vec![Token::RegularToken("x".to_string())];
         let mut second = Vec::new();
-        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget { used: 0 }).unwrap();
+        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new()).unwrap();
         assert_eq!(second.len(), 0);
     }
 

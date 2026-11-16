@@ -1920,9 +1920,39 @@ fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
     );
 }
 
+/// Runs `dayzmake preprocess e.cpp` on `src` in a child with a 2 GiB address-space limit, so a regressed
+/// cap fails the test instead of exhausting the machine's memory. `None` when the platform has no
+/// `ulimit -v` (the child exits 99 before running dayzmake): the test is skipped, never run unlimited.
+#[cfg(unix)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    reason = "test helper: failures panic, the skip is reported on stderr"
+)]
+fn preprocess_limited(src: &str) -> Option<(Option<i32>, String, std::time::Duration)> {
+    let dir = tempdir_with(&[("e.cpp", src)]);
+    let home = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg("ulimit -v 2097152 || exit 99; exec \"$0\" preprocess e.cpp")
+        .arg(env!("CARGO_BIN_EXE_dayzmake"))
+        .current_dir(dir.path());
+    isolate(&mut cmd, home.path());
+    let start = std::time::Instant::now();
+    let out = cmd.output().unwrap();
+    if out.status.code() == Some(99) {
+        eprintln!("skipped: `ulimit -v` is not available");
+        return None;
+    }
+    Some((
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        start.elapsed(),
+    ))
+}
+
 /// #57: the billion-laughs repro with N=30 (2^30 tokens uncapped) fails fast with an error naming the
-/// macro. It runs in a child with a 2 GiB address-space limit, so a regressed cap fails the test
-/// instead of exhausting the machine's memory.
+/// macro.
 #[cfg(unix)]
 #[test]
 fn exponential_macro_expansion_fails_fast() {
@@ -1941,19 +1971,41 @@ fn exponential_macro_expansion_fails_fast() {
         .concat();
     }
     src.push_str("a = E0;\n");
-    let dir = tempdir_with(&[("e.cpp", &src)]);
-    let home = tempfile::tempdir().unwrap();
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg("ulimit -v 2097152; exec \"$0\" preprocess e.cpp")
-        .arg(env!("CARGO_BIN_EXE_dayzmake"))
-        .current_dir(dir.path());
-    isolate(&mut cmd, home.path());
-    let start = std::time::Instant::now();
-    let out = cmd.output().unwrap();
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{err}");
+    let Some((code, err, took)) = preprocess_limited(&src) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("expands to more than"), "{err}");
     assert!(err.contains("\"E"), "{err}");
-    assert!(start.elapsed().as_secs() < 5, "took {:?}", start.elapsed());
+    assert!(took.as_secs() < 5, "took {took:?}");
+}
+
+/// Stringification collapses an expanded argument into one token, so the bytes double per level while
+/// the token count stays small; the byte cap stops it (L5 needs about 20 GB uncapped).
+#[cfg(unix)]
+#[test]
+fn exponential_stringification_fails_fast() {
+    let mut src = String::from(
+        "#define Q(x) #x\n#define D(x) x x\n#define S1(x) Q(D(x))\n#define L0(x) S1(x)\n",
+    );
+    for i in 1..=5 {
+        let prev = i - 1;
+        src += &[
+            "#define L",
+            &i.to_string(),
+            "(x) L",
+            &prev.to_string(),
+            "(L",
+            &prev.to_string(),
+            "(x))\n",
+        ]
+        .concat();
+    }
+    src.push_str("a = L5(ab);\n");
+    let Some((code, err, took)) = preprocess_limited(&src) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
+    assert!(took.as_secs() < 10, "took {took:?}");
 }
