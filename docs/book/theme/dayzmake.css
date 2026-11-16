@@ -1,1 +1,365 @@
-/* theme: see Task 2 */
+/*
+ * dayzmake documentation: field-manual theme.
+ *
+ * A reference manual for a modding CLI, set like the stencilled markings on a supply crate: one stencil face for
+ * the chapter title, quiet legible text on cool green paper for everything else. No images, no gradients, no
+ * external requests: the fonts are served from this site (SIL Open Font License 1.1; the @font-face rules are
+ * in fonts/fonts.css, which mdBook loads in place of its own, and the licences sit next to the font files).
+ *
+ * mdBook sets the root font size to 62.5%, so 1rem is 10px here: the sizes below are the designed sizes
+ * (body 17px, h2 25.6px, ...) divided by 16 and multiplied by 10.
+ */
+
+/* ---- Tokens ----------------------------------------------------------------------------------------------- */
+
+/* light: mdBook's light and rust themes, and the fallback when scripts are off */
+html.light,
+html.rust,
+html:not(.js) {
+    --paper: #e8ece6;
+    --ink: #1e2b24;
+    --olive: #4f6131;
+    --slate: #56625e; /* #5e6b66 gives only 4.1:1 on --plate; this is 4.68:1 */
+    --plate: #d9dfd6;
+    --marker: #e2b007;
+}
+
+/* dark: mdBook's coal, navy and ayu themes */
+html.coal,
+html.navy,
+html.ayu {
+    --paper: #18201c;
+    --ink: #d5ddd2;
+    --olive: #a7c06a;
+    --slate: #8e9c95;
+    --plate: #212b26;
+    --marker: #e2b007;
+}
+
+@media (prefers-color-scheme: dark) {
+    html:not(.js) {
+        --paper: #18201c;
+        --ink: #d5ddd2;
+        --olive: #a7c06a;
+        --slate: #8e9c95;
+        --plate: #212b26;
+        --marker: #e2b007;
+    }
+}
+
+/* ---- mdBook's variables, from the tokens ------------------------------------------------------------------ */
+
+html.light,
+html.rust,
+html.coal,
+html.navy,
+html.ayu,
+html:not(.js) {
+    --bg: var(--paper);
+    --fg: var(--ink);
+
+    --sidebar-bg: var(--plate);
+    --sidebar-fg: var(--slate);
+    --sidebar-non-existant: var(--slate);
+    --sidebar-active: var(--ink);
+    --sidebar-spacer: var(--slate);
+    --sidebar-header-border-color: var(--slate);
+
+    --scrollbar: var(--slate);
+    --icons: var(--slate);
+    --icons-hover: var(--ink);
+
+    --links: var(--olive);
+    --inline-code-color: var(--ink);
+
+    --theme-popup-bg: var(--plate);
+    --theme-popup-border: var(--slate);
+    --theme-hover: var(--paper);
+
+    --quote-bg: var(--plate);
+    --quote-border: var(--slate);
+    --warning-border: var(--marker);
+
+    --table-border-color: var(--slate);
+    --table-header-bg: var(--plate);
+    --table-alternate-bg: transparent;
+
+    --searchbar-border-color: var(--slate);
+    --searchbar-bg: var(--paper);
+    --searchbar-fg: var(--ink);
+    --searchbar-shadow-color: transparent;
+    --searchresults-header-fg: var(--slate);
+    --searchresults-border-color: var(--slate);
+    --searchresults-li-bg: var(--plate);
+    --search-mark-bg: var(--marker);
+
+    --footnote-highlight: var(--marker);
+    --overlay-bg: rgba(24, 32, 28, 0.4);
+
+    --blockquote-note-color: var(--olive);
+    --blockquote-tip-color: var(--olive);
+    --blockquote-important-color: var(--olive);
+    --blockquote-warning-color: var(--ink);
+    --blockquote-caution-color: var(--ink);
+
+    --mono-font: "JetBrains Mono", Consolas, "DejaVu Sans Mono", monospace;
+    --code-font-size: 0.92em;
+}
+
+/* ---- Typography ------------------------------------------------------------------------------------------- */
+
+html {
+    font-family: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", system-ui, sans-serif;
+}
+
+body {
+    font-size: 1.7rem;
+    line-height: 1.6;
+}
+
+/* the one bold element: the chapter title, stencilled */
+.content main h1 {
+    font-family: "Big Shoulders Stencil Display", "Impact", sans-serif;
+    font-weight: 800;
+    font-size: clamp(3.84rem, 6vw, 5.76rem);
+    line-height: 1;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    margin-block: 0.4em 0.5em;
+}
+
+.content main h2,
+.content main h3,
+.content main h4,
+.content main h5,
+.content main h6 {
+    font-family: inherit;
+    font-weight: 700;
+    text-transform: none;
+}
+
+.content main h2 {
+    font-size: 2.56rem;
+}
+
+.content main h3 {
+    font-size: 2rem;
+}
+
+.content main h4 {
+    font-size: 1.7rem;
+}
+
+.menu-title {
+    font-weight: 700;
+}
+
+code,
+pre,
+.hljs {
+    font-family: var(--mono-font) !important;
+}
+
+/* ---- Layout ----------------------------------------------------------------------------------------------- */
+
+.content main {
+    margin-inline: 0;
+    max-width: 72ch;
+}
+
+.sidebar {
+    font-size: 1.5rem;
+}
+
+.menu-bar,
+.menu-bar:hover,
+.menu-bar.sticky {
+    background-color: var(--bg);
+    border-block-end: 1px solid var(--slate);
+}
+
+/* the active chapter: ink text and the marker bar */
+.chapter li a.active {
+    color: var(--ink);
+    font-weight: 700;
+    box-shadow: -4px 0 0 0 var(--marker);
+}
+
+.chapter a.current-header {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+.chapter li a:hover {
+    color: var(--ink);
+    text-decoration: underline;
+}
+
+.chapter li.chapter-item {
+    margin-inline-start: 4px;
+}
+
+.chapter li.part-title {
+    color: var(--ink);
+    font-weight: 700;
+}
+
+/* ---- Links ------------------------------------------------------------------------------------------------ */
+
+.content main a {
+    color: var(--olive);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+}
+
+.content main a:hover {
+    text-decoration-thickness: 2px;
+}
+
+/* ---- Code ------------------------------------------------------------------------------------------------- */
+
+pre {
+    background-color: var(--plate);
+    border: 0;
+    border-radius: 2px;
+    box-shadow: none;
+}
+
+pre > code,
+pre > .hljs {
+    background-color: var(--plate);
+    color: var(--ink);
+    overflow-x: auto;
+}
+
+.hljs {
+    background: var(--plate);
+    color: var(--ink);
+}
+
+:not(pre) > code {
+    background-color: var(--plate);
+    border-radius: 2px;
+    padding: 0.1em 0.3em;
+    color: var(--ink);
+}
+
+/* the synopsis of a command is a stamped label plate */
+.synopsis pre {
+    background-color: var(--plate);
+    border: 2px solid var(--slate);
+    border-radius: 2px;
+    box-shadow: none;
+}
+
+/* syntax colours stay within the palette */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-type,
+.hljs-section,
+.hljs-title,
+.hljs-name,
+.hljs-tag,
+.hljs-meta,
+.hljs-doctag,
+.hljs-bullet {
+    color: var(--olive);
+    font-weight: 700;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-template-variable,
+.hljs-addition {
+    color: var(--ink);
+    font-style: italic;
+}
+
+.hljs-comment,
+.hljs-quote,
+.hljs-deletion {
+    color: var(--slate);
+    font-style: normal;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-params,
+.hljs-link,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-subst,
+.hljs-emphasis,
+.hljs-strong {
+    color: var(--ink);
+}
+
+/* ---- Tables, quotes, marks -------------------------------------------------------------------------------- */
+
+table {
+    border-collapse: collapse;
+    border: 0;
+}
+
+table thead th {
+    background-color: var(--plate);
+    font-weight: 700;
+    text-align: start;
+    border: 0;
+    border-block-end: 1px solid var(--slate);
+}
+
+table td,
+table th {
+    border: 0;
+    border-block-end: 1px solid var(--slate);
+    padding: 0.4em 0.8em;
+    vertical-align: top;
+}
+
+table tr:nth-child(even) {
+    background-color: transparent;
+}
+
+blockquote {
+    background-color: var(--plate);
+    border-inline-start: 4px solid var(--slate);
+    border-block: 0;
+    border-inline-end: 0;
+    margin-inline: 0;
+}
+
+mark,
+.mdbook-search-mark,
+mark.mdbook-search-mark {
+    background-color: var(--marker);
+    color: #1e2b24;
+}
+
+/* ---- Focus and motion ------------------------------------------------------------------------------------- */
+
+/*
+ * The marker is a yellow ring. On the light paper it only reaches 1.7:1, so a thin ring in the ink colour sits
+ * outside it; together they stay visible on both papers.
+ */
+:focus-visible {
+    outline: 2px solid var(--marker);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 5px var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation: none !important;
+        transition: none !important;
+        scroll-behavior: auto !important;
+    }
+}
