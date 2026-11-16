@@ -210,11 +210,14 @@ peg::parser! {
 
         /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase.
         rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {?
-            let mut next: i32 = 0;
+            let mut next: Option<i32> = Some(0);
             let mut out = Vec::new();
             for (n, v) in v {
-                let value = v.unwrap_or(next);
-                next = value.checked_add(1).ok_or("an enum value that fits in 32 bits")?;
+                let value = match v {
+                    Some(value) => value,
+                    None => next.ok_or("an enum value that fits in 32 bits")?,
+                };
+                next = value.checked_add(1);
                 out.push((n.to_ascii_lowercase(), value));
             }
             Ok(out)

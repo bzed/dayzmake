@@ -635,3 +635,20 @@ fn damaged_enum_table_is_no_error() {
     let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
     assert_eq!(c.enum_values(), []);
 }
+
+#[test]
+fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
+    let c = parse("enum { A = 2147483647 };");
+    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
+    let c = parse("enum { A = 0x7FFFFFFF };");
+    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
+    assert!(
+        Config::from_string(
+            "enum { A = 2147483647, B };".to_string(),
+            None,
+            &Vec::new(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+}
