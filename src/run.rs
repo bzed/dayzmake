@@ -42,6 +42,7 @@ Usage:
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
+    dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
@@ -102,6 +103,7 @@ Options:
     --mods-only                 api class: show only what the mods declare.
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
+    --ignore-case               api grep: match case-insensitively.
     --cat                       api src: print the full source files.
     --context <n>               api src: print n lines around each declaration, with line numbers.
     --lines <a-b>               api src: print lines a to b of each file, with line numbers.
@@ -141,6 +143,7 @@ pub struct Args {
     cmd_enum: bool,
     cmd_chain: bool,
     cmd_src: bool,
+    cmd_grep: bool,
     cmd_defines: bool,
     cmd_update: bool,
     cmd_mods: bool,
@@ -154,6 +157,7 @@ pub struct Args {
     flag_class: Option<String>,
     flag_all: bool,
     flag_cat: bool,
+    flag_ignore_case: bool,
     flag_context: Option<String>,
     flag_lines: Option<String>,
     flag_json: bool,
@@ -386,6 +390,27 @@ fn run_command(
     }
 }
 
+/// `dayzmake api grep`: one line per hit, or the JSON array.
+fn run_grep(
+    args: &Args,
+    ctx: &api::ApiContext,
+    max: usize,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
+    for line in api::grep_lines(
+        ctx,
+        args.arg_regex.as_deref().unwrap_or_default(),
+        args.flag_ignore_case,
+        max,
+        args.flag_json,
+        warnings,
+    )? {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
 /// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
 fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
     let ctx = api::ApiContext {
@@ -416,6 +441,9 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
             .flag_max
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
+        if args.cmd_grep {
+            return run_grep(args, &ctx, max, out, warnings);
+        }
         if args.cmd_src
             && let Some(range) = api::SrcRange::parse(
                 args.flag_cat,

@@ -153,7 +153,7 @@ fn mcp_initialize_and_list_tools() {
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 23);
+    assert_eq!(names.len(), 24);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());
@@ -364,6 +364,44 @@ fn mcp_api_source_context_and_lines() {
     assert!(text(&r.replies[1]).contains("\n3| class Base\n4| {\n"));
     let j: Value = serde_json::from_str(text(&r.replies[2])).expect("json text");
     assert_eq!(j["files"][0]["lines"][1]["text"], "{", "{j}");
+    assert!(is_error(&r.replies[3]));
+}
+
+#[test]
+fn mcp_api_grep() {
+    let w = fake_steam();
+    let r = run_raw(
+        lines(&[
+            call(
+                1,
+                "api_grep",
+                &json!({"regex":"class base","ignore_case":true}),
+            ),
+            call(2, "api_grep", &json!({"regex":"class base"})),
+            call(
+                3,
+                "api_grep",
+                &json!({"regex":"modded","json":true,"max":1}),
+            ),
+            call(4, "api_grep", &json!({"regex":"(bad"})),
+        ]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).starts_with("scripts\\3_Game\\Base.c:3: class Base"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(text(&r.replies[1]).starts_with("no match"));
+    let j: Value = serde_json::from_str(text(&r.replies[2])).expect("json text");
+    assert_eq!(j.as_array().map(Vec::len), Some(1), "{j}");
+    assert_eq!(j[0]["source"], "vanilla");
     assert!(is_error(&r.replies[3]));
 }
 

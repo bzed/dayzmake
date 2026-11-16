@@ -31,6 +31,11 @@ is maintained here.
 
 ### Unreleased
 
+- `api grep <regex>` searches the lines of every `.c` file of vanilla and of the selected mods, straight from the
+  PBOs, and prints `[<source>] <prefix>\<path>:<line>: <text>` sorted by source, path and line. `--ignore-case`
+  matches case-insensitively, `--max` cuts the output (all further matches are still counted for the
+  `... N more lines` note) and `--json` prints an array of `{source, path, line, text}`. The MCP tool is
+  `api_grep` (#88).
 - `api src --context <n>` prints n lines around each declaration and `--lines <a-b>` lines a to b of each file, as
   `<line>| <text>` (with `--json`: `"lines"`); the options exclude each other and `--cat`. The MCP tool `api_source`
   takes `context` and `lines` (#90).
@@ -310,6 +315,7 @@ Usage:
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
     dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
+    dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
@@ -370,6 +376,7 @@ Options:
     --mods-only                 api class: show only what the mods declare.
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
+    --ignore-case               api grep: match case-insensitively.
     --cat                       api src: print the full source files.
     --context <n>               api src: print n lines around each declaration, with line numbers.
     --lines <a-b>               api src: print lines a to b of each file, with line numbers.
@@ -415,6 +422,7 @@ dayzmake api chain PlayerBase
 dayzmake api src AIAgent                      # file and line of every declaration
 dayzmake api src AIAgent --cat                # the full source files
 dayzmake api src AIAgent --context 5          # five lines around each declaration
+dayzmake api grep 'GetGame\(\)\.GetMission\(\)'   # call sites: a text search over the script bodies
 dayzmake api defines [regex]
 dayzmake api update                           # rebuild the cache now
 ```
@@ -448,8 +456,8 @@ claude mcp add dayzmake -- dayzmake mcp
 
 Tools:
 
-- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_defines`, `api_update`,
-  `api_mods`: the script API index (see above). The first eight take `mods`, `experimental`, `dayz` and
+- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_grep`, `api_defines`,
+  `api_update`, `api_mods`: the script API index (see above). The first nine take `mods`, `experimental`, `dayz` and
   `refresh`; `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
   `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
   tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with

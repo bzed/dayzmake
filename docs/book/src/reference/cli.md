@@ -10,7 +10,7 @@ section per command.
 | PBOs | `build`, `pack`, `inspect`, `unpack`, `cat` | [PBOs](pbo.md) |
 | Keys and signatures | `keygen`, `sign`, `verify` | [Keys and signatures](signing.md) |
 | Textures | `paa2img`, `img2paa` | [Textures](paa.md) |
-| Script API | `api class`, `api find`, `api sub`, `api enum`, `api chain`, `api src`, `api defines`, `api update`, `api mods` | [Script API](api.md) |
+| Script API | `api class`, `api find`, `api sub`, `api enum`, `api chain`, `api src`, `api grep`, `api defines`, `api update`, `api mods` | [Script API](api.md) |
 | MCP server | `mcp` | [MCP server](mcp.md) |
 
 ## Global options

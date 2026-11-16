@@ -358,6 +358,53 @@ class Apple extends ItemBase
 
 See also: [api class](#dayzmake-api-class).
 
+## dayzmake api grep
+
+Search the script bodies for a regular expression.
+
+<div class="synopsis">
+
+```text
+dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
+```
+
+</div>
+
+| Argument | Meaning |
+|---|---|
+| `<regex>` | A regular expression, as `api find` takes it, matched against each line. |
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-v`, `--verbose` | off | Accepted for consistency; `grep` prints no per-index header. |
+| `--experimental` | off | Use the experimental branch instead of stable. |
+| `--dayz <dir>` | Steam install | A DayZ client or server directory; the scripts are read from `<dir>/dta/scripts.pbo`. |
+| `-m <mods>`, `--mod <mods>` | vanilla only | Also search mods; see [Selecting mods](#selecting-mods). |
+| `--max <n>` | 120 | Print at most `n` lines (JSON: items). The rest is counted and announced with `... N more lines (raise --max or narrow the query)`. |
+| `--ignore-case` | off | Match case-insensitively. Without it the match is case-sensitive, unlike `api find`. |
+| `--json` | off | Print a JSON array of `{"source", "path", "line", "text"}` instead of text. |
+
+Behaviour: every `.c` entry of `dta/scripts.pbo` and of the script PBOs of the selected mods is read straight
+from its PBO and matched line by line on the raw source, comments included; nothing is written to disk and no
+index is needed (`--refresh` does not apply). Output is `<prefix>\<path>:<line>: <text>`, the path in the form of
+`api src`, with `[<index>] ` in front when mods are selected. Hits are sorted by source (vanilla first, then the mods
+in `-m` order), then path, then line. `--max` limits the printed lines but the whole input is scanned, so the
+number in the `... N more lines` note is exact (a full scan of the game's scripts takes well under a second).
+`no match` is printed when nothing matches; control characters in the text are escaped (a tab shows as `\t`).
+JSON has no truncation note: it holds the first `--max` hits. An invalid regex is an error that names the pattern.
+A mod PBO that cannot be read is skipped with a warning.
+
+Examples:
+
+```text
+$ dayzmake api grep 'GetGame\(\)\.GetMission\(\)' --max 2
+scripts\3_Game\Sandstorm.c:95: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStart(continuedSession);
+scripts\3_Game\Sandstorm.c:115: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStop(calledByWeather);
+... 4 more lines (raise --max or narrow the query)
+```
+
+See also: [api find](#dayzmake-api-find), [api src](#dayzmake-api-src).
+
 ## dayzmake api defines
 
 List the compile-time defines that are active in the selected indexes.

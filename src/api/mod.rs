@@ -14,10 +14,10 @@ use dayzmake_core::error::printable;
 use dayzmake_core::pbo::{PBO, PboSelection, safe_relative_path};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
-use query::{Query, render_json, render_text, run_query, src_files};
+use query::{Query, compile_with, render_json, render_text, run_query, src_files};
 use source::{
     InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, index_entry_name, installed_mods,
-    installed_source, match_installed, parse_mods, resolve_mod,
+    installed_source, match_installed, parse_mods, resolve_mod, script_texts,
 };
 use steam::{Branch, find_game, libraries, steam_roots};
 
@@ -455,6 +455,162 @@ pub fn cat_sources(
         if !f.text.ends_with('\n') {
             out.push('\n');
         }
+    }
+    Ok(out)
+}
+
+/// One line of a script that `api grep` matched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct GrepHit {
+    /// Name of the index (`vanilla` or the mod).
+    pub source: String,
+    /// `<PBO prefix>\<entry name>`, as `api src` prints the file.
+    pub path: String,
+    /// 1-based line.
+    pub line: u32,
+    /// The raw line, lossily decoded.
+    pub text: String,
+}
+
+/// What `api grep` found: the first `max` hits in order and how many more there were.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GrepResult {
+    /// The hits, sorted by source (vanilla first, then the mods in `-m` order), path and line.
+    pub hits: Vec<GrepHit>,
+    /// Matching lines beyond `max`, all counted.
+    pub more: usize,
+    /// Whether more than one source was searched (the text output then tags each line with its source).
+    pub multi: bool,
+}
+
+/// Searches every `.c` file of vanilla and of the selected mods, straight from the PBOs, for lines that
+/// match `regex`. Nothing is written and no index is needed. The whole input is scanned even after `max`
+/// hits, so that `more` is exact.
+///
+/// # Errors
+///
+/// Returns an error for an invalid regex, a missing install or mod, or an unreadable vanilla PBO. A mod PBO
+/// that cannot be read is skipped with a warning.
+pub fn grep(
+    ctx: &ApiContext,
+    regex: &str,
+    ignore_case: bool,
+    max: usize,
+    warnings: &mut dyn WarningSink,
+) -> Result<GrepResult, Error> {
+    let rx = compile_with(regex, ignore_case)?;
+    let found = locate(ctx, warnings)?;
+    let mut sources: Vec<(&str, bool, &[PathBuf])> =
+        vec![("vanilla", true, std::slice::from_ref(&found.scripts_pbo))];
+    sources.extend(
+        found
+            .mods
+            .iter()
+            .map(|m| (m.name.as_str(), false, m.pbos.as_slice())),
+    );
+    let multi = sources.len() > 1;
+    let mut result = GrepResult {
+        hits: Vec::new(),
+        more: 0,
+        multi,
+    };
+    for (name, vanilla, pbos) in sources {
+        // the hits of this source; cut to what is left of `max` after every PBO, the rest is only counted
+        let mut kept: Vec<GrepHit> = Vec::new();
+        let left = max.saturating_sub(result.hits.len());
+        for path in pbos {
+            let texts = if vanilla {
+                script_texts(path, true, warnings)?
+            } else {
+                match script_texts(path, false, warnings) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warnings.warn(
+                            Warning::new(
+                                Some("api-bad-pbo"),
+                                format!("skipping unreadable PBO: {e}"),
+                            )
+                            .in_file(path.display().to_string()),
+                        );
+                        continue;
+                    }
+                }
+            };
+            let Some((prefix, texts)) = texts else {
+                continue;
+            };
+            for (entry, text) in &texts {
+                let shown = format!("{prefix}\\{entry}");
+                for (i, line) in text.lines().enumerate() {
+                    if rx.is_match(line) {
+                        kept.push(GrepHit {
+                            source: name.to_string(),
+                            path: shown.clone(),
+                            line: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                            text: line.to_string(),
+                        });
+                    }
+                }
+            }
+            kept.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+            if kept.len() > left {
+                result.more += kept.len() - left;
+                kept.truncate(left);
+            }
+        }
+        result.hits.append(&mut kept);
+    }
+    Ok(result)
+}
+
+/// The output of `api grep`: JSON (an array of `{source, path, line, text}`, cut to `max`) or text lines
+/// (`[<source>] <path>:<line>: <text>`, the tag only when mods are selected), then the `... N more lines`
+/// note.
+///
+/// # Errors
+///
+/// See [`grep`].
+pub fn grep_lines(
+    ctx: &ApiContext,
+    regex: &str,
+    ignore_case: bool,
+    max: usize,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<String>, Error> {
+    let r = grep(ctx, regex, ignore_case, max, warnings)?;
+    if json {
+        return Ok(vec![
+            serde_json::to_string(&r.hits).map_err(|e| error!("cannot serialize: {e}"))?,
+        ]);
+    }
+    let mut out: Vec<String> = r
+        .hits
+        .iter()
+        .map(|h| {
+            let tag = if r.multi {
+                format!("[{}] ", h.source)
+            } else {
+                String::new()
+            };
+            // paths and text come from files the user did not write
+            printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text))
+        })
+        .collect();
+    if out.is_empty() {
+        out.push(if r.multi {
+            "no match".to_string()
+        } else {
+            "no match  (searched vanilla only; add -m <mod> or -m all for mods)".to_string()
+        });
+    }
+    if r.more > 0 {
+        out.push(format!(
+            "... {} more lines (raise --max or narrow the query)",
+            r.more
+        ));
     }
     Ok(out)
 }

@@ -292,6 +292,51 @@ expression: "r.result(2)[\"tools\"]"
     "name": "api_source"
   },
   {
+    "description": "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "ignore_case": {
+          "description": "Match case-insensitively.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        },
+        "regex": {
+          "description": "Regular expression, matched against each line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "type": "object"
+    },
+    "name": "api_grep"
+  },
+  {
     "description": "Compile-time defines of the selected indexes, optionally filtered by a regex.",
     "inputSchema": {
       "properties": {

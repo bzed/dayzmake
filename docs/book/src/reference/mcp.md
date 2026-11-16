@@ -192,6 +192,23 @@ Files and lines that declare a class or enum; with cat the full source files, wi
 
 Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file.
 
+### api_grep
+
+Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `regex` | string | yes | Regular expression, matched against each line. |
+| `ignore_case` | boolean | no | Match case-insensitively. |
+| `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
+| `experimental` | boolean | no | Use the experimental branch instead of stable. |
+| `json` | boolean | no | Return JSON instead of text. |
+| `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
+| `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
+| `refresh` | boolean | no | Rebuild the cached index first. |
+
+Result: The matching lines, as `dayzmake api grep`.
+
 ### api_defines
 
 Compile-time defines of the selected indexes, optionally filtered by a regex.

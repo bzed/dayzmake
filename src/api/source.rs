@@ -293,6 +293,34 @@ pub(crate) fn index_entry_name(name: &str) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("\\"))
 }
 
+/// The PBO prefix and the `.c` entries (index entry name, text) of one script PBO.
+pub(crate) type ScriptTexts = (String, Vec<(String, String)>);
+
+/// The `.c` entries of one script PBO as (index entry name, text), read as `api` indexes them, with the PBO
+/// prefix in `\` form (`scripts` for the game's `scripts.pbo` when `vanilla`). `None` when the PBO has no
+/// scripts or an unsafe prefix (a warning says why).
+///
+/// # Errors
+///
+/// Returns an error when the PBO cannot be read.
+pub(crate) fn script_texts(
+    path: &Path,
+    vanilla: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Option<ScriptTexts>, Error> {
+    let origin = path.display().to_string();
+    let sel = read_selected(path, &origin, false, warnings)?;
+    if sel.texts.is_empty() {
+        return Ok(None);
+    }
+    let prefix = if vanilla {
+        Some("scripts".to_string())
+    } else {
+        pbo_prefix(sel.prefix_ext.as_ref(), path, &origin, warnings)
+    };
+    Ok(prefix.map(|p| (p, sel.texts)))
+}
+
 /// Index `dta/scripts.pbo`: one module, prefix `scripts`.
 ///
 /// # Errors
@@ -393,7 +421,7 @@ struct ModPbo {
 }
 
 /// The PBO prefix in `\` form; the file stem when there is none. `None` when it is unsafe.
-fn pbo_prefix(
+pub(crate) fn pbo_prefix(
     prefix_ext: Option<&String>,
     path: &Path,
     origin: &str,

@@ -9,6 +9,21 @@ The examples use a tiny stand-in game so that the output is short and reproducib
 `PlayerBase` and `Apple`, the enum `EStatTypes`, and the stand-in is selected with `--dayz dz`. With your real
 Steam install leave `--dayz` out: dayzmake finds the game itself (see [Environment and files](../reference/environment.md)).
 
+## Who calls this?
+
+`api find` matches declarations only. To find call sites and other usages, search the script bodies with
+`api grep`; the lines are matched as they are in the source, comments included:
+
+```text
+$ dayzmake api grep 'GetGame\(\)\.GetMission\(\)' --max 2
+scripts\3_Game\Sandstorm.c:95: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStart(continuedSession);
+scripts\3_Game\Sandstorm.c:115: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStop(calledByWeather);
+... 4 more lines (raise --max or narrow the query)
+```
+
+Add `--ignore-case` for a case-insensitive match and `-m cf` to search a mod's scripts too. See
+[api grep](../reference/api.md#dayzmake-api-grep).
+
 ## What does this class have?
 
 ```text

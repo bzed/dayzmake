@@ -508,6 +508,20 @@ fn tools() -> Value {
             (true, true)
         ),
         api_tool(
+            "api_grep",
+            "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
+            &[
+                (
+                    "regex",
+                    's',
+                    "Regular expression, matched against each line."
+                ),
+                ("ignore_case", 'b', "Match case-insensitively."),
+            ],
+            &["regex"],
+            (true, true)
+        ),
+        api_tool(
             "api_defines",
             "Compile-time defines of the selected indexes, optionally filtered by a regex.",
             &[("regex", 's', "Filter regular expression.")],
@@ -958,6 +972,17 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
     }
     let ctx = api_context(args, false)?;
     let json = bool_arg(args, "json")?;
+    if name == "api_grep" {
+        return Ok(api::grep_lines(
+            &ctx,
+            &str_arg(args, "regex")?,
+            bool_arg(args, "ignore_case")?,
+            max_arg(args)?,
+            json,
+            warnings,
+        )?
+        .join("\n"));
+    }
     let query = match name {
         "api_class" => Query::Class {
             name: str_arg(args, "name")?,
