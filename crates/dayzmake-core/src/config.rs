@@ -95,8 +95,13 @@ peg::parser! {
         rule exponent() = ['e' | 'E'] ['-' | '+']? ['0'..='9']+
 
         rule float() -> f32 = f:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) {?
+            // `parse` gives infinity on overflow; that would not survive a derapify/rapify round trip
             f.parse::<f32>()
                 .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
+                .and_then(|v| if v.is_finite() { Ok(v) } else {
+                    ctx.error.get_or_insert(error!("Invalid float \"{f}\": out of range"));
+                    Err("a float in range")
+                })
         }
 
         rule integer() -> i32 = i:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) {?

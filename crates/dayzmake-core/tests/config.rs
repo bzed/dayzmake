@@ -706,7 +706,14 @@ fn exponent_floats_in_arrays_are_floats() {
 
 #[test]
 fn malformed_exponents_stay_strings() {
-    let (config, _) = parse_a("class A { a = 1e5x; b = e5; c = 1e; d[] = {1e5x, e5, 1e}; };");
+    let (config, w) = parse_a("class A { a = 1e5x; b = e5; c = 1e; d[] = {1e5x, e5, 1e}; };");
+    assert!(
+        w.warnings()
+            .iter()
+            .any(|x| x.name == Some("unquoted-string")),
+        "{:?}",
+        w.warnings()
+    );
     for n in ["a", "b", "c"] {
         assert!(
             matches!(entry_a(&config, n), ConfigEntry::StringEntry(_)),
@@ -728,4 +735,50 @@ fn derapified_exponent_float_roundtrips() {
     let first = derapify(rapify_src("class A { x = 0.00003162277; };"));
     let second = derapify(rapify_src(&first));
     assert_eq!(first, second);
+}
+
+#[test]
+fn out_of_range_floats_are_errors() {
+    let long = format!("1{}.5", "0".repeat(45));
+    for v in ["1e999", "-1e999", "1e39", "-1e39", long.as_str()] {
+        for src in [
+            format!("class A {{ x = {v}; }};"),
+            format!("class A {{ x[] = {{1, {v}}}; }};"),
+        ] {
+            let err = Config::from_string(src.clone(), None, &[], &mut Warnings::new())
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(err.contains("out of range"), "{src}: {err:?}");
+            assert!(err.contains("Invalid float"), "{src}: {err:?}");
+        }
+    }
+}
+
+#[test]
+fn float_underflow_is_zero_without_warning() {
+    let (config, w) = parse_a("class A { a = 1e-50; b[] = {1e-50}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::FloatEntry(f) if f.to_bits() == 0));
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "b") else {
+        panic!("not an array");
+    };
+    assert!(matches!(a.elements(), [ConfigArrayElement::FloatElement(f)] if f.to_bits() == 0));
+}
+
+#[test]
+fn hex_and_leading_dot_exponent() {
+    let (config, w) = parse_a("class A { a = 0x1e5; b = .5e3; c[] = {0x1e5, .5e3}; };");
+    assert!(w.warnings().is_empty(), "{:?}", w.warnings());
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::IntEntry(485)));
+    assert!(
+        matches!(entry_a(&config, "b"), ConfigEntry::FloatEntry(f) if f.to_bits() == 500.0_f32.to_bits())
+    );
+    let ConfigEntry::ArrayEntry(a) = entry_a(&config, "c") else {
+        panic!("not an array");
+    };
+    assert!(matches!(
+        a.elements(),
+        [ConfigArrayElement::IntElement(485), ConfigArrayElement::FloatElement(f)] if f.to_bits() == 500.0_f32.to_bits()
+    ));
 }
