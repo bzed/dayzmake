@@ -820,6 +820,22 @@ fn overflowing_float_followed_by_text_stays_a_string() {
 }
 
 #[test]
+fn inf_and_nan_are_unquoted_strings_with_a_warning() {
+    let (config, w) = parse_a("class A { a = inf; b = nan; };");
+    assert_eq!(
+        w.warnings()
+            .iter()
+            .filter(|x| x.name == Some("unquoted-string"))
+            .count(),
+        2,
+        "{:?}",
+        w.warnings()
+    );
+    assert!(matches!(entry_a(&config, "a"), ConfigEntry::StringEntry(s) if s == "inf"));
+    assert!(matches!(entry_a(&config, "b"), ConfigEntry::StringEntry(s) if s == "nan"));
+}
+
+#[test]
 fn floats_ending_at_a_closing_brace_stay_floats() {
     let (config, w) = parse_a("class A { x = 1.5 };");
     assert!(w.warnings().is_empty(), "{:?}", w.warnings());
