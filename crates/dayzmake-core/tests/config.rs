@@ -535,3 +535,103 @@ fn indent_too_long_reports_the_length() {
     assert!(msg.contains("65 characters"), "{msg}");
     assert!(msg.len() < 120, "{msg}");
 }
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn parse(src: &str) -> Config {
+    Config::from_string(src.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap()
+}
+
+/// Returns the bytes of the rapified config and the enum table (from the header's `enum_offset`).
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn table_bytes(config: &Config) -> Vec<u8> {
+    let bytes = config.to_cursor().unwrap().into_inner().into_vec();
+    let off = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    bytes[off..].to_vec()
+}
+
+#[test]
+fn rapify_enum_block() {
+    let with = parse("enum { A, B = 5, C };\nclass X { y = 1; };");
+    let without = parse("class X { y = 1; };");
+    assert_eq!(
+        table_bytes(&with),
+        b"\x03\0\0\0a\0\0\0\0\0b\0\x05\0\0\0c\0\x06\0\0\0"
+    );
+    assert_eq!(table_bytes(&without), b"\0\0\0\0");
+    let a = with.to_cursor().unwrap().into_inner();
+    let b = without.to_cursor().unwrap().into_inner();
+    // the class tree (bytes 16..enum_offset) is identical
+    let ea = u32::from_le_bytes(a[12..16].try_into().unwrap()) as usize;
+    assert_eq!(&a[16..ea], &b[16..b.len() - 4]);
+    assert_eq!(
+        with.enum_values(),
+        &[
+            ("a".to_string(), 0),
+            ("b".to_string(), 5),
+            ("c".to_string(), 6)
+        ]
+    );
+}
+
+#[test]
+fn enum_in_class_and_trailing_comma() {
+    let c = parse("class X { enum { Foo = -2, Bar, }; v = 1; };\nenum { Z = 0x10 };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("foo".to_string(), -2),
+            ("bar".to_string(), -1),
+            ("z".to_string(), 16)
+        ]
+    );
+    assert_eq!(c.to_string().unwrap().lines().next(), Some("enum {"));
+    assert!(c.root().get("X").is_some());
+}
+
+fn bin_with_table(table: &[u8]) -> Vec<u8> {
+    let mut v = b"\0raP\0\0\0\0\x08\0\0\0".to_vec();
+    v.extend_from_slice(&21u32.to_le_bytes());
+    v.extend_from_slice(b"\0\0"); // root: parent "", 0 entries
+    v.extend_from_slice(&[0; 3]); // padding to offset 21
+    v.extend_from_slice(table);
+    v
+}
+
+#[test]
+fn derapify_enum_table() {
+    let data = bin_with_table(b"\x02\0\0\0destructno\0\0\0\0\0destructwreck\0\x07\0\0\0");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(
+        c.to_string().unwrap(),
+        "enum {\n    destructno = 0,\n    destructwreck = 7\n};\n"
+    );
+}
+
+#[test]
+fn enum_round_trip() {
+    let c = parse("enum { A, B = 5, C };\nclass X { y = 1; };");
+    let text = c.to_string().unwrap();
+    let again = parse(&text);
+    assert_eq!(again.to_string().unwrap(), text);
+    let mut cur = c.to_cursor().unwrap();
+    cur.seek(SeekFrom::Start(0)).unwrap();
+    let back = Config::read_rapified(&mut cur).unwrap();
+    assert_eq!(back.to_string().unwrap(), text);
+}
+
+#[test]
+fn damaged_enum_table_is_no_error() {
+    // offset past the end
+    let mut data = bin_with_table(b"");
+    data[12..16].copy_from_slice(&9999u32.to_le_bytes());
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), []);
+    // table cut short: second entry has no value
+    let data = bin_with_table(b"\x02\0\0\0a\0\x01\0\0\0b\0\x02");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), &[("a".to_string(), 1)]);
+    // hostile count, no data
+    let data = bin_with_table(b"\xff\xff\xff\xff");
+    let c = Config::read_rapified(&mut Cursor::new(data)).unwrap();
+    assert_eq!(c.enum_values(), []);
+}

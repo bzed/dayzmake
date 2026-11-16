@@ -30,6 +30,12 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
+### Unreleased
+
+- `Config` reads, keeps and writes the enum table of a rapified config (#82): the parser accepts `enum { ... };`
+  blocks, `Config::enum_values` returns the ordered `(lowercase name, value)` pairs, and `Config::to_string` prints
+  them as an `enum` block first. A bad table offset or a cut-short table is not an error.
+
 ### 0.2.2
 
 - PAA fixes in dayzmake-core: `Paa` remembers per mipmap whether it is LZO-compressed, so `Paa::write` no longer

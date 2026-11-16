@@ -206,13 +206,42 @@ peg::parser! {
             }))
         }
 
-        rule entry(d: usize) -> (String, ConfigEntry) =
-            e:(class(d) / array_entry(d) / array_expansion_entry(d) / var_entry(d)) whitespace()? (";" / &"}") { e } /
-            e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { e }
+        rule enum_value() -> (String, Option<i32>) = n:name() v:(whitespace()? "=" whitespace()? i:integer() { i })? { (n, v) }
 
-        rule entry_or_exec(d: usize) -> Option<(String, ConfigEntry)> = exec_entry(d) { None } / e:entry(d) { Some(e) }
+        /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase.
+        rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {?
+            let mut next: i32 = 0;
+            let mut out = Vec::new();
+            for (n, v) in v {
+                let value = v.unwrap_or(next);
+                next = value.checked_add(1).ok_or("an enum value that fits in 32 bits")?;
+                out.push((n.to_ascii_lowercase(), value));
+            }
+            Ok(out)
+        }
 
-        rule entries(d: usize) -> Vec<(String, ConfigEntry)> = v:(entry_or_exec(d) ** (whitespace()?)) { v.into_iter().flatten().collect() }
+        rule plain_entry(d: usize) -> Item =
+            e:(array_entry(d) / array_expansion_entry(d) / var_entry(d)) { Item::Entry(e.0, e.1, Vec::new()) }
+
+        rule entry(d: usize) -> Item =
+            e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
+            e:(class(d) / plain_entry(d)) whitespace()? (";" / &"}") { e } /
+            e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
+
+        rule entry_or_exec(d: usize) -> Item = exec_entry(d) { Item::Nothing } / entry(d)
+
+        rule entries(d: usize) -> (Vec<(String, ConfigEntry)>, Vec<(String, i32)>) = v:(entry_or_exec(d) ** (whitespace()?)) {
+            let mut entries = Vec::new();
+            let mut enums = Vec::new();
+            for item in v {
+                match item {
+                    Item::Entry(n, e, en) => { entries.push((n, e)); enums.extend(en); }
+                    Item::Enums(en) => enums.extend(en),
+                    Item::Nothing => {}
+                }
+            }
+            (entries, enums)
+        }
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
             n.to_string()
@@ -222,35 +251,35 @@ peg::parser! {
             n
         }
 
-        rule regular_class(d: usize) -> (String, ConfigEntry) = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
+        rule regular_class(d: usize) -> Item = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
             let parent = p.unwrap_or_default();
-            (n, ConfigEntry::ClassEntry(ConfigClass {
+            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent,
                 is_external: false,
                 is_deletion: false,
-                entries: Some(e)
-            }))
+                entries: Some(e.0)
+            }), e.1)
         }
 
-        rule external_class() -> (String, ConfigEntry) = "class" whitespace()+ n:name() {
-            (n, ConfigEntry::ClassEntry(ConfigClass {
+        rule external_class() -> Item = "class" whitespace()+ n:name() {
+            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: true,
                 is_deletion: false,
                 entries: None
-            }))
+            }), Vec::new())
         }
 
-        rule deleted_class() -> (String, ConfigEntry) = "delete" whitespace()+ n:name() {
-            (n, ConfigEntry::ClassEntry(ConfigClass {
+        rule deleted_class() -> Item = "delete" whitespace()+ n:name() {
+            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: false,
                 is_deletion: true,
                 entries: None
-            }))
+            }), Vec::new())
         }
 
-        rule class(d: usize) -> (String, ConfigEntry) = regular_class(d) / external_class() / deleted_class()
+        rule class(d: usize) -> Item = regular_class(d) / external_class() / deleted_class()
 
         /// Parses a complete config: a sequence of entries until end of input.
         pub rule config() -> Config = whitespace()? e:entries(0) whitespace()? ![_] {
@@ -259,11 +288,33 @@ peg::parser! {
                     parent: String::new(),
                     is_external: false,
                     is_deletion: false,
-                    entries: Some(e)
-                }
+                    entries: Some(e.0)
+                },
+                enums: e.1,
             }
         }
     }
+}
+
+/// Reads the enum table at the header's `enum_offset`. The class tree is usable without it, so a bad
+/// offset or a cut-short table gives the values read so far, never an error.
+fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
+    let mut out = Vec::new();
+    // an unreadable table is not an error: the values read so far are returned
+    let _ = (|| -> std::io::Result<()> {
+        input.seek(SeekFrom::Start(12))?;
+        let offset = input.read_u32::<LittleEndian>()?;
+        input.seek(SeekFrom::Start(offset.into()))?;
+        let count = input.read_u32::<LittleEndian>()?;
+        // no preallocation from the count: the loop ends at the first read error
+        for _ in 0..count {
+            let name = input.read_cstring()?;
+            let value = input.read_i32::<LittleEndian>()?;
+            out.push((name, value));
+        }
+        Ok(())
+    })();
+    out
 }
 
 /// Returns true if `data` starts with the rapified config signature.
@@ -301,6 +352,14 @@ fn compressed_int_len_of(len: usize) -> usize {
 #[derive(Debug)]
 pub struct Config {
     root_body: ConfigClass,
+    enums: Vec<(String, i32)>,
+}
+
+/// One parsed config item: the grammar returns the enum values of nested blocks upwards.
+enum Item {
+    Entry(String, ConfigEntry, Vec<(String, i32)>),
+    Enums(Vec<(String, i32)>),
+    Nothing,
 }
 
 /// Config class
@@ -994,6 +1053,23 @@ impl Config {
         &self.root_body
     }
 
+    /// The values of the `enum { ... }` blocks, in source order (or table order for a rapified config).
+    ///
+    /// Names are lowercase, as the game stores them. The values of all blocks, at any class level,
+    /// land in this one table.
+    #[must_use]
+    pub fn enum_values(&self) -> &[(String, i32)] {
+        &self.enums
+    }
+
+    fn rapified_enum_table_length(&self) -> usize {
+        4 + self
+            .enums
+            .iter()
+            .map(|(n, _)| n.len() + 1 + 4)
+            .sum::<usize>()
+    }
+
     /// Writes the config (unrapified) to the output.
     ///
     /// # Errors
@@ -1013,6 +1089,16 @@ impl Config {
         output: &mut O,
         options: &WriteOptions,
     ) -> Result<(), Error> {
+        if !self.enums.is_empty() {
+            output.write_all(b"enum {\n")?;
+            for (i, (name, value)) in self.enums.iter().enumerate() {
+                text_name(name, "Enum")?;
+                let comma = if i + 1 < self.enums.len() { "," } else { "" };
+                output
+                    .write_all(format!("{}{name} = {value}{comma}\n", options.indent).as_bytes())?;
+            }
+            output.write_all(b"};\n")?;
+        }
         self.root_body.write(output, 0, &options.indent)
     }
 
@@ -1053,7 +1139,15 @@ impl Config {
 
         writer.write_all(cursor.get_ref())?;
 
-        writer.write_all(b"\0\0\0\0")?;
+        let count = u32::try_from(self.enums.len())
+            .map_err(|_| error!("too many enum values: {}", self.enums.len()))?;
+        writer.write_u32::<LittleEndian>(count)?;
+        for (name, value) in &self.enums {
+            writer.write_all(name.as_bytes())?;
+            writer.write_all(b"\0")?;
+            writer.write_i32::<LittleEndian>(*value)?;
+        }
+        writer.flush()?;
 
         Ok(())
     }
@@ -1064,7 +1158,7 @@ impl Config {
     ///
     /// Returns an error if the config cannot be rapified.
     pub fn to_cursor(&self) -> Result<Cursor<Box<[u8]>>, Error> {
-        let len = self.root_body.rapified_length() + 20;
+        let len = self.root_body.rapified_length() + 16 + self.rapified_enum_table_length();
 
         let buffer: Box<[u8]> = vec![0; len].into_boxed_slice();
         let mut cursor: Cursor<Box<[u8]>> = Cursor::new(buffer);
@@ -1215,8 +1309,9 @@ impl Config {
             return Err(error!("File doesn't seem to be a rapified config."));
         }
 
-        Ok(Config {
-            root_body: ConfigClass::read_rapified(&mut reader, 0, &mut ReadBudget::new())?,
-        })
+        let root_body = ConfigClass::read_rapified(&mut reader, 0, &mut ReadBudget::new())?;
+        let enums = read_enum_table(&mut reader);
+
+        Ok(Config { root_body, enums })
     }
 }

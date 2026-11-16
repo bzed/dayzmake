@@ -29,6 +29,13 @@ is maintained here.
 ## Changes
 <!-- ANCHOR: changes -->
 
+### Unreleased
+
+- Config enum blocks (#82): `rapify` accepts `enum { A, B = 5, C };` at any class level (values count up from
+  the last explicit one, as in C) and writes the names, lowercase, into the enum table of the `config.bin`;
+  `derapify` prints the table as an `enum { name = value, ... };` block at the top. A table that is missing or
+  damaged gives no block and no error.
+
 ### 3.0.2
 
 With dayzmake-core 0.2.2.
