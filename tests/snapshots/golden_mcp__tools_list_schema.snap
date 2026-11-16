@@ -519,7 +519,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "array"
         },
         "include": {
-          "description": "Folders to search for includes (the current directory is always searched).",
+          "description": "Folders to search for includes (the current directory is only checked directly, not searched).",
           "items": {
             "type": "string"
           },

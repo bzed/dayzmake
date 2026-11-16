@@ -7,7 +7,6 @@ use std::env::current_dir;
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
 use std::io::{Error, Read};
-use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::{ErrorExt, PreprocessParseErrorExt, printable};
@@ -204,6 +203,42 @@ pub(crate) enum Line {
     TokenLine(Vec<Token>),
 }
 
+/// The folders searched for absolute includes (`#include "\DZ\data\x.hpp"`).
+///
+/// A folder in `search` is searched recursively for a file whose path ends in the include path (and whose
+/// `$PBOPREFIX$` matches); the walk does not follow directory symlinks that leave the folder, and enters no directory twice;
+/// a search folder that reaches 1,000,000 visited entries is an error naming the
+/// include, and it ends the whole lookup (the other folders are not tried). A folder in `direct` is only
+/// checked for `<folder>/<include path>` (case-insensitively as a second pass), without walking it: use it for the
+/// current working directory, which can be a whole disk. The `search` folders are tried first, then the `direct`
+/// ones.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct IncludeFolders {
+    /// Folders searched recursively.
+    pub search: Vec<PathBuf>,
+    /// Folders checked only for the include path directly below them.
+    pub direct: Vec<PathBuf>,
+}
+
+impl IncludeFolders {
+    /// Folders searched recursively, none checked directly.
+    #[must_use]
+    pub fn new(search: Vec<PathBuf>) -> Self {
+        IncludeFolders {
+            search,
+            direct: Vec::new(),
+        }
+    }
+
+    /// Adds folders that are only checked directly.
+    #[must_use]
+    pub fn with_direct(mut self, direct: Vec<PathBuf>) -> Self {
+        self.direct = direct;
+        self
+    }
+}
+
 /// Struct for additional information about preprocessor output. Contains import stack used for
 /// loop detection and the origins of all the lines in the output.
 #[derive(Debug)]
@@ -219,6 +254,8 @@ pub struct PreprocessInfo {
     expanded: usize,
     /// Bytes of token text copied by macro expansion so far.
     expanded_bytes: usize,
+    /// Macro resolution steps taken so far, over the file and its includes.
+    steps: usize,
     /// `#include`s processed so far, over the file and its includes.
     includes: usize,
 }
@@ -277,23 +314,34 @@ const MAX_LINE_BYTES: usize = 64 << 20;
 /// Maximum bytes copied by the lines of one `preprocess` call (the includes count too).
 const MAX_FILE_BYTES: usize = 512 << 20;
 
+// Both step caps are 100,000: real configs need at most 34 calls on a line and far fewer than 100,000 over a
+// file, so one number is easy to remember. The line cap still has a use: it stops a single line early (and names
+// it) instead of letting that line run up to the file cap.
 /// Maximum macro resolution steps (every call of a defined macro, argument pre-expansion included) of one source line. A step
 /// that produces nothing still costs, so expansion that drops its output cannot run exponentially (#59).
 const MAX_LINE_STEPS: usize = 100_000;
+
+/// Maximum macro resolution steps of all lines of one `preprocess` call (the includes count too). The line cap alone lets
+/// thousands of cheap-looking lines add up to tens of seconds (#64).
+const MAX_FILE_STEPS: usize = 100_000;
 
 /// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
 struct Budget {
     tokens: usize,
     bytes: usize,
     steps: usize,
+    /// Steps the earlier lines of the `preprocess` call took.
+    file_steps: usize,
 }
 
 impl Budget {
-    fn new() -> Budget {
+    /// A budget for one line; `file_steps` are the steps the earlier lines of the call already took.
+    fn new(file_steps: usize) -> Budget {
         Budget {
             tokens: 0,
             bytes: 0,
             steps: 0,
+            file_steps,
         }
     }
 
@@ -303,6 +351,12 @@ impl Budget {
         if self.steps > MAX_LINE_STEPS {
             return Err(error!(
                 "Macro \"{}\" expands to more than {MAX_LINE_STEPS} macro calls in one line",
+                printable(name)
+            ));
+        }
+        if self.file_steps.saturating_add(self.steps) > MAX_FILE_STEPS {
+            return Err(error!(
+                "The file and its includes reach more than {MAX_FILE_STEPS} macro calls (at macro \"{}\")",
                 printable(name)
             ));
         }
@@ -643,30 +697,43 @@ impl Token {
     }
 }
 
-/// The newlines of a line that is not expanded: those of its strings and comments, as expansion would
-/// count them (a string inside a macro call is counted once).
-fn skipped_newlines(tokens: &[Token]) -> u32 {
-    let mut total = 0u32;
+/// The source newlines of tokens, counted from the source and never from an expansion: `(inline,
+/// continuations)`. `inline` are those of strings and comments (a string inside a macro call is counted
+/// once), `continuations` the `\`-newlines outside strings, wherever they sit.
+fn source_newlines(tokens: &[Token]) -> (u32, u32) {
+    let (mut inline, mut continuations) = (0u32, 0u32);
     for token in tokens {
-        let n = match token {
-            Token::NewlineToken(_, n) | Token::CommentToken(n) => *n,
+        match token {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) => {
+                inline = inline.saturating_add(*n);
+            }
             Token::MacroToken(m) => {
                 let mut in_string = false;
-                let mut count = 0u32;
+                let mut prev = ' ';
                 for c in m.original.chars() {
                     match c {
                         '"' => in_string = !in_string,
-                        '\n' if in_string => count = count.saturating_add(1),
+                        '\n' if in_string => inline = inline.saturating_add(1),
+                        '\n' if prev == '\\' => continuations = continuations.saturating_add(1),
                         _ => {}
                     }
+                    prev = c;
                 }
-                count
             }
-            Token::RegularToken(_) | Token::ConcatToken => 0,
-        };
-        total = total.saturating_add(n);
+            Token::RegularToken(s) => {
+                let n = u32::try_from(s.matches("\\\n").count()).unwrap_or(u32::MAX);
+                continuations = continuations.saturating_add(n);
+            }
+            Token::ConcatToken => {}
+        }
     }
-    total
+    (inline, continuations)
+}
+
+/// All source newlines of tokens that are not expanded.
+fn skipped_newlines(tokens: &[Token]) -> u32 {
+    let (inline, continuations) = source_newlines(tokens);
+    inline.saturating_add(continuations)
 }
 
 /// Reads the first line of a `$PBOPREFIX$` file.
@@ -785,25 +852,76 @@ fn matches_include_path(path: &Path, include_path: &str, ci: bool) -> bool {
     false
 }
 
-fn search_directory(include_path: &str, directory: &Path, ci: bool) -> Option<PathBuf> {
-    // unreadable directories are skipped
-    if let Ok(entries) = read_dir(directory) {
-        for entry in entries.filter_map(std::result::Result::ok) {
-            let path = entry.path();
-            if path.is_dir() {
-                if path.file_name() == Some(OsStr::new(".git")) {
-                    continue;
-                }
+/// Maximum directory entries one recursive include search visits below one folder before it gives up with an error
+/// (#66). Real trees are far below it (a 109,000 entry `P:` drive copy); it stops a search that wandered into a
+/// whole disk.
+const MAX_SEARCH_ENTRIES: usize = 1_000_000;
 
-                if let Some(path) = search_directory(include_path, &path, ci) {
-                    return Some(path);
-                }
-            } else if matches_include_path(&path, include_path, ci) {
-                return Some(path);
-            }
-        }
+/// State of one recursive include search below `root`.
+struct Walk<'a> {
+    include_path: &'a str,
+    root: &'a Path,
+    ci: bool,
+    visited: usize,
+    limit: usize,
+    /// Canonical paths of the directories entered so far: none is entered twice, so symlink loops and several
+    /// links to one directory cost nothing.
+    seen: std::collections::BTreeSet<PathBuf>,
+}
+
+impl Walk<'_> {
+    /// Whether the directory symlink `path` must not be followed: its target is outside the search root or cannot
+    /// be resolved. (Loops are caught by the set of directories already entered.)
+    fn skips_link(&self, path: &Path) -> bool {
+        path.canonicalize()
+            .map_or(true, |target| !target.starts_with(self.root))
     }
 
+    fn search(&mut self, directory: &Path) -> Result<Option<PathBuf>, Error> {
+        // an unresolvable directory is skipped like an unreadable one
+        let Ok(canonical) = directory.canonicalize() else {
+            return Ok(None);
+        };
+        if !self.seen.insert(canonical) {
+            return Ok(None);
+        }
+        // unreadable directories are skipped
+        if let Ok(entries) = read_dir(directory) {
+            for entry in entries.filter_map(std::result::Result::ok) {
+                self.visited += 1;
+                if self.visited > self.limit {
+                    return Err(error!(
+                        "Include \"{}\" not found: the search below \"{}\" stopped after {} entries",
+                        printable(self.include_path),
+                        printable(&self.root.display().to_string()),
+                        self.limit
+                    ));
+                }
+                let path = entry.path();
+                let is_link = entry.file_type().is_ok_and(|t| t.is_symlink());
+                if path.is_dir() {
+                    if path.file_name() == Some(OsStr::new(".git")) {
+                        continue;
+                    }
+                    if is_link && self.skips_link(&path) {
+                        continue;
+                    }
+
+                    if let Some(path) = self.search(&path)? {
+                        return Ok(Some(path));
+                    }
+                } else if matches_include_path(&path, self.include_path, self.ci) {
+                    return Ok(Some(path));
+                }
+            }
+        }
+
+        Ok(lookup_directly(self.include_path, directory, self.ci))
+    }
+}
+
+/// The include `include_path` at exactly `directory/<include path>`, without looking at any other folder.
+fn lookup_directly(include_path: &str, directory: &Path, ci: bool) -> Option<PathBuf> {
     let relative = PathBuf::from(
         include_path
             .trim_start_matches('\\')
@@ -878,30 +996,57 @@ fn warn_include_case(include_path: &str, found: &Path, warnings: &mut dyn Warnin
 fn find_include_file(
     include_path: &str,
     origin: Option<&Path>,
-    search_paths: &[PathBuf],
+    folders: &IncludeFolders,
     line: u32,
     warnings: &mut dyn WarningSink,
 ) -> Result<PathBuf, Error> {
     if include_path.starts_with('\\') {
-        let mut roots: Vec<PathBuf> = Vec::new();
-        for search_path in search_paths {
-            roots.push(search_path.canonicalize().map_err(|e| {
+        let canonical = |search_path: &PathBuf| {
+            search_path.canonicalize().map_err(|e| {
                 error!(
                     "Include folder \"{}\" is not usable: {}",
                     search_path.display(),
                     e
                 )
-            })?);
-        }
+            })
+        };
+        let roots = folders
+            .search
+            .iter()
+            .map(canonical)
+            .collect::<Result<Vec<PathBuf>, Error>>()?;
+        let direct = folders
+            .direct
+            .iter()
+            .map(canonical)
+            .collect::<Result<Vec<PathBuf>, Error>>()?;
 
         for ci in [false, true] {
+            let mut found = None;
             for root in &roots {
-                if let Some(file_path) = search_directory(include_path, root, ci) {
-                    if ci {
-                        warn_include_case(include_path, &file_path, warnings);
-                    }
-                    return Ok(file_path);
+                let mut walk = Walk {
+                    include_path,
+                    root,
+                    ci,
+                    visited: 0,
+                    limit: MAX_SEARCH_ENTRIES,
+                    seen: std::collections::BTreeSet::new(),
+                };
+                found = walk.search(root)?;
+                if found.is_some() {
+                    break;
                 }
+            }
+            if found.is_none() {
+                found = direct
+                    .iter()
+                    .find_map(|root| lookup_directly(include_path, root, ci));
+            }
+            if let Some(file_path) = found {
+                if ci {
+                    warn_include_case(include_path, &file_path, warnings);
+                }
+                return Ok(file_path);
             }
         }
 
@@ -964,7 +1109,7 @@ fn preprocess_rec(
     origin: Option<&Path>,
     definition_map: &mut HashMap<String, Definition>,
     info: &mut PreprocessInfo,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<String, Error> {
     // CRLF and classic Mac (lone CR) newlines
@@ -981,177 +1126,178 @@ fn preprocess_rec(
     let mut level_true = 0;
 
     for line in lines {
-        match line {
-            Line::DirectiveLine(dir, newlines) => {
-                original_lineno += newlines;
+        // Every path leaves this block (never `continue`), so the line counter below always runs (#63).
+        'line: {
+            match line {
+                Line::DirectiveLine(dir, newlines) => {
+                    original_lineno += newlines;
 
-                match dir {
-                    Directive::IncludeDirective(path) => {
-                        if level > level_true {
-                            continue;
-                        }
+                    match dir {
+                        Directive::IncludeDirective(path) => {
+                            if level > level_true {
+                                break 'line;
+                            }
 
-                        let file_path = find_include_file(
-                            &path,
-                            origin,
-                            includefolders,
-                            original_lineno,
-                            warnings,
-                        )?;
+                            let file_path = find_include_file(
+                                &path,
+                                origin,
+                                includefolders,
+                                original_lineno,
+                                warnings,
+                            )?;
 
-                        let wanted = identity(&file_path);
-                        if info.import_stack.iter().any(|p| identity(p) == wanted) {
-                            let chain: Vec<String> = info
-                                .import_stack
-                                .iter()
-                                .chain(std::iter::once(&file_path))
-                                .map(|p| printable(&p.display().to_string()))
-                                .collect();
-                            return Err(error!("Include cycle: {}", chain.join(" -> ")));
-                        }
-                        if info.include_depth >= MAX_INCLUDE_DEPTH {
-                            return Err(error!(
-                                "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                            let wanted = identity(&file_path);
+                            if info.import_stack.iter().any(|p| identity(p) == wanted) {
+                                let chain: Vec<String> = info
+                                    .import_stack
+                                    .iter()
+                                    .chain(std::iter::once(&file_path))
+                                    .map(|p| printable(&p.display().to_string()))
+                                    .collect();
+                                return Err(error!("Include cycle: {}", chain.join(" -> ")));
+                            }
+                            if info.include_depth >= MAX_INCLUDE_DEPTH {
+                                return Err(error!(
+                                    "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                                    printable(&path)
+                                ));
+                            }
+
+                            info.includes += 1;
+                            if info.includes > MAX_INCLUDES {
+                                return Err(error!(
+                                    "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per preprocess call",
+                                    printable(&path),
+                                    info.includes
+                                ));
+                            }
+
+                            info.import_stack.push(file_path.clone());
+                            info.include_depth += 1;
+
+                            let mut content = String::new();
+                            File::open(&file_path)?.read_to_string(&mut content)?;
+                            let result = preprocess_rec(
+                                &content,
+                                Some(&file_path),
+                                definition_map,
+                                info,
+                                includefolders,
+                                warnings,
+                            )
+                            .prepend_error(format!(
+                                "Failed to preprocess include \"{}\":",
                                 printable(&path)
-                            ));
+                            ))?;
+
+                            info.import_stack.pop();
+                            info.include_depth -= 1;
+
+                            output += &result;
                         }
+                        Directive::DefineDirective(def) => {
+                            original_lineno += skipped_newlines(&def.value);
 
-                        info.includes += 1;
-                        if info.includes > MAX_INCLUDES {
-                            return Err(error!(
-                                "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
-                                printable(&path),
-                                info.includes
-                            ));
+                            if level > level_true {
+                                break 'line;
+                            }
+
+                            if definition_map.remove(&def.name).is_some() {
+                                // @todo: warn about redefine
+                            }
+
+                            definition_map.insert(def.name.clone(), def);
                         }
+                        Directive::UndefDirective(name) => {
+                            if level > level_true {
+                                break 'line;
+                            }
 
-                        info.import_stack.push(file_path.clone());
-                        info.include_depth += 1;
-
-                        let mut content = String::new();
-                        File::open(&file_path)?.read_to_string(&mut content)?;
-                        let result = preprocess_rec(
-                            &content,
-                            Some(&file_path),
-                            definition_map,
-                            info,
-                            includefolders,
-                            warnings,
-                        )
-                        .prepend_error(format!(
-                            "Failed to preprocess include \"{}\":",
-                            printable(&path)
-                        ))?;
-
-                        info.import_stack.pop();
-                        info.include_depth -= 1;
-
-                        output += &result;
-                    }
-                    Directive::DefineDirective(def) => {
-                        original_lineno += u32::sum(def.value.iter().map(|t| match t {
-                            Token::NewlineToken(_s, n) => *n,
-                            Token::CommentToken(n) => *n,
-                            _ => 0,
-                        }));
-
-                        if level > level_true {
-                            continue;
+                            definition_map.remove(&name);
                         }
-
-                        if definition_map.remove(&def.name).is_some() {
-                            // @todo: warn about redefine
+                        Directive::IfDefDirective(name) => {
+                            level_true += i32::from(
+                                level_true == level && definition_map.contains_key(&name),
+                            );
+                            level += 1;
                         }
-
-                        definition_map.insert(def.name.clone(), def);
-                    }
-                    Directive::UndefDirective(name) => {
-                        if level > level_true {
-                            continue;
+                        Directive::IfNDefDirective(name) => {
+                            level_true += i32::from(
+                                level_true == level && !definition_map.contains_key(&name),
+                            );
+                            level += 1;
                         }
-
-                        definition_map.remove(&name);
-                    }
-                    Directive::IfDefDirective(name) => {
-                        level_true +=
-                            i32::from(level_true == level && definition_map.contains_key(&name));
-                        level += 1;
-                    }
-                    Directive::IfNDefDirective(name) => {
-                        level_true +=
-                            i32::from(level_true == level && !definition_map.contains_key(&name));
-                        level += 1;
-                    }
-                    Directive::ElseDirective => {
-                        if level_true + 1 == level {
-                            level_true = level;
-                        } else if level_true == level {
-                            level_true -= 1;
+                        Directive::ElseDirective => {
+                            if level_true + 1 == level {
+                                level_true = level;
+                            } else if level_true == level {
+                                level_true -= 1;
+                            }
                         }
-                    }
-                    Directive::EndIfDirective => {
-                        if level == 0 {
-                            return Err(error!("#endif without matching #ifdef/#ifndef"));
-                        }
-                        level -= 1;
-                        if level_true > level {
-                            level_true -= 1;
+                        Directive::EndIfDirective => {
+                            if level == 0 {
+                                return Err(error!("#endif without matching #ifdef/#ifndef"));
+                            }
+                            level -= 1;
+                            if level_true > level {
+                                level_true -= 1;
+                            }
                         }
                     }
                 }
-            }
-            Line::TokenLine(tokens) => {
-                if level > level_true {
-                    // A disabled line is never expanded (#61): it can neither error nor cost time.
-                    original_lineno += skipped_newlines(&tokens);
-                    continue;
-                }
-                let stack: Vec<Definition> = Vec::new();
-                let mut mismatches: Vec<String> = Vec::new();
-                let mut budget = Budget::new();
-                let resolved = Macro::resolve_all(
-                    &tokens,
-                    definition_map,
-                    &stack,
-                    0,
-                    &mut mismatches,
-                    &mut budget,
-                )
-                .prepend_error("Failed to resolve macros:");
-                let resolved = resolved?;
-                info.expanded = info.expanded.saturating_add(budget.tokens);
-                info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
-                if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
-                    return Err(error!(
-                        "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
-                    ));
-                }
-
-                let (mut result, newlines) = Token::concat(&resolved);
-                result = result.replace("\r\n", "\n");
-                original_lineno += newlines;
-
-                let before = result.len();
-                result = result.replace("\\\n", "");
-
-                let file = origin.map(|p| p.display().to_string());
-                for msg in mismatches {
-                    let mut warning =
-                        Warning::new(Some("macro-arg-count"), msg).at_line(original_lineno);
-                    if let Some(file) = &file {
-                        warning = warning.in_file(file.clone());
+                Line::TokenLine(tokens) => {
+                    if level > level_true {
+                        // A disabled line is never expanded (#61): it can neither error nor cost time.
+                        original_lineno += skipped_newlines(&tokens);
+                        break 'line;
                     }
-                    warnings.warn(warning);
+                    let stack: Vec<Definition> = Vec::new();
+                    let mut mismatches: Vec<String> = Vec::new();
+                    let mut budget = Budget::new(info.steps);
+                    let resolved = Macro::resolve_all(
+                        &tokens,
+                        definition_map,
+                        &stack,
+                        0,
+                        &mut mismatches,
+                        &mut budget,
+                    )
+                    .prepend_error("Failed to resolve macros:");
+                    let resolved = resolved?;
+                    info.steps = info.steps.saturating_add(budget.steps);
+                    info.expanded = info.expanded.saturating_add(budget.tokens);
+                    info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
+                    if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
+                        return Err(error!(
+                            "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file and its includes"
+                        ));
+                    }
+
+                    // Line numbers follow the source tokens, so a macro use never shifts them.
+                    let (inline, continuations) = source_newlines(&tokens);
+                    let (mut result, _) = Token::concat(&resolved);
+                    result = result.replace("\r\n", "\n");
+                    original_lineno += inline;
+
+                    result = result.replace("\\\n", "");
+
+                    let file = origin.map(|p| p.display().to_string());
+                    for msg in mismatches {
+                        let mut warning =
+                            Warning::new(Some("macro-arg-count"), msg).at_line(original_lineno);
+                        if let Some(file) = &file {
+                            warning = warning.in_file(file.clone());
+                        }
+                        warnings.warn(warning);
+                    }
+
+                    output += &result;
+                    output += "\n";
+
+                    info.line_origins
+                        .push((original_lineno, origin.map(Path::to_path_buf)));
+                    original_lineno += continuations;
                 }
-
-                output += &result;
-                output += "\n";
-
-                info.line_origins
-                    .push((original_lineno, origin.map(Path::to_path_buf)));
-                let removed = u32::try_from((before - result.len()) / 2)
-                    .map_err(|_| error!("line number out of range"))?;
-                original_lineno += removed;
             }
         }
         original_lineno += 1;
@@ -1168,8 +1314,8 @@ fn preprocess_rec(
 /// of the lines in the output.
 ///
 /// `path` is the path to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes (see
+/// [`IncludeFolders`] for folders that are only checked directly).
 ///
 /// # Errors
 ///
@@ -1191,21 +1337,41 @@ fn preprocess_rec(
 ///
 /// assert_eq!("foo = \"abc_xyz\";", output.trim());
 /// ```
+pub fn preprocess(
+    input: String,
+    origin: Option<PathBuf>,
+    includefolders: &[PathBuf],
+    warnings: &mut dyn WarningSink,
+) -> Result<(String, PreprocessInfo), Error> {
+    preprocess_in(
+        input,
+        origin,
+        &IncludeFolders::new(includefolders.to_vec()),
+        warnings,
+    )
+}
+
+/// Like [`preprocess`], with the include folders given as an [`IncludeFolders`], so that some of them can be
+/// checked directly instead of searched recursively.
+///
+/// # Errors
+///
+/// Returns an error on parse failures, unreadable includes or invalid include folders.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "public API takes ownership of the input; callers pass owned strings"
 )]
-pub fn preprocess(
+pub fn preprocess_in(
     mut input: String,
     origin: Option<PathBuf>,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<(String, PreprocessInfo), Error> {
     if input.as_bytes().starts_with(&[0xef, 0xbb, 0xbf]) {
         input = input[3..].to_string();
     }
 
-    for folder in includefolders {
+    for folder in includefolders.search.iter().chain(&includefolders.direct) {
         if !folder.is_dir() {
             return Err(error!(
                 "Include folder \"{}\" does not exist or is not a directory.",
@@ -1220,6 +1386,7 @@ pub fn preprocess(
         include_depth: 0,
         expanded: 0,
         expanded_bytes: 0,
+        steps: 0,
         includes: 0,
     };
 
@@ -1245,6 +1412,53 @@ pub fn preprocess(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Several links to one directory are entered once: the entries are counted once.
+    #[cfg(unix)]
+    #[test]
+    fn sibling_links_are_not_visited_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("real")).unwrap();
+        std::fs::write(root.join("real/f.txt"), "x").unwrap();
+        std::os::unix::fs::symlink("real", root.join("l1")).unwrap();
+        std::os::unix::fs::symlink("real", root.join("l2")).unwrap();
+        let mut walk = Walk {
+            include_path: "\\DZ\\gone.hpp",
+            root: &root,
+            ci: false,
+            visited: 0,
+            limit: 1000,
+            seen: std::collections::BTreeSet::new(),
+        };
+        assert!(walk.search(&root).unwrap().is_none());
+        // root: real, l1, l2 (3 entries) plus real's one file; the links add nothing
+        assert_eq!(walk.visited, 4);
+    }
+
+    /// The walk stops with an error naming the include once it visited more entries than its limit (#66).
+    #[test]
+    fn search_stops_after_the_entry_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), "x").unwrap();
+        }
+        let root = dir.path().canonicalize().unwrap();
+        let mut walk = Walk {
+            include_path: "\\DZ\\gone.hpp",
+            root: &root,
+            ci: false,
+            visited: 0,
+            limit: 5,
+            seen: std::collections::BTreeSet::new(),
+        };
+        let err = walk.search(&root).unwrap_err().to_string();
+        assert!(
+            err.contains("DZ") && err.contains("stopped after 5 entries"),
+            "{err}"
+        );
+    }
+
     use std::ffi::OsStr;
 
     /// Argument-count mismatches go into the buffer of the call, not into state shared by the
@@ -1262,12 +1476,12 @@ mod tests {
         let tokens = vec![Token::MacroToken(parse_macro("F(1,2)").unwrap())];
 
         let mut first = Vec::new();
-        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new()).unwrap();
+        Macro::resolve_all(&tokens, &defs, &[], 0, &mut first, &mut Budget::new(0)).unwrap();
         assert_eq!(first.len(), 1);
 
         let plain = vec![Token::RegularToken("x".to_string())];
         let mut second = Vec::new();
-        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new()).unwrap();
+        Macro::resolve_all(&plain, &defs, &[], 0, &mut second, &mut Budget::new(0)).unwrap();
         assert_eq!(second.len(), 0);
     }
 

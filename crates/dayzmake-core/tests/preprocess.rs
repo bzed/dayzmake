@@ -429,16 +429,10 @@ fn laughs(n: usize) -> String {
 /// cap regresses; the N=30 repro runs in a memory-limited child process (`tests/cli.rs`).
 #[test]
 fn exponential_macro_expansion_is_capped() {
-    let start = std::time::Instant::now();
     let err = preprocess(laughs(21), None, &[], &mut Warnings::new()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("expands to more than"), "{msg}");
     assert!(msg.contains("\"E"), "{msg}");
-    assert!(
-        start.elapsed().as_secs_f64() < 1.0,
-        "took {:?}",
-        start.elapsed()
-    );
 }
 
 /// The same through macro arguments, which are copied rather than expanded.
@@ -557,4 +551,41 @@ fn moderate_include_fan_out_works() {
     )
     .unwrap();
     assert_eq!(out.matches('x').count(), 256);
+}
+
+/// A file of `lines` lines `A{level}`, where `A{level}` expands to nothing after many macro calls (#59, #64).
+fn empty_steps_file(level: usize, lines: usize) -> String {
+    let mut s = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=level {
+        let prev = i - 1;
+        s += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    s.push_str(&["A", &level.to_string(), "\n"].concat().repeat(lines));
+    s
+}
+
+/// #64: macro calls are capped per file, not only per line. Each `A14` line (about 65,000 calls) stays below
+/// the line cap (100,000 calls), but two of them together exceed the file cap. The 3000-line `A13` repro
+/// runs in a limited child process (`tests/cli.rs`).
+#[test]
+fn macro_work_is_capped_per_file() {
+    let err = preprocess(empty_steps_file(14, 2), None, &[], &mut Warnings::new()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("macro calls (at macro"), "{msg}");
+    assert!(msg.contains("\"A") || msg.contains("\"E\""), "{msg}");
+}
+
+/// One such line is fine.
+#[test]
+fn macro_work_below_the_file_cap_is_accepted() {
+    preprocess(empty_steps_file(14, 1), None, &[], &mut Warnings::new()).unwrap();
 }

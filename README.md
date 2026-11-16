@@ -24,9 +24,22 @@ is maintained here.
 
 ## Changes
 
+- Backslash line continuations count as source lines: in a `#define` and in disabled lines they used to be
+  lost, and a macro use no longer shifts the line numbers after it, so warnings and errors point at the right line
+  (#65).
+- Behaviour change: a missing absolute include no longer walks the whole working directory (#66): the implicit working directory is
+  only checked directly (`./DZ/data/x.hpp`), so a file buried below it is no longer found without `-i`. Folders
+  given with `-i` are still searched recursively, but the search does not follow directory symlinks that leave the
+  folder, and enters no directory twice, and it fails with an error naming the include after 1,000,000 visited entries (the
+  author's `P:` drive copy has 109,000).
+- Line numbers in warnings and errors stay right after a disabled `#ifdef`/`#ifndef` branch (plain lines, `#define`,
+  `#undef`, `#include`, nested branches); they used to drift up by one per disabled line (#63).
 - Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose
   expansion is empty (`#define E(x)` with `E(A)E(A)` levels) fails like the others; at most 100,000 macro calls
   per line, real configs need at most 34 (#59).
+- Macro work is capped per file too: at most 100,000 macro calls over a file and its includes (a 3000-line file of
+  `A13` lines, each about 16,000 calls with an empty expansion, took 37 s); real configs under the author's trees
+  need at most 174 (#64).
 - At most 10,000 `#include`s are processed per `preprocess` call (nested ones and repeated inclusions count), so an
   exponential include fan-out fails at once; real configs under the author's trees use at most 1 (#60).
 - Lines in a disabled `#ifdef`/`#ifndef` branch are skipped before any macro expansion, so they cannot raise macro
@@ -221,7 +234,7 @@ Options:
     -v --verbose                Enable verbose output.
     -f --force                  Overwrite the target file/folder if it already exists.
     -w --warning <wname>        Warning to disable
-    -i --include <includefolder>    Folder to search for includes, defaults to CWD.
+    -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
                                       For unpack: pattern to exclude from output folder.
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.

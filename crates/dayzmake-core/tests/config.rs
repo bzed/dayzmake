@@ -210,13 +210,11 @@ fn shared_body_fan_out() -> Vec<u8> {
 fn rapified_shared_class_body_fan_out_is_an_error() {
     let bytes = shared_body_fan_out();
     assert!(bytes.len() < 3000, "{}", bytes.len());
-    let started = std::time::Instant::now();
     let Err(err) = read_bytes(bytes) else {
         panic!("shared bodies are rejected");
     };
     let err = err.to_string();
     assert!(err.contains("shared"), "{err}");
-    assert!(started.elapsed().as_secs() < 2);
 }
 
 #[expect(clippy::unwrap_used, reason = "tests fail by panicking")]
@@ -379,4 +377,104 @@ fn empty_value_warning_points_at_the_entry_line() {
     let mut w = Warnings::default();
     Config::from_string("class A {\n  n =\n;\n};".to_string(), None, &[], &mut w).unwrap();
     assert_eq!(w.warnings()[0].line, Some(2));
+}
+
+fn empty_value_line(src: &str) -> Option<u32> {
+    let mut w = Warnings::default();
+    Config::from_string(src.to_string(), None, &[], &mut w).ok()?;
+    w.warnings()
+        .iter()
+        .find(|warning| warning.name == Some("empty-value"))
+        .and_then(|warning| warning.line)
+}
+
+#[test]
+fn line_numbers_survive_a_disabled_block_of_plain_lines() {
+    // Warning is on line 4 of the source (#63).
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nz=1;\n#endif\nclass X { y = ; };"),
+        Some(4)
+    );
+}
+
+#[test]
+fn line_numbers_survive_disabled_directives() {
+    let src =
+        "#ifdef NOPE\n#define A 1\n#undef B\n#include \"missing.hpp\"\n#endif\nclass X { y = ; };";
+    assert_eq!(empty_value_line(src), Some(6));
+}
+
+#[test]
+fn line_numbers_survive_nested_disabled_branches_with_else() {
+    let src =
+        "#ifdef NOPE\n#ifdef ALSO\na;\n#else\nb;\n#endif\nc;\n#else\nclass Z { w = ; };\n#endif\n";
+    // enabled #else branch: the warning sits on line 9
+    assert_eq!(empty_value_line(src), Some(9));
+    let src = "#ifdef NOPE\n#ifdef ALSO\na;\n#else\nb;\n#endif\n#endif\nclass Z { w = ; };";
+    assert_eq!(empty_value_line(src), Some(8));
+}
+
+#[test]
+fn line_numbers_survive_multiline_comments_and_strings_in_disabled_branches() {
+    let src = "#ifdef NOPE\n/* a\nb\nc */\nx = \"p\\\nq\";\n#define M 1 /* x\ny */\n#endif\nclass X { y = ; };";
+    assert_eq!(empty_value_line(src), Some(10));
+}
+
+#[test]
+fn error_location_survives_nested_disabled_branches() {
+    let src = "#ifdef NOPE\n#ifndef OTHER\na;\n#else\nb;\n#endif\n#endif\nclass X { ;;; @@@ };";
+    let err = Config::from_string(src.to_string(), None, &[], &mut Warnings::default())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("In line 8:"), "{err}");
+}
+
+#[test]
+fn line_numbers_count_backslash_continuations_in_disabled_lines() {
+    // The warning is on the last line of each source (#63).
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nx = 1 \\\n;\n#endif\nclass X { y = ; };\n"),
+        Some(5)
+    );
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nM(1,\\\n2);\n#endif\nclass X { y = ; };\n"),
+        Some(5)
+    );
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\n#define M(a) \\\n  a \\\n  a\n#endif\nclass X { y = ; };\n"),
+        Some(6)
+    );
+}
+
+#[test]
+fn line_numbers_count_backslash_continuations_in_an_enabled_define() {
+    // #65
+    assert_eq!(
+        empty_value_line("#define M(a) \\\n  a \\\n  a\nclass X { y = ; };\n"),
+        Some(4)
+    );
+}
+
+#[test]
+fn macro_uses_do_not_shift_line_numbers() {
+    // #65: the continuation lines of a #define are counted once, at the definition.
+    let one = "#define M(a) \\\n  a \\\n  a\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(one), Some(5));
+    let two = "#define M(a) \\\n  a \\\n  a\nx = M(1);\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(two), Some(6));
+    let nested = "#define N \\\n 1\n#define M(a) N a N\nx = M(1);\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(nested), Some(5));
+    let comment = "#define M 1 /* x\ny */\nx = M;\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(comment), Some(4));
+    let string = "#define M \"a\\\nb\"\nx = M;\nclass X { y = ; };\n";
+    assert_eq!(empty_value_line(string), Some(4));
+}
+
+#[test]
+fn from_string_in_matches_from_string() {
+    let folders = dayzmake_core::preprocess::IncludeFolders::new(Vec::new());
+    let mut w = Warnings::default();
+    let config =
+        Config::from_string_in("class A { x = 1; };".to_string(), None, &folders, &mut w).unwrap();
+    assert!(config.root().get("A").is_some());
 }

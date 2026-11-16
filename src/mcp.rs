@@ -22,6 +22,7 @@ use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::{WarningKind, WarningSink, Warnings};
 
@@ -412,7 +413,7 @@ fn tools() -> Value {
     build_props.push((
         "include",
         'a',
-        "Folders to search for includes (the current directory is always searched).",
+        "Folders to search for includes (the current directory is only checked directly, not searched).",
     ));
     build_props.push((
         "proton_binarize",
@@ -734,14 +735,13 @@ fn max_arg(args: &Args) -> Result<usize, Error> {
     }
 }
 
-/// The include folders of a call: the given ones, then the current directory like the CLI.
-fn include_folders(args: &Args) -> Result<Vec<PathBuf>, Error> {
-    let mut folders: Vec<PathBuf> = strs_arg(args, "include")?
+/// The include folders of a call: the given ones, then the current directory like the CLI (only checked directly).
+fn include_folders(args: &Args) -> Result<IncludeFolders, Error> {
+    let folders: Vec<PathBuf> = strs_arg(args, "include")?
         .into_iter()
         .map(PathBuf::from)
         .collect();
-    folders.push(PathBuf::from("."));
-    Ok(folders)
+    Ok(IncludeFolders::new(folders).with_direct(vec![PathBuf::from(".")]))
 }
 
 // ---- tools ----

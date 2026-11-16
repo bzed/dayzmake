@@ -5,14 +5,13 @@ use std::path::PathBuf;
 
 use dayzmake_core::config::{Config, is_rapified};
 use dayzmake_core::error::ErrorExt;
-use dayzmake_core::preprocess::preprocess;
+use dayzmake_core::preprocess::{IncludeFolders, preprocess_in};
 use dayzmake_core::warning::{Warning, WarningSink};
 
 /// Reads input, preprocesses and rapifies it and writes to output.
 ///
 /// `path` is the path to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes.
 ///
 /// # Errors
 ///
@@ -22,7 +21,7 @@ pub fn cmd_rapify<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,
     path: Option<PathBuf>,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut bytes = Vec::new();
@@ -43,7 +42,7 @@ pub fn cmd_rapify<I: Read, O: Write>(
         return Ok(());
     }
 
-    let config = Config::read(&mut Cursor::new(bytes), path, includefolders, warnings)?;
+    let config = Config::read_in(&mut Cursor::new(bytes), path, includefolders, warnings)?;
 
     config
         .write_rapified(output)
@@ -70,8 +69,7 @@ pub fn cmd_derapify<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> 
 /// Reads input, preprocesses it and writes to output.
 ///
 /// `path` is the `path` to the input if it is known and is used for relative includes and error
-/// messages. `includefolders` are the folders searched for absolute includes and should usually at
-/// least include the current working directory.
+/// messages. `includefolders` are the folders searched recursively for absolute includes.
 ///
 /// # Errors
 ///
@@ -80,7 +78,7 @@ pub fn cmd_preprocess<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,
     path: Option<PathBuf>,
-    includefolders: &[PathBuf],
+    includefolders: &IncludeFolders,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
     let mut buffer = String::new();
@@ -88,7 +86,7 @@ pub fn cmd_preprocess<I: Read, O: Write>(
         .read_to_string(&mut buffer)
         .prepend_error("Failed to read input file")?;
 
-    let (result, _) = preprocess(buffer, path, includefolders, warnings)?;
+    let (result, _) = preprocess_in(buffer, path, includefolders, warnings)?;
 
     output
         .write_all(result.as_bytes())

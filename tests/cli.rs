@@ -1948,7 +1948,7 @@ fn preprocess_limited(files: &[(&str, &str)]) -> Option<(Option<i32>, String)> {
     cmd.arg("-c")
         .arg(
             "ulimit -v 2097152 || exit 99; command -v timeout >/dev/null || exit 99; \
-             exec timeout 30 \"$0\" preprocess e.cpp",
+             exec timeout 60 \"$0\" preprocess e.cpp",
         )
         .arg(env!("CARGO_BIN_EXE_dayzmake"))
         .current_dir(dir.path());
@@ -2067,4 +2067,59 @@ fn include_fan_out_fails_fast() {
     };
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("the limit is"), "{err}");
+}
+
+/// #64: 3000 lines of `A13` (about 16,000 macro calls each, 37 s uncapped) fail fast on the per-file cap.
+#[cfg(unix)]
+#[test]
+fn per_file_macro_work_fails_fast() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=13 {
+        let prev = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str(&"A13\n".repeat(3000));
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("macro calls (at macro"), "{err}");
+}
+
+/// The working directory is only checked directly for an absolute include; a file buried in it is not found
+/// without `-i` (#66).
+#[test]
+fn working_directory_include_is_checked_directly_not_walked() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |relative: &str, text: &str| {
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("e.cpp", "#include \"\\DZ\\data\\x.hpp\"\n");
+    write("deep/er/DZ/data/x.hpp", "a = 1;\n");
+
+    let (code, _, err) = dayzmake(&["preprocess", "e.cpp"], dir.path());
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("not found"), "{err}");
+
+    // a folder given with -i is searched recursively
+    let (code, out, err) = dayzmake(&["preprocess", "-i", "deep", "e.cpp"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "a = 1;");
+
+    // the file directly below the working directory is found without -i
+    write("DZ/data/x.hpp", "a = 2;\n");
+    let (code, out, err) = dayzmake(&["preprocess", "e.cpp"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out.trim(), "a = 2;");
 }

@@ -10,6 +10,7 @@ use crate::commands::{binarize, config, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::WarningSink;
 
@@ -74,7 +75,7 @@ Options:
     -v --verbose                Enable verbose output.
     -f --force                  Overwrite the target file/folder if it already exists.
     -w --warning <wname>        Warning to disable
-    -i --include <includefolder>    Folder to search for includes, defaults to CWD.
+    -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
                                       For unpack: pattern to exclude from output folder.
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
@@ -211,8 +212,9 @@ fn run_command(
     stdout: &StdoutState,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut includefolders: Vec<PathBuf> = args.flag_include.iter().map(PathBuf::from).collect();
-    includefolders.push(PathBuf::from("."));
+    // the working directory is only checked directly: it can be a whole disk (#66)
+    let includefolders = IncludeFolders::new(args.flag_include.iter().map(PathBuf::from).collect())
+        .with_direct(vec![PathBuf::from(".")]);
 
     if args.cmd_mcp {
         crate::mcp::serve(std::io::stdin().lock(), stdout.writer(), args.flag_verbose)
