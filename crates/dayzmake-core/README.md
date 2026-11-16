@@ -30,6 +30,11 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
+### 0.2.1
+
+- `PBO::from_directory` with `PackOptions::pack()` no longer raises the `non-windows-binarization` warning for
+  models; only a build that binarizes warns (#72).
+
 ### 0.2.0
 
 The first published release.
