@@ -24,7 +24,7 @@ Usage:
     dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
-    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
@@ -86,6 +86,8 @@ Options:
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
     --cat                       api src: print the full source files.
+    --context <n>               api src: print n lines around each declaration, with line numbers.
+    --lines <a-b>               api src: print lines a to b of each file, with line numbers.
     --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.

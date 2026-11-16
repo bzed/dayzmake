@@ -31,6 +31,9 @@ is maintained here.
 
 ### Unreleased
 
+- `api src --context <n>` prints n lines around each declaration and `--lines <a-b>` lines a to b of each file, as
+  `<line>| <text>` (with `--json`: `"lines"`); the options exclude each other and `--cat`. The MCP tool `api_source`
+  takes `context` and `lines` (#90).
 - `unpack` takes `-x <pattern>` (leave entries out) and `--only <pattern>` (write only matching entries); `-x`
   wins. The MCP tool `pbo_unpack` has the arguments `exclude` and `only`. `UnpackOptions` gains `exclude` and
   `only`, and `dayzmake_core::pbo::entry_selected` is the shared filter (#86).
@@ -306,7 +309,7 @@ Usage:
     dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
-    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
@@ -368,6 +371,8 @@ Options:
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
     --cat                       api src: print the full source files.
+    --context <n>               api src: print n lines around each declaration, with line numbers.
+    --lines <a-b>               api src: print lines a to b of each file, with line numbers.
     --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
@@ -409,6 +414,7 @@ dayzmake api enum EStatLevels
 dayzmake api chain PlayerBase
 dayzmake api src AIAgent                      # file and line of every declaration
 dayzmake api src AIAgent --cat                # the full source files
+dayzmake api src AIAgent --context 5          # five lines around each declaration
 dayzmake api defines [regex]
 dayzmake api update                           # rebuild the cache now
 ```

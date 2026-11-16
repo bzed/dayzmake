@@ -2023,6 +2023,86 @@ mod from_pbo {
     }
 
     #[test]
+    fn api_src_context_clamps_at_the_file_start() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--context", "5"]);
+        assert_eq!(code, 0, "{err}");
+        let want = "// ==== [vanilla] dta/scripts.pbo scripts\\3_Game\\Base.c:3\n\
+                    1| /** @brief The base of everything. It has more to say.\n\
+                    2|  *  @param nothing */\n\
+                    3| class Base\n\
+                    4| {\n\
+                    5| \t/*! Counter, with a doc. Not this. */\n\
+                    6| \tint m_Count;\n\
+                    7| \tprotected int m_Prot;\n\
+                    8| \tprivate int m_Secret;\n";
+        // the second file is the modded class, separated by a blank line
+        assert_eq!(out.split("\n\n").next(), Some(want.trim_end()));
+        let (code, out, err) = w.run(&["api", "src", "Base", "--context", "0"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("\n3| class Base\n\n"), "{out}");
+    }
+
+    #[test]
+    fn api_src_lines_range_pads_line_numbers() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "8-11"]);
+        assert_eq!(code, 0, "{err}");
+        let first = out.split("\n\n").next().expect("first file");
+        let mut it = first.lines();
+        assert!(it.next().expect("header").starts_with("// ==== [vanilla]"));
+        assert_eq!(it.next(), Some(" 8| \tprivate int m_Secret;"));
+        assert_eq!(it.next(), Some(" 9| \tstatic const int LIMIT = 10;"));
+        assert_eq!(it.next(), Some("10| \tstatic int s_Value = 5;"));
+        assert_eq!(it.next(), Some("11| \tint m_Arr[4];"));
+        assert_eq!(it.next(), None);
+        // past the end is clamped
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "80-9999"]);
+        assert_eq!(code, 0, "{err}");
+        let first = out.split("\n\n").next().expect("first file");
+        assert_eq!(first.lines().count(), 1 + 2, "{out}");
+        assert!(first.lines().nth(1).expect("line").starts_with("80| "));
+    }
+
+    #[test]
+    fn api_src_range_errors() {
+        let w = World::new();
+        for (args, msg) in [
+            (&["--context", "2", "--lines", "1-2"][..], "exclude"),
+            (&["--context", "2", "--cat"][..], "exclude"),
+            (&["--lines", "1-2", "--cat"][..], "exclude"),
+            (&["--lines", "5-2"][..], "5-2"),
+            (&["--lines", "abc"][..], "--lines"),
+            (&["--context", "x"][..], "--context"),
+        ] {
+            let mut a = vec!["api", "src", "Base"];
+            a.extend_from_slice(args);
+            let (code, out, err) = w.run(&a);
+            assert_eq!(code, 1, "{args:?}: {out}");
+            assert!(err.contains(msg), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn api_src_range_json() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "2-3", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let f = &v["files"][0];
+        assert_eq!(f["index"], "vanilla");
+        assert_eq!(f["line"], 3);
+        assert_eq!(
+            f["lines"],
+            serde_json::json!([
+                {"line": 2, "text": " *  @param nothing */"},
+                {"line": 3, "text": "class Base"}
+            ])
+        );
+        assert!(f.get("text").is_none());
+    }
+
+    #[test]
     fn api_class_json() {
         let w = World::new();
         let (code, out, err) = w.run(&["api", "class", "Base", "--json"]);

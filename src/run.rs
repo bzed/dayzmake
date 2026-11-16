@@ -41,7 +41,7 @@ Usage:
     dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
-    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
@@ -103,6 +103,8 @@ Options:
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
     --cat                       api src: print the full source files.
+    --context <n>               api src: print n lines around each declaration, with line numbers.
+    --lines <a-b>               api src: print lines a to b of each file, with line numbers.
     --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
@@ -152,6 +154,8 @@ pub struct Args {
     flag_class: Option<String>,
     flag_all: bool,
     flag_cat: bool,
+    flag_context: Option<String>,
+    flag_lines: Option<String>,
     flag_json: bool,
     arg_name: String,
     arg_regex: Option<String>,
@@ -412,6 +416,21 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
             .flag_max
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
+        if args.cmd_src
+            && let Some(range) = api::SrcRange::parse(
+                args.flag_cat,
+                args.flag_context.as_deref(),
+                args.flag_lines.as_deref(),
+            )?
+        {
+            let text = api::src_range(&ctx, &args.arg_name, range, args.flag_json, warnings)?;
+            if args.flag_json {
+                writeln!(out, "{text}")?;
+            } else {
+                write!(out, "{text}")?;
+            }
+            return Ok(());
+        }
         if args.cmd_src && args.flag_cat {
             let text = api::src_cat(&ctx, &args.arg_name, args.flag_json, warnings)?;
             if args.flag_json {

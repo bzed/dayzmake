@@ -477,13 +477,23 @@ fn tools() -> Value {
         ),
         api_tool(
             "api_source",
-            "Files and lines that declare a class or enum; with cat the full source files.",
+            "Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.",
             &[
                 ("name", 's', "Class or enum name."),
                 (
                     "cat",
                     'b',
                     "Return the full source files (with json: the files as JSON)."
+                ),
+                (
+                    "context",
+                    'i',
+                    "Return n lines around each declaration, with line numbers (excludes cat and lines)."
+                ),
+                (
+                    "lines",
+                    's',
+                    "Return lines a to b of each file as \"a-b\", with line numbers (excludes cat and context)."
                 ),
                 OFFSET_ARG,
                 LENGTH_ARG,
@@ -970,7 +980,23 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
         },
         "api_source" => {
             let name = str_arg(args, "name")?;
-            if bool_arg(args, "cat")? {
+            let context = match args.get("context") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .ok_or_else(|| {
+                            error!("argument \"context\" must be a non-negative integer")
+                        })?
+                        .to_string(),
+                ),
+            };
+            let cat = bool_arg(args, "cat")?;
+            if let Some(range) =
+                api::SrcRange::parse(cat, context.as_deref(), opt_str(args, "lines")?.as_deref())?
+            {
+                return api::src_range(&ctx, &name, range, json, warnings);
+            }
+            if cat {
                 let text = api::src_cat(&ctx, &name, json, warnings)?;
                 return match opt_path(args, "target")? {
                     Some(target) => {

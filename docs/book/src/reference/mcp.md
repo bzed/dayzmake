@@ -171,17 +171,19 @@ Result: The chain, as `dayzmake api chain`.
 
 ### api_source
 
-Files and lines that declare a class or enum; with cat the full source files.
+Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | string | yes | Class or enum name. |
 | `cat` | boolean | no | Return the full source files (with json: the files as JSON). |
+| `context` | integer (&ge; 0) | no | Return n lines around each declaration, with line numbers (excludes cat and lines). |
 | `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
 | `experimental` | boolean | no | Use the experimental branch instead of stable. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `json` | boolean | no | Return JSON instead of text. |
 | `length` | integer (&ge; 0) | no | Return at most this many bytes (default and maximum 200000). |
+| `lines` | string | no | Return lines a to b of each file as "a-b", with line numbers (excludes cat and context). |
 | `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
 | `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
 | `offset` | integer (&ge; 0) | no | Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest. |

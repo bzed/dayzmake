@@ -34,7 +34,7 @@ automatically; the cache location is in [Environment and files](environment.md).
 Text output has one declaration per line; members carry their `//!` doc comment after `//`. JSON output is one
 line, `{"result": {...}, "truncated": N}`, where `N` is the number of items cut by `--max`. The key inside
 `result` names the kind: `Classes`, `Matches`, `Names`, `Enums`, `Chain`, `Sources` or `Defines`. `src --cat --json`
-returns `{"files": [...]}`. Declarations carry `module` (index into the PBO list), `path` and `line`.
+returns `{"files": [...]}`, as do `--context` and `--lines` with `--json`. Declarations carry `module` (index into the PBO list), `path` and `line`.
 
 ## dayzmake api class
 
@@ -303,7 +303,7 @@ Show where a class or enum is declared, or print the files.
 <div class="synopsis">
 
 ```text
-dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
 ```
 
 </div>
@@ -320,12 +320,17 @@ dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [-
 | `-m <mods>`, `--mod <mods>` | vanilla only | Also query mods; see [Selecting mods](#selecting-mods). |
 | `--refresh` | off | Rebuild the cached index before answering. |
 | `--cat` | off | Print the full source files instead of the locations. |
+| `--context <n>` | off | Print the lines from `line-n` to `line+n` of each file that declares the name, with line numbers. |
+| `--lines <a-b>` | off | Print lines `a` to `b` of each file that declares the name, with line numbers. |
 | `--json` | off | Print JSON instead of text. |
 
 
 Behaviour: without `--cat`, one line per declaration: `[<index>] <pbo> <prefix>\<path>:<line>`. With `--cat`, the
 full source files are read from the PBOs again and printed, each after a `// ==== [<index>] <pbo> <path>:<line>`
-header, with a blank line between files. `--max` does not apply. In the MCP server `api_source` can write the files to a file.
+header, with a blank line between files. `--context` and `--lines` print part of each file under the same header,
+one `<line>| <text>` per line, the number right-aligned to the width of the largest number in the range (`  9| ...`,
+` 10| ...`); a range outside the file is clamped to it, `a` greater than `b` is an error, and the two options exclude
+each other and `--cat`. With `--json` each file carries `"lines": [{"line": n, "text": "..."}]` instead of `text`. `--max` does not apply. In the MCP server `api_source` can write the files to a file.
 
 Examples:
 

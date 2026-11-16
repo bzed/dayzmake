@@ -220,12 +220,17 @@ expression: "r.result(2)[\"tools\"]"
     "name": "api_chain"
   },
   {
-    "description": "Files and lines that declare a class or enum; with cat the full source files.",
+    "description": "Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.",
     "inputSchema": {
       "properties": {
         "cat": {
           "description": "Return the full source files (with json: the files as JSON).",
           "type": "boolean"
+        },
+        "context": {
+          "description": "Return n lines around each declaration, with line numbers (excludes cat and lines).",
+          "minimum": 0,
+          "type": "integer"
         },
         "dayz": {
           "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
@@ -247,6 +252,10 @@ expression: "r.result(2)[\"tools\"]"
           "description": "Return at most this many bytes (default and maximum 200000).",
           "minimum": 0,
           "type": "integer"
+        },
+        "lines": {
+          "description": "Return lines a to b of each file as \"a-b\", with line numbers (excludes cat and context).",
+          "type": "string"
         },
         "max": {
           "description": "At most this many lines or items (default 120).",

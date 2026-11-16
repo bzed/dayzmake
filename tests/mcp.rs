@@ -331,6 +331,43 @@ fn fake_steam() -> FakeSteam {
 }
 
 #[test]
+fn mcp_api_source_context_and_lines() {
+    let w = fake_steam();
+    let r = run_raw(
+        lines(&[
+            call(1, "api_source", &json!({"name":"Base","context":1})),
+            call(2, "api_source", &json!({"name":"Base","lines":"3-4"})),
+            call(
+                3,
+                "api_source",
+                &json!({"name":"Base","lines":"3-4","json":true}),
+            ),
+            call(
+                4,
+                "api_source",
+                &json!({"name":"Base","context":1,"lines":"3-4"}),
+            ),
+        ]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("\n3| class Base\n"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(text(&r.replies[1]).contains("\n3| class Base\n4| {\n"));
+    let j: Value = serde_json::from_str(text(&r.replies[2])).expect("json text");
+    assert_eq!(j["files"][0]["lines"][1]["text"], "{", "{j}");
+    assert!(is_error(&r.replies[3]));
+}
+
+#[test]
 fn mcp_api_class_with_fake_steam() {
     let w = fake_steam();
     let r = run_raw(

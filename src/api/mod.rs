@@ -523,6 +523,134 @@ pub fn answer(
     Ok(lines)
 }
 
+/// A part of each source file, as `api src --context` and `--lines` select it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SrcRange {
+    /// `n` lines before and after the declaration.
+    Context(usize),
+    /// The lines `from` to `to`, both 1-based and inclusive.
+    Lines(usize, usize),
+}
+
+impl SrcRange {
+    /// The range the options ask for; `None` when neither is given. `--context` and `--lines` exclude each
+    /// other and `--cat`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a combination of the options, a value that is not a number (`--context`) or
+    /// `<from>-<to>` (`--lines`), or `from` greater than `to`.
+    pub fn parse(
+        cat: bool,
+        context: Option<&str>,
+        lines: Option<&str>,
+    ) -> Result<Option<SrcRange>, Error> {
+        if context.is_some() && lines.is_some() {
+            return Err(error!("--context and --lines exclude each other"));
+        }
+        if cat && (context.is_some() || lines.is_some()) {
+            return Err(error!("--cat excludes --context and --lines"));
+        }
+        if let Some(c) = context {
+            let n = c
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| error!("--context must be a number, not \"{}\"", printable(c)))?;
+            return Ok(Some(SrcRange::Context(n)));
+        }
+        let Some(l) = lines else { return Ok(None) };
+        let bad = || {
+            error!(
+                "--lines must be <from>-<to>, for example 10-20, not \"{}\"",
+                printable(l)
+            )
+        };
+        let (a, b) = l.split_once('-').ok_or_else(bad)?;
+        let a = a.trim().parse::<usize>().map_err(|_| bad())?;
+        let b = b.trim().parse::<usize>().map_err(|_| bad())?;
+        if a > b {
+            return Err(error!("--lines {a}-{b}: the start is after the end"));
+        }
+        Ok(Some(SrcRange::Lines(a, b)))
+    }
+
+    /// The 1-based inclusive bounds in a file of `total` lines, clamped to the file; `from > to` means
+    /// nothing is selected.
+    fn bounds(self, decl: u32, total: usize) -> (usize, usize) {
+        let (from, to) = match self {
+            SrcRange::Context(n) => {
+                let d = usize::try_from(decl).unwrap_or(usize::MAX);
+                (d.saturating_sub(n), d.saturating_add(n))
+            }
+            SrcRange::Lines(a, b) => (a, b),
+        };
+        (from.max(1), to.min(total))
+    }
+}
+
+/// `api src --context` or `--lines`: the selected lines of each file that declares `name`, as
+/// `// ==== ...` headers followed by `<line>| <text>` (the line number right-aligned to the widest in the range)
+/// or as JSON (`{"files": [{..., "lines": [{"line": n, "text": "..."}]}]}`).
+///
+/// # Errors
+///
+/// See [`src_contents`].
+pub fn src_range(
+    ctx: &ApiContext,
+    name: &str,
+    range: SrcRange,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<String, Error> {
+    let files = src_contents(ctx, name, warnings)?;
+    let mut out = String::new();
+    let mut jfiles = Vec::new();
+    for f in &files {
+        let total = f.text.lines().count();
+        let (from, to) = range.bounds(f.line, total);
+        let picked: Vec<(usize, &str)> = if from > to {
+            Vec::new()
+        } else {
+            f.text
+                .lines()
+                .enumerate()
+                .skip(from - 1)
+                .take(to - from + 1)
+                .map(|(i, t)| (i + 1, t))
+                .collect()
+        };
+        if json {
+            let lines: Vec<serde_json::Value> = picked
+                .iter()
+                .map(|(n, t)| serde_json::json!({"line": n, "text": t}))
+                .collect();
+            jfiles.push(serde_json::json!({
+                "index": f.index, "pbo": f.pbo, "prefix": f.prefix,
+                "path": f.path, "line": f.line, "lines": lines,
+            }));
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "// ==== [{}] {} {}\\{}:{}",
+            f.index, f.pbo, f.prefix, f.path, f.line
+        ); // writing to a String cannot fail
+        let width = picked.last().map_or(1, |(n, _)| n.to_string().len());
+        for (n, t) in picked {
+            let _ = writeln!(out, "{n:>width$}| {t}"); // writing to a String cannot fail
+        }
+    }
+    if json {
+        return serde_json::to_string(&serde_json::json!({ "files": jfiles }))
+            .map_err(|e| error!("cannot serialize: {e}"));
+    }
+    Ok(out)
+}
+
 /// `api src --cat`: the full source files as JSON (`{"files": [...]}`) or as text.
 ///
 /// # Errors
