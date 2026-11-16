@@ -32,8 +32,8 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
-- New module `extract`: `extract(source, target, &ExtractOptions, warnings)` unpacks an install, a mod or a PBO into one tree by prefix, with `ExtractOptions` (`force`, `derapify`, `only`, `exclude`), a `pbo-map.tsv` and an atomic swap; it returns an `ExtractSummary` (#87).
-- `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::EntryFilter` applies them (#86).
+- New module `extract`: `extract(source, target, &ExtractOptions, warnings)` unpacks an install, a mod or a PBO into one tree by prefix, with `ExtractOptions` (`force`, `derapify`, `only`, `exclude`), a `pbo-map.tsv` and an atomic swap; it streams entries, fails on I/O and decompression errors, and returns an `ExtractSummary` with `pbos()` and `files()` (#87). `force` only replaces an empty folder or an earlier extract result, never a folder that contains or lies inside the source.
+- `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::EntryFilter::new(only, exclude)` and `matches(name)` apply them; `exclude` wins (#86).
 - `EntryHeader` gains `timestamp` and `name_bytes`, and `PBO::header_extensions_bytes` returns the stored bytes of the header extensions (#91).
 - `PBO::write` and signing use the stored bytes of each header extension by position, so a UTF-8 and a windows-1252 spelling of one string no longer swap (#92).
 

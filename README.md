@@ -44,11 +44,11 @@ is maintained here.
   derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix, TAB, PBO path). The tree is
   written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree; `-f`
   only replaces an empty folder or an earlier result (one with a `pbo-map.tsv`) and never one that contains or lies
-  inside the source. The MCP
+  inside the source. Entries are streamed, not read whole, and an I/O or decompression error fails the extract. The MCP
   tool is `extract` (#87).
 - `api grep <regex>` searches the lines of every `.c` file of vanilla and of the selected mods, straight from the
   PBOs, and prints `[<source>] <prefix>\<path>:<line>: <text>` sorted by source, path and line. `--ignore-case`
-  matches case-insensitively, `--max` cuts the output (all further matches are still counted for the
+  matches case-insensitively, `--max` cuts the output and bounds the memory used (all further matches are still counted for the
   `... N more lines` note) and `--json` prints an array of `{source, path, line, text}`. The MCP tool is
   `api_grep` (#88).
 - `api src --context <n>` prints n lines around each declaration and `--lines <a-b>` lines a to b of each file, as
