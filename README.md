@@ -31,6 +31,9 @@ is maintained here.
 
 ### Unreleased
 
+- `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,
+  textures, materials, proxies, properties, selections and animations. Other ODOL versions still show the format
+  and version, with a note that only v56 is decoded.
 - PAA reads RGBA4444, ARGB1555 and AI88 (#83): `paa2img` and `paa_to_image` decode the 19 such textures the game
   ships (LZSS mipmaps with a checksum); a wrong checksum or a cut-short stream is an error. A PNG file named
   `.paa` is reported as a PNG file.
@@ -322,7 +325,7 @@ Commands:
                 for models whose textures are referenced by a longer prefix.
     build       Build a PBO from a folder.
     pack        Pack a folder into a PBO without any binarization or rapification.
-    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL) and
+    inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL v56) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
     cat         Read the named file from the target PBO to stdout.
@@ -458,7 +461,7 @@ the result, so a cut never drops them, and failures are results with `isError: t
 
 ## Inspecting models and checking their textures
 
-`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections; for a binarized ODOL (or BMTR) only the format and version are known. Without a model header, `inspect` treats the input as a PBO.
+`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections. For a binarized ODOL version 56 (the version of the game's models) it lists the skeleton, the bounding box, the LODs with vertex and face counts, textures, materials, proxies, properties, selections and animations; a damaged v56 model is an error. For other ODOL versions and for BMTR only the format and version are shown, with a note that only v56 is decoded. Without a model header, `inspect` treats the input as a PBO.
 
 `build` checks every MLOD model it is about to binarize (also without `--proton-binarize`) and warns about textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute with `-w`). References starting with the addon's prefix are looked up in the source folder, ignoring case. Other references (vanilla `dz\...`, other mods) are only checked if they exist below an `-i` folder or the current directory; if they don't, they are not reported because there is no way to tell whether they are wrong. Procedural textures (`#(argb,...)`) are skipped.
 

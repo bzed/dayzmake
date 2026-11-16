@@ -32,6 +32,8 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per
+  LOD, vertex and face counts, textures, materials, proxies, selections and properties. Other versions are an error.
 - `Paa::read` accepts the formats `0x4444` (`"RGBA4444"`), `0x1555` (`"ARGB1555"`) and `0x8080` (`"AI88"`) and
   `Paa::to_dynamic_image` decodes them to RGBA (#83); `Paa::write` writes their stored bytes back unchanged. A
   wrong checksum or a cut-short LZSS stream is an error, and a PNG file gives an error that names the PNG.

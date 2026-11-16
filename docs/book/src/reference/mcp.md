@@ -233,7 +233,7 @@ Result: The installed mods, as `dayzmake api mods` (JSON with `json`).
 
 ### pbo_inspect
 
-List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).
+List the entries of a PBO, or describe a model (P3D, MLOD or ODOL v56: format, LODs, textures, selections).
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|

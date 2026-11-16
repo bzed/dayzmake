@@ -4,6 +4,9 @@ use std::process::Command;
 
 use dayzmake_core::p3d::P3D;
 
+#[path = "../crates/dayzmake-core/tests/support/odol_builder.rs"]
+mod odol_builder;
+
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mlod/small.p3d")
 }
@@ -148,7 +151,7 @@ fn inspect_escapes_control_characters_in_names() {
 #[test]
 fn inspect_odol_reports_version_for_every_version() {
     let dir = tempfile::tempdir().unwrap();
-    for version in [53u32, 54, 55, 56] {
+    for version in [53u32, 54, 55, 57] {
         let mut data = b"ODOL".to_vec();
         data.extend_from_slice(&version.to_le_bytes());
         data.extend_from_slice(b"not a real model");
@@ -158,6 +161,45 @@ fn inspect_odol_reports_version_for_every_version() {
         assert!(out.contains("ODOL"), "{}", out);
         assert!(out.contains(&format!("Version: {version}")), "{}", out);
     }
+}
+
+#[test]
+fn inspect_odol_v56_lists_the_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("m.p3d"),
+        odol_builder::build(odol_builder::Knobs::default()),
+    )
+    .unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn inspect_odol_v56_broken_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let knobs = odol_builder::Knobs {
+        lod_count: Some(u32::MAX),
+        ..Default::default()
+    };
+    std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
+    let (code, _, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 1, "{err}");
+    assert_ne!(err, "");
+}
+
+#[test]
+fn inspect_odol_v58_notes_that_only_v56_is_decoded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut data = b"ODOL".to_vec();
+    data.extend_from_slice(&58u32.to_le_bytes());
+    data.extend_from_slice(b"not a real model");
+    std::fs::write(dir.path().join("m.p3d"), &data).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Version: 58"), "{out}");
+    assert!(out.contains("only version 56 is decoded"), "{out}");
 }
 
 #[cfg(unix)]

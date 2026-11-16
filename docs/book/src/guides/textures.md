@@ -72,7 +72,8 @@ Selections:
 - LOD 1 (Memory): start
 ```
 
-For a binarized model (ODOL, BMTR) only format and version are known.
+A binarized ODOL v56 model is listed as well (LODs, textures, materials, proxies, selections, animations); for other
+ODOL versions and for BMTR only format and version are shown.
 
 `build` goes further: it checks every editable model it is about to pack, with or without
 `--proton-binarize`, against the files in the addon:

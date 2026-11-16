@@ -1,12 +1,15 @@
 //! `dayzmake inspect` for models.
 
+use std::collections::BTreeMap;
 use std::io::{Error, Read, Seek, SeekFrom, Write};
 
 use dayzmake_core::error;
 use dayzmake_core::error::{ErrorExt, printable};
+use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::{P3D, model_magic};
 
-/// Writes what is in a model to the output. For ODOL (and BMTR) only the format and version are known.
+/// Writes what is in a model to the output. MLOD and ODOL version 56 are listed;
+/// for other ODOL versions and for BMTR only the format and version are known.
 ///
 /// # Errors
 ///
@@ -28,6 +31,17 @@ pub fn cmd_inspect<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> R
             };
             writeln!(output, "Format:  {name} ({what})")?;
             writeln!(output, "Version: {version}")?;
+            if &m == b"ODOL" {
+                if version == 56 {
+                    input.seek(SeekFrom::Start(0))?;
+                    let odol = Odol::read(input).prepend_error("Failed to read model:")?;
+                    return write_odol(&odol, output);
+                }
+                writeln!(
+                    output,
+                    "Note: only version 56 is decoded; the contents of this model are not listed."
+                )?;
+            }
             return Ok(());
         }
         None => return Err(error!("Not a P3D model (no MLOD, ODOL or BMTR header).")),
@@ -96,5 +110,114 @@ pub fn cmd_inspect<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> R
         }
     }
 
+    Ok(())
+}
+
+/// The listing of an ODOL v56 model, laid out like the MLOD one.
+fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
+    writeln!(output, "LODs:    {}", odol.lods.len())?;
+    writeln!(
+        output,
+        "Skeleton: {} ({} bones)",
+        printable(&odol.skeleton_name),
+        odol.bone_count
+    )?;
+    writeln!(output, "Class:   {}", printable(&odol.property_class))?;
+    writeln!(output, "Damage:  {}", printable(&odol.property_damage))?;
+    writeln!(output, "Mass:    {}", odol.mass)?;
+    writeln!(
+        output,
+        "Bounding box: ({}, {}, {}) to ({}, {}, {})",
+        odol.bbox_min[0],
+        odol.bbox_min[1],
+        odol.bbox_min[2],
+        odol.bbox_max[0],
+        odol.bbox_max[1],
+        odol.bbox_max[2]
+    )?;
+    writeln!(output)?;
+
+    writeln!(output, "  #  {:24} {:>8} {:>8}", "LOD", "Vertices", "Faces")?;
+    for (i, lod) in odol.lods.iter().enumerate() {
+        writeln!(
+            output,
+            "{:3}  {:24} {:8} {:8}",
+            i,
+            printable(&lod.name()),
+            lod.vertex_count,
+            lod.face_count
+        )?;
+    }
+
+    // Names in sorted order, with the number of LODs that use them.
+    let mut textures: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut materials: BTreeMap<&str, usize> = BTreeMap::new();
+    for lod in &odol.lods {
+        for t in lod.textures.iter().filter(|t| !t.is_empty()) {
+            *textures.entry(t).or_default() += 1;
+        }
+        for m in &lod.materials {
+            *materials.entry(&m.name).or_default() += 1;
+            for t in m.textures.iter().filter(|t| !t.is_empty()) {
+                *textures.entry(t).or_default() += 1;
+            }
+        }
+    }
+    writeln!(output)?;
+    writeln!(output, "Textures:")?;
+    for (name, count) in &textures {
+        writeln!(output, "- {} ({count} LODs)", printable(name))?;
+    }
+    writeln!(output, "Materials:")?;
+    for (name, count) in &materials {
+        writeln!(output, "- {} ({count} LODs)", printable(name))?;
+    }
+
+    writeln!(output)?;
+    writeln!(output, "Proxies:")?;
+    for (i, lod) in odol.lods.iter().enumerate() {
+        for proxy in &lod.proxies {
+            writeln!(output, "- LOD {i}: {}", printable(proxy))?;
+        }
+    }
+
+    writeln!(output)?;
+    writeln!(output, "Properties:")?;
+    for (i, lod) in odol.lods.iter().enumerate() {
+        for (name, value) in &lod.properties {
+            writeln!(
+                output,
+                "- LOD {i}: {} = {}",
+                printable(name),
+                printable(value)
+            )?;
+        }
+    }
+
+    writeln!(output)?;
+    writeln!(output, "Selections:")?;
+    for (i, lod) in odol.lods.iter().enumerate() {
+        if !lod.selections.is_empty() {
+            writeln!(
+                output,
+                "- LOD {} ({}): {}",
+                i,
+                printable(&lod.name()),
+                printable(&lod.selections.join(", "))
+            )?;
+        }
+    }
+
+    writeln!(output)?;
+    writeln!(output, "Animations:")?;
+    for a in &odol.animations {
+        writeln!(
+            output,
+            "- {} (source {}, type {})",
+            printable(&a.name),
+            printable(&a.source),
+            a.kind
+        )?;
+    }
     Ok(())
 }
