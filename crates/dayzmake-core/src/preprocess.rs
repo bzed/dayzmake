@@ -275,10 +275,15 @@ const MAX_LINE_BYTES: usize = 64 << 20;
 /// Maximum bytes copied by the lines of one `preprocess` call (the includes count too).
 const MAX_FILE_BYTES: usize = 512 << 20;
 
+/// Maximum macro resolution steps (every call of a defined macro, argument pre-expansion included) of one source line. A step
+/// that produces nothing still costs, so expansion that drops its output cannot run exponentially (#59).
+const MAX_LINE_STEPS: usize = 100_000;
+
 /// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
 struct Budget {
     tokens: usize,
     bytes: usize,
+    steps: usize,
 }
 
 impl Budget {
@@ -286,7 +291,20 @@ impl Budget {
         Budget {
             tokens: 0,
             bytes: 0,
+            steps: 0,
         }
+    }
+
+    /// Charges one resolution step of the macro `name`.
+    fn step(&mut self, name: &str) -> Result<(), Error> {
+        self.steps = self.steps.saturating_add(1);
+        if self.steps > MAX_LINE_STEPS {
+            return Err(error!(
+                "Macro \"{}\" expands to more than {MAX_LINE_STEPS} macro calls in one line",
+                printable(name)
+            ));
+        }
+        self.spend(1, name.len().max(1), name)
     }
 
     /// Charges `tokens` tokens and `bytes` bytes of text, produced by the expansion of `name`.
@@ -467,9 +485,12 @@ impl Macro {
                 printable(&self.name)
             ));
         }
+        // Every resolution step costs, even one that produces nothing (#59): the work, not only the output,
+        // is bounded. Argument pre-expansion and bodies both come through here.
         let depth = depth + 1;
         match def_map.get(&self.name) {
             Some(def) => {
+                budget.step(&self.name)?;
                 if let Some(args) = &self.arguments {
                     if def.parameters.is_none() {
                         // Object-like macro followed by parentheses: expand it, keep the parentheses.

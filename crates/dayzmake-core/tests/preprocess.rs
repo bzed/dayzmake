@@ -488,3 +488,25 @@ d = QFUNC(bar);
     assert!(out.contains("x\\tag\\addons\\main\\data\\x.paa"), "{out}");
     assert!(out.contains("d = \"tag_main_fnc_bar\";"), "{out}");
 }
+
+/// #59: expansion that yields nothing is charged for its work; N=14 (16k steps) still works, and the
+/// N=30 repro runs in a limited child (`tests/cli.rs`).
+#[test]
+fn moderate_empty_expansion_still_works() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=14 {
+        let p = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &p.to_string(),
+            ")E(A",
+            &p.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str("A14\n");
+    preprocess(src, None, &[], &mut Warnings::new()).unwrap();
+}

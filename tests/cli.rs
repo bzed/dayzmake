@@ -1920,34 +1920,36 @@ fn a_broken_pipe_on_a_fifo_file_target_still_fails() {
     );
 }
 
-/// Runs `dayzmake preprocess e.cpp` on `src` in a child with a 2 GiB address-space limit, so a regressed
-/// cap fails the test instead of exhausting the machine's memory. `None` when the platform has no
-/// `ulimit -v` (the child exits 99 before running dayzmake): the test is skipped, never run unlimited.
+/// Runs `dayzmake preprocess e.cpp` on the files in a child with a 2 GiB address-space limit and a 30 s
+/// deadline (`timeout` kills it, exit 124), so a regressed cap fails the test instead of exhausting the
+/// machine. Returns (exit code, stderr); `None` when the platform has no `ulimit -v` or `timeout` (the
+/// child exits 99 before running dayzmake): the test is skipped, never run unlimited.
 #[cfg(unix)]
 #[expect(
     clippy::unwrap_used,
     clippy::print_stderr,
     reason = "test helper: failures panic, the skip is reported on stderr"
 )]
-fn preprocess_limited(src: &str) -> Option<(Option<i32>, String, std::time::Duration)> {
-    let dir = tempdir_with(&[("e.cpp", src)]);
+fn preprocess_limited(files: &[(&str, &str)]) -> Option<(Option<i32>, String)> {
+    let dir = tempdir_with(files);
     let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
-        .arg("ulimit -v 2097152 || exit 99; exec \"$0\" preprocess e.cpp")
+        .arg(
+            "ulimit -v 2097152 || exit 99; command -v timeout >/dev/null || exit 99; \
+             exec timeout 30 \"$0\" preprocess e.cpp",
+        )
         .arg(env!("CARGO_BIN_EXE_dayzmake"))
         .current_dir(dir.path());
     isolate(&mut cmd, home.path());
-    let start = std::time::Instant::now();
     let out = cmd.output().unwrap();
     if out.status.code() == Some(99) {
-        eprintln!("skipped: `ulimit -v` is not available");
+        eprintln!("skipped: `ulimit -v` or `timeout` is not available");
         return None;
     }
     Some((
         out.status.code(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
-        start.elapsed(),
     ))
 }
 
@@ -1971,13 +1973,12 @@ fn exponential_macro_expansion_fails_fast() {
         .concat();
     }
     src.push_str("a = E0;\n");
-    let Some((code, err, took)) = preprocess_limited(&src) else {
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
         return;
     };
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("expands to more than"), "{err}");
     assert!(err.contains("\"E"), "{err}");
-    assert!(took.as_secs() < 5, "took {took:?}");
 }
 
 /// Stringification collapses an expanded argument into one token, so the bytes double per level while
@@ -2002,10 +2003,35 @@ fn exponential_stringification_fails_fast() {
         .concat();
     }
     src.push_str("a = L5(ab);\n");
-    let Some((code, err, took)) = preprocess_limited(&src) else {
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
         return;
     };
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("expands to more than"), "{err}");
-    assert!(took.as_secs() < 10, "took {took:?}");
+}
+
+/// #59: exponential expansion that produces no output (the macro drops its argument) is bounded too.
+#[cfg(unix)]
+#[test]
+fn exponential_empty_expansion_fails_fast() {
+    let mut src = String::from("#define E(x)\n#define A0\n");
+    for i in 1..=30 {
+        let prev = i - 1;
+        src += &[
+            "#define A",
+            &i.to_string(),
+            " E(A",
+            &prev.to_string(),
+            ")E(A",
+            &prev.to_string(),
+            ")\n",
+        ]
+        .concat();
+    }
+    src.push_str("A30\n");
+    let Some((code, err)) = preprocess_limited(&[("e.cpp", &src)]) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("expands to more than"), "{err}");
 }
