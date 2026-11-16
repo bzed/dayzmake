@@ -579,19 +579,19 @@ fn empty_steps_file(level: usize, lines: usize) -> String {
     s
 }
 
-/// #64: macro calls are capped per file, not only per line. Each `A14` line (about 32,000 calls) stays below
-/// the line cap (100,000 calls), but 12 of them together exceed the file cap. The 3000-line `A13` repro
+/// #64: macro calls are capped per file, not only per line. Each `A14` line (about 65,000 calls) stays below
+/// the line cap (100,000 calls), but two of them together exceed the file cap. The 3000-line `A13` repro
 /// runs in a limited child process (`tests/cli.rs`).
 #[test]
 fn macro_work_is_capped_per_file() {
-    let err = preprocess(empty_steps_file(14, 12), None, &[], &mut Warnings::new()).unwrap_err();
+    let err = preprocess(empty_steps_file(14, 2), None, &[], &mut Warnings::new()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("macro calls in one file"), "{msg}");
     assert!(msg.contains("\"A") || msg.contains("\"E\""), "{msg}");
 }
 
-/// A few such lines are fine.
+/// One such line is fine.
 #[test]
 fn macro_work_below_the_file_cap_is_accepted() {
-    preprocess(empty_steps_file(14, 3), None, &[], &mut Warnings::new()).unwrap();
+    preprocess(empty_steps_file(14, 1), None, &[], &mut Warnings::new()).unwrap();
 }

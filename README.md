@@ -29,7 +29,7 @@ is maintained here.
 - Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose
   expansion is empty (`#define E(x)` with `E(A)E(A)` levels) fails like the others; at most 100,000 macro calls
   per line, real configs need at most 34 (#59).
-- Macro work is capped per file too: at most 250,000 macro calls over a file and its includes (a 3000-line file of
+- Macro work is capped per file too: at most 100,000 macro calls over a file and its includes (a 3000-line file of
   `A13` lines, each about 16,000 calls with an empty expansion, took 37 s); real configs under the author's trees
   need at most 174 (#64).
 - At most 10,000 `#include`s are processed per `preprocess` call (nested ones and repeated inclusions count), so an

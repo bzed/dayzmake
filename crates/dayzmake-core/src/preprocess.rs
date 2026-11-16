@@ -284,7 +284,7 @@ const MAX_LINE_STEPS: usize = 100_000;
 
 /// Maximum macro resolution steps of all lines of one `preprocess` call (the includes count too). The line cap alone lets
 /// thousands of cheap-looking lines add up to tens of seconds (#64).
-const MAX_FILE_STEPS: usize = 250_000;
+const MAX_FILE_STEPS: usize = 100_000;
 
 /// Counts the tokens and bytes macro expansion produces, so that exponential expansion stops early.
 struct Budget {
