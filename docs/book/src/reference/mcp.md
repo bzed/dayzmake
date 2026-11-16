@@ -359,7 +359,7 @@ Convert an image to a PAA texture.
 |---|---|---|---|
 | `source` | string | yes | Image file. |
 | `target` | string | yes | PAA file to write. |
-| `compress` | boolean | no | Compress the output. |
+| `compress` | boolean | no | Compress the output. Accepted but has no effect yet ([#70](https://github.com/bzed/dayzmake/issues/70)). |
 | `force` | boolean | no | Overwrite existing target files. |
 | `type` | string | no | PAA type, e.g. dxt1, dxt5 (default dxt5). |
 

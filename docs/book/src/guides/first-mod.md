@@ -132,7 +132,6 @@ this:
     mymod.pbo.mykey.bisign
   keys/
     mykey.bikey
-  meta.cpp
 ```
 
 ```text
@@ -140,6 +139,9 @@ $ mkdir -p @MyMod/addons @MyMod/keys
 $ cp mymod.pbo mymod.pbo.mykey.bisign @MyMod/addons/
 $ cp mykey.bikey @MyMod/keys/
 ```
+
+Upload tools may add a `meta.cpp` with the mod's name and Workshop id to this folder; you do not need to write one,
+and dayzmake only reads its `name` line, if there is one, to show a name in `dayzmake api mods`.
 
 A server owner copies `mykey.bikey` into the `keys` folder of the server; the server then accepts clients that
 load PBOs signed with `mykey`. A client without a matching signature is rejected with a signature error.

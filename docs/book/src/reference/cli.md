@@ -52,7 +52,8 @@ command succeeded, so a failed command leaves no half-written file.
 
 Warnings go to standard error as `[In file <file>:<line>: ]warning: <message> [<name>]`. A warning name is shown
 at most ten times; the rest is summarised at the end with a hint to mute it with `-w` or to use `-v`. Colours are
-used on a terminal and can be switched off with `NO_COLOR=1`.
+used when standard output is a terminal (the messages themselves go to standard error); `NO_COLOR=1` and
+`CLICOLOR=0` switch them off and `CLICOLOR_FORCE=1` forces them (see [Environment and files](environment.md)).
 
 ## Help text
 

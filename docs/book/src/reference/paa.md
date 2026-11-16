@@ -71,7 +71,7 @@ dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. |
-| `-c`, `--compress` | off | Meant to compress the output. It is accepted but has no effect in 3.0.0. |
+| `-c`, `--compress` | off | Meant to compress the output. It is accepted but has no effect in 3.0.0 ([#70](https://github.com/bzed/dayzmake/issues/70)). |
 | `-t <paatype>`, `--type <paatype>` | `dxt5` | The pixel format: `dxt1`, `dxt3`, `dxt5` or `rgba`, in any case. |
 
 Behaviour:

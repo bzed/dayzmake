@@ -342,7 +342,7 @@ dayzmake cat [-v] <source> <filename> [<target>]
 
 Behaviour: the entry is decompressed when it is stored compressed. The name must match exactly (including the
 case the PBO uses); a name that is not in the PBO is an error. `cat` has no `-f`: an existing `<target>` is
-never overwritten (the error message mentions `--force`, which this command does not accept).
+never overwritten (the error message mentions `--force`, which this command does not accept; [#71](https://github.com/bzed/dayzmake/issues/71)).
 
 Examples:
 

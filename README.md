@@ -23,7 +23,7 @@ targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
 
-**Status:** PAA commands not implemented, some options not implemented, testing.
+**Status:** `paa2img` and `img2paa` work. Two options are accepted but have no effect yet: `derapify -d` (indentation, [#69](https://github.com/bzed/dayzmake/issues/69)) and `img2paa -c` (compression, [#70](https://github.com/bzed/dayzmake/issues/70)).
 <!-- ANCHOR_END: intro -->
 
 ## Changes

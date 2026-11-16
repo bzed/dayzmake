@@ -154,7 +154,10 @@ The lints are configured once, in `[workspace.lints]` in the root `Cargo.toml`; 
 ## Documentation
 
 - Public items have rustdoc comments (`missing_docs` is on); `make doc` builds them with warnings as errors.
-- A commit that changes behaviour or the CLI updates `README.md` and the `USAGE` text in `src/run.rs` together.
+- A commit that changes behaviour or the CLI updates `README.md` and the `USAGE` text in `src/run.rs` together, and
+  the HTML documentation in `docs/book/src/reference/` and `docs/book/src/guides/` (a command, option, MCP tool or
+  warning without its page fails `tests/book_sources.rs`; examples and described behaviour are not checked, so
+  re-run them).
 
 ## Commits
 

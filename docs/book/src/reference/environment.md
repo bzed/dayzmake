@@ -18,9 +18,19 @@ command reads any other variable. The library crate `dayzmake-core` reads variab
 | `LOCALAPPDATA` | `api`, `mcp` | Windows: cache folder is `%LOCALAPPDATA%\dayzmake\api` when `DAYZMAKE_CACHE` is not set. |
 | `TMPDIR` (`TEMP` on Windows) | `build`, `binarize` | Where the temporary folder of a binarize run goes. The Proton sandbox of a binarize run is a folder `dayzmake-binarize-<pid>-<n>` below it; it is removed when the run ends. |
 | `ProgramFiles(x86)`, `ProgramFiles` | `api` (Windows) | Searched for `Steam\steamapps` after the registry. |
-| `NO_COLOR` | all commands | Set it to switch colours in messages off. |
+| `NO_COLOR` | all commands | A non-empty value switches the colours of warning and error messages off. |
+| `CLICOLOR` | all commands | `0` switches colours off. |
+| `CLICOLOR_FORCE` | all commands | A value other than `0` switches colours on even when the output is piped, and wins over `NO_COLOR`. |
 
-Empty variables count as unset.
+`NO_COLOR`, `CLICOLOR` and `CLICOLOR_FORCE` are read by the `colored` library, not by dayzmake. Warnings and
+errors are written to standard error, but whether they are coloured depends on **standard output** being a terminal
+(unless `CLICOLOR_FORCE` is set): `dayzmake rapify x.cpp > /dev/null` in a terminal prints plain warnings, and
+`dayzmake rapify x.cpp 2>err.txt` in a terminal writes escape codes into `err.txt`.
+
+An empty `STEAM_ROOT`, `DAYZ_TOOLS`, `PROTON`, `DAYZMAKE_CACHE`, `XDG_CACHE_HOME`, `LOCALAPPDATA`, `ProgramFiles(x86)`
+or `ProgramFiles` counts as unset. `HOME` is not checked: an empty `HOME` makes the Steam and cache locations
+relative paths (`.steam/steam`, `.cache/dayzmake/api`), so set it properly. `BIOUTPUT` only counts when it is
+exactly `1`.
 
 ## How the Steam installation is found
 
