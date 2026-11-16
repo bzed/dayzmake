@@ -24,6 +24,9 @@ const MAX_ITEMS: u32 = 1 << 16;
 const MAX_ARRAY_BYTES: usize = 64 * 1024 * 1024;
 /// Arrays of at least this many bytes are LZO compressed.
 const COMPRESSION_THRESHOLD: usize = 1024;
+/// Most bytes all arrays of one file may decompress to together. LZO shrinks 255:1, so without a total a file of
+/// a megabyte could ask for terabytes.
+const MAX_TOTAL_ARRAY_BYTES: u64 = 256 * 1024 * 1024;
 
 fn invalid<S: Into<String>>(msg: S) -> Error {
     Error::new(ErrorKind::InvalidData, msg.into())
@@ -112,6 +115,8 @@ impl OdolLod {
 struct Rd<'a, R: Read + Seek> {
     r: &'a mut R,
     len: u64,
+    /// Decompressed bytes still allowed for this file.
+    budget: u64,
 }
 
 impl<R: Read + Seek> Rd<'_, R> {
@@ -158,12 +163,20 @@ impl<R: Read + Seek> Rd<'_, R> {
     fn cstr(&mut self) -> Result<String, Error> {
         let mut bytes = Vec::new();
         loop {
-            let b = self.u8()?;
+            let b = self.u8().map_err(|e| {
+                if e.kind() == ErrorKind::UnexpectedEof {
+                    invalid("a string without end: the file ends inside it")
+                } else {
+                    e
+                }
+            })?;
             if b == 0 {
                 break;
             }
             if bytes.len() >= MAX_STRING {
-                return Err(invalid("string without end"));
+                return Err(invalid(format!(
+                    "a string without end within {MAX_STRING} bytes"
+                )));
             }
             bytes.push(b);
         }
@@ -194,6 +207,11 @@ impl<R: Read + Seek> Rd<'_, R> {
             .checked_mul(size)
             .filter(|t| *t <= MAX_ARRAY_BYTES)
             .ok_or_else(|| invalid(format!("array of {count} elements is too large")))?;
+        self.budget = self.budget.checked_sub(total as u64).ok_or_else(|| {
+            invalid(format!(
+                "the arrays of the file decompress to more than {MAX_TOTAL_ARRAY_BYTES} bytes"
+            ))
+        })?;
         if total < COMPRESSION_THRESHOLD {
             self.need(total as u64)?;
             let mut buf = vec![0; total];
@@ -209,6 +227,15 @@ impl<R: Read + Seek> Rd<'_, R> {
             )));
         }
         Ok(out)
+    }
+
+    /// Skips `n` items of `size` bytes each.
+    fn skip_items(&mut self, n: usize, size: u64, what: &str) -> Result<(), Error> {
+        let bytes = u64::try_from(n)
+            .ok()
+            .and_then(|n| n.checked_mul(size))
+            .ok_or_else(|| invalid(format!("too many {what}: {n}")))?;
+        self.skip(bytes)
     }
 
     /// A counted array whose contents are not needed.
@@ -227,7 +254,11 @@ impl Odol {
     pub fn read<R: Read + Seek>(input: &mut R) -> Result<Odol, Error> {
         let len = input.seek(SeekFrom::End(0))?;
         input.seek(SeekFrom::Start(0))?;
-        let mut rd = Rd { r: input, len };
+        let mut rd = Rd {
+            r: input,
+            len,
+            budget: MAX_TOTAL_ARRAY_BYTES,
+        };
 
         let mut magic = [0; 4];
         rd.r.read_exact(&mut magic)?;
@@ -272,7 +303,13 @@ impl Odol {
             ends.push(rd.u32()?);
         }
 
-        for (index, resolution) in resolutions.iter().enumerate() {
+        // Parse the LODs in file order and let none reach into the data of the one before it: LODs that
+        // share or overlap data would make a small file cost as much work as a big one.
+        let mut order: Vec<usize> = (0..lod_count).collect();
+        order.sort_by_key(|i| starts.get(*i).copied().unwrap_or(0));
+        let mut parsed = Vec::with_capacity(lod_count);
+        let mut previous_end = 0;
+        for index in order {
             let start = u64::from(starts.get(index).copied().unwrap_or(0));
             let end = u64::from(ends.get(index).copied().unwrap_or(0));
             let context = format!("ODOL LOD {index} at offset {start}:");
@@ -281,10 +318,22 @@ impl Odol {
                     "{context}\nstarts past the end of the file"
                 )));
             }
+            if start < previous_end {
+                return Err(invalid(format!(
+                    "{context}\nstarts inside the data of the LOD before it"
+                )));
+            }
             rd.r.seek(SeekFrom::Start(start))?;
-            let lod = read_lod(&mut rd, *resolution, end).prepend_error(&context)?;
-            model.lods.push(lod);
+            // Counts are checked against the bytes of this LOD, not those of the whole file.
+            rd.len = end.min(len);
+            let resolution = resolutions.get(index).copied().unwrap_or(0.0);
+            let lod = read_lod(&mut rd, resolution).prepend_error(&context)?;
+            rd.len = len;
+            previous_end = rd.pos()?;
+            parsed.push((index, lod));
         }
+        parsed.sort_by_key(|(index, _)| *index);
+        model.lods = parsed.into_iter().map(|(_, lod)| lod).collect();
         Ok(model)
     }
 }
@@ -347,7 +396,8 @@ fn animations<R: Read + Seek>(
     }
     // Without animation classes the block count is 0 and no blocks follow.
     let resolutions = rd.u32()?;
-    let blocks = usize::try_from(resolutions).map_err(|_| invalid("too many animation blocks"))?;
+    let blocks = usize::try_from(resolutions)
+        .map_err(|_| invalid(format!("too many animation blocks: {resolutions}")))?;
     if blocks != lod_count && !(classes == 0 && blocks == 0) {
         return Err(invalid(format!(
             "{resolutions} animation LOD blocks for {lod_count} LODs"
@@ -357,7 +407,7 @@ fn animations<R: Read + Seek>(
         let bones = rd.count("animated bones", MAX_ITEMS, 4)?;
         for _ in 0..bones {
             let n = rd.count("bone animations", MAX_ITEMS, 4)?;
-            rd.skip(u64::try_from(n).map_err(|_| invalid("too many"))? * 4)?;
+            rd.skip_items(n, 4, "bone animation indices")?;
         }
     }
     for _ in 0..blocks {
@@ -371,11 +421,7 @@ fn animations<R: Read + Seek>(
     Ok(())
 }
 
-fn read_lod<R: Read + Seek>(
-    rd: &mut Rd<'_, R>,
-    resolution: f32,
-    end: u64,
-) -> Result<OdolLod, Error> {
+fn read_lod<R: Read + Seek>(rd: &mut Rd<'_, R>, resolution: f32) -> Result<OdolLod, Error> {
     let proxy_count = rd.count("proxies", MAX_ITEMS, 1 + 48 + 16)?;
     let mut proxies = Vec::with_capacity(proxy_count);
     for _ in 0..proxy_count {
@@ -383,11 +429,11 @@ fn read_lod<R: Read + Seek>(
         rd.skip(48 + 16)?;
     }
     let items = rd.count("items", u32::MAX, 4)?;
-    rd.skip(u64::try_from(items).map_err(|_| invalid("too many"))? * 4)?;
+    rd.skip_items(items, 4, "items")?;
     let links = rd.count("bone links", MAX_ITEMS * 16, 4)?;
     for _ in 0..links {
         let n = rd.count("bone link entries", u32::MAX, 4)?;
-        rd.skip(u64::try_from(n).map_err(|_| invalid("too many"))? * 4)?;
+        rd.skip_items(n, 4, "bone link entries")?;
     }
     let vertex_count = rd.u32()?;
     // face area, hints, bounding box, center, radius
@@ -437,7 +483,7 @@ fn read_lod<R: Read + Seek>(
             rd.cstr()?;
         }
         let stages = rd.count("section stages", MAX_ITEMS, 4)?;
-        rd.skip(u64::try_from(stages).map_err(|_| invalid("too many"))? * 4)?;
+        rd.skip_items(stages, 4, "section stages")?;
     }
     let selection_count = rd.count("selections", MAX_ITEMS, 22)?;
     let mut selections = Vec::with_capacity(selection_count);
@@ -456,7 +502,7 @@ fn read_lod<R: Read + Seek>(
         let value = rd.cstr()?;
         properties.push((name, value));
     }
-    if end < rd.len && rd.pos()? > end {
+    if rd.pos()? > rd.len {
         return Err(invalid("the LOD reads past its end offset"));
     }
     Ok(OdolLod {
@@ -503,7 +549,7 @@ fn read_material<R: Read + Seek>(rd: &mut Rd<'_, R>) -> Result<OdolMaterial, Err
             textures.push(texture);
         }
     }
-    rd.skip(u64::try_from(transforms).map_err(|_| invalid("too many"))? * 52)?;
+    rd.skip_items(transforms, 52, "material transforms")?;
     read_stage(rd)?; // the dummy stage after the transforms
     Ok(OdolMaterial { name, textures })
 }

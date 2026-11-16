@@ -66,7 +66,8 @@ fn other_versions_are_refused() {
 
 #[test]
 fn a_file_that_is_not_odol_is_refused() {
-    assert!(read(b"MLOD\x38\0\0\0").is_err());
+    let message = read(b"MLOD\x38\0\0\0").unwrap_err().to_string();
+    assert!(message.contains("not an ODOL model"), "{message}");
     assert!(read(b"").is_err());
 }
 
@@ -92,7 +93,8 @@ fn a_huge_lod_count_is_an_error() {
         lod_count: Some(0xFFFF_FFFF),
         ..Knobs::default()
     });
-    assert!(read(&bytes).is_err());
+    let message = read(&bytes).unwrap_err().to_string();
+    assert!(message.contains("too many LODs"), "{message}");
 }
 
 #[test]
@@ -136,7 +138,8 @@ fn a_string_without_nul_is_an_error() {
         unterminated_property_class: true,
         ..Knobs::default()
     });
-    assert!(read(&bytes).is_err());
+    let message = read(&bytes).unwrap_err().to_string();
+    assert!(message.contains("string without end"), "{message}");
 }
 
 #[test]
@@ -148,6 +151,31 @@ fn an_lzo_stream_that_overruns_its_declared_size_is_an_error() {
     let message = read(&bytes).unwrap_err().to_string();
     assert!(
         message.contains("LOD 1") && message.contains("LZO"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_lzo_stream_that_ends_before_the_declared_size_is_an_error() {
+    let bytes = build(Knobs {
+        lzo_short: true,
+        ..Knobs::default()
+    });
+    let message = read(&bytes).unwrap_err().to_string();
+    assert!(message.contains("LOD 1"), "{message}");
+}
+
+#[test]
+fn lods_that_share_data_are_refused() {
+    // Both LODs start at the same offset: reading that data twice is what lets a small file cost a lot of work.
+    let (_, first) = build_parts(Knobs::default());
+    let bytes = build(Knobs {
+        lod1_start: Some(u32::try_from(first).unwrap()),
+        ..Knobs::default()
+    });
+    let message = read(&bytes).unwrap_err().to_string();
+    assert!(
+        message.contains("inside the data of the LOD before it"),
         "{message}"
     );
 }

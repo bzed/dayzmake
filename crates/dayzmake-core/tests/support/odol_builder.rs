@@ -5,10 +5,6 @@
 //! named selection whose index arrays are big enough (1200 bytes) to be stored LZO compressed.
 //! A few knobs let a test corrupt one thing at a time.
 
-#![allow(
-    dead_code,
-    reason = "shared by several test crates; not all of them use every item"
-)]
 #![expect(
     clippy::unwrap_used,
     clippy::indexing_slicing,
@@ -30,6 +26,8 @@ pub struct Knobs {
     pub unterminated_property_class: bool,
     /// Declares the big array in LOD 1 with this many elements and no bytes at all.
     pub huge_array: Option<u32>,
+    /// The LZO stream of the big array in LOD 1 ends after half of the declared size.
+    pub lzo_short: bool,
     /// The LZO stream of the big array in LOD 1 decompresses to twice the declared size.
     pub lzo_overrun: bool,
 }
@@ -65,11 +63,6 @@ impl Out {
         self.u8(0);
     }
     pub fn vec3(&mut self, v: [f32; 3]) {
-        for c in v {
-            self.f32(c);
-        }
-    }
-    pub fn color(&mut self, v: [f32; 4]) {
         for c in v {
             self.f32(c);
         }
@@ -321,6 +314,14 @@ fn lod1(o: &mut Out, knobs: Knobs) {
         .collect();
     if let Some(count) = knobs.huge_array {
         o.u32(count);
+    } else if knobs.lzo_short {
+        let mut raw = Vec::new();
+        for v in big.iter().take(BIG_ARRAY / 2) {
+            raw.extend_from_slice(&v.to_le_bytes());
+        }
+        let stream = lzo1x::compress(&raw, lzo1x::CompressLevel::default());
+        o.u32(u32::try_from(BIG_ARRAY).unwrap());
+        o.bytes(&stream);
     } else if knobs.lzo_overrun {
         // the declared count is smaller than the stream decompresses to
         let mut raw = Vec::new();
