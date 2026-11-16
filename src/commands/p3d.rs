@@ -1,6 +1,6 @@
 //! `dayzmake inspect` for models.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Error, Read, Seek, SeekFrom, Write};
 
 use dayzmake_core::error;
@@ -116,12 +116,16 @@ pub fn cmd_inspect<I: Read + Seek, O: Write>(input: &mut I, output: &mut O) -> R
 /// The listing of an ODOL v56 model, laid out like the MLOD one.
 fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
     writeln!(output, "LODs:    {}", odol.lods.len())?;
-    writeln!(
-        output,
-        "Skeleton: {} ({} bones)",
-        printable(&odol.skeleton_name),
-        odol.bone_count
-    )?;
+    if odol.skeleton_name.is_empty() {
+        writeln!(output, "Skeleton: none")?;
+    } else {
+        writeln!(
+            output,
+            "Skeleton: {} ({} bones)",
+            printable(&odol.skeleton_name),
+            odol.bone_count
+        )?;
+    }
     writeln!(output, "Class:   {}", printable(&odol.property_class))?;
     writeln!(output, "Damage:  {}", printable(&odol.property_damage))?;
     writeln!(output, "Mass:    {}", odol.mass)?;
@@ -149,20 +153,7 @@ fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
         )?;
     }
 
-    // Names in sorted order, with the number of LODs that use them.
-    let mut textures: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut materials: BTreeMap<&str, usize> = BTreeMap::new();
-    for lod in &odol.lods {
-        for t in lod.textures.iter().filter(|t| !t.is_empty()) {
-            *textures.entry(t).or_default() += 1;
-        }
-        for m in &lod.materials {
-            *materials.entry(&m.name).or_default() += 1;
-            for t in m.textures.iter().filter(|t| !t.is_empty()) {
-                *textures.entry(t).or_default() += 1;
-            }
-        }
-    }
+    let (textures, materials) = count_names(odol);
     writeln!(output)?;
     writeln!(output, "Textures:")?;
     for (name, count) in &textures {
@@ -220,4 +211,36 @@ fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
         )?;
     }
     Ok(())
+}
+
+/// Texture and material names in sorted order, with the number of LODs that use each.
+fn count_names(odol: &Odol) -> (BTreeMap<&str, usize>, BTreeMap<&str, usize>) {
+    let mut textures: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut materials: BTreeMap<&str, usize> = BTreeMap::new();
+    for lod in &odol.lods {
+        // Each name counts once per LOD, however often the LOD mentions it.
+        let mut lod_textures: BTreeSet<&str> = lod
+            .textures
+            .iter()
+            .filter(|t| !t.is_empty())
+            .map(String::as_str)
+            .collect();
+        let mut lod_materials: BTreeSet<&str> = BTreeSet::new();
+        for m in &lod.materials {
+            lod_materials.insert(&m.name);
+            lod_textures.extend(
+                m.textures
+                    .iter()
+                    .filter(|t| !t.is_empty())
+                    .map(String::as_str),
+            );
+        }
+        for t in lod_textures {
+            *textures.entry(t).or_default() += 1;
+        }
+        for m in lod_materials {
+            *materials.entry(m).or_default() += 1;
+        }
+    }
+    (textures, materials)
 }

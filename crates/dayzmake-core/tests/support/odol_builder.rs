@@ -17,6 +17,10 @@ pub const BIG_ARRAY: usize = 600;
 
 /// What to corrupt in an otherwise valid model.
 #[derive(Default, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent switches of a test builder"
+)]
 pub struct Knobs {
     /// Writes this `lod_count` (the arrays that follow keep two entries).
     pub lod_count: Option<u32>,
@@ -30,6 +34,10 @@ pub struct Knobs {
     pub lzo_short: bool,
     /// The LZO stream of the big array in LOD 1 decompresses to twice the declared size.
     pub lzo_overrun: bool,
+    /// The stage texture of the material in LOD 0 is the same file as a texture of the LOD.
+    pub repeat_texture: bool,
+    /// The selection name in LOD 0 contains an ESC control character.
+    pub control_char_name: bool,
 }
 
 /// The little endian writer of the model.
@@ -196,7 +204,7 @@ fn animations(o: &mut Out) {
     }
 }
 
-fn lod0(o: &mut Out) {
+fn lod0(o: &mut Out, knobs: Knobs) {
     o.u32(1); // proxy_count
     o.cstr("\\dz\\proxy\\thing.p3d");
     o.matrix();
@@ -222,7 +230,15 @@ fn lod0(o: &mut Out) {
     o.u32(0); // render_flags
     o.u32(1); // stage_count
     o.u32(1); // transform_count
-    stage(o, "\\dz\\stage_co.paa", 0);
+    stage(
+        o,
+        if knobs.repeat_texture {
+            "\\dz\\tex_a_co.paa"
+        } else {
+            "\\dz\\stage_co.paa"
+        },
+        0,
+    );
     o.u32(0); // uv_source
     o.matrix();
     stage(o, "", 0); // the dummy stage after the transforms
@@ -241,7 +257,11 @@ fn lod0(o: &mut Out) {
     o.f32(0.0);
     // one selection
     o.u32(1);
-    o.cstr("body");
+    o.cstr(if knobs.control_char_name {
+        "bo\x1bdy"
+    } else {
+        "body"
+    });
     o.index_array(&[0]);
     o.u32(0);
     o.u8(1); // is_sectional
@@ -368,7 +388,7 @@ pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
     o.u8(0);
     o.u8(0); // use_default
     let start0 = o.pos();
-    lod0(&mut o);
+    lod0(&mut o, knobs);
     let end0 = o.pos();
     lod1(&mut o, knobs);
     let end1 = o.pos();

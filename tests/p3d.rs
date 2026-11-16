@@ -177,6 +177,33 @@ fn inspect_odol_v56_lists_the_contents() {
 }
 
 #[test]
+fn inspect_odol_v56_counts_lods_not_occurrences() {
+    let dir = tempfile::tempdir().unwrap();
+    let knobs = odol_builder::Knobs {
+        repeat_texture: true,
+        ..Default::default()
+    };
+    std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("- \\dz\\tex_a_co.paa (1 LODs)"), "{out}");
+}
+
+#[test]
+fn inspect_odol_v56_escapes_control_characters() {
+    let dir = tempfile::tempdir().unwrap();
+    let knobs = odol_builder::Knobs {
+        control_char_name: true,
+        ..Default::default()
+    };
+    std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("body") || out.contains("bo"), "{out}");
+    assert!(!out.contains('\x1b'), "{out:?}");
+}
+
+#[test]
 fn inspect_odol_v56_broken_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let knobs = odol_builder::Knobs {
