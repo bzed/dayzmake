@@ -1,10 +1,16 @@
 # ODOL v56 layout (DayZ binarized models)
 
-Clean-room format description for issue #84. It is a list of facts about the file layout; it contains no code.
-It was written from public format notes and then **checked against the game's own models**: all 31,914 `.p3d`
-files in the DayZ client, server and Experimental PBOs are ODOL version 56, and the reader in
-`crates/dayzmake-core/src/odol.rs` parses every one of them (184,608 LODs). Where the files disagreed with the
-first draft, this document now says what the files hold; those places are marked *(verified)* or *(corrected)*.
+Format description for issue #84. It is a list of facts about the file layout; it contains no code.
+
+Provenance: the layout facts were extracted by reading the source of github.com/arma-tools/arma-file-formats-rs
+(commit ea96a07, Nov 2026; the repository has no LICENSE file, and its `Cargo.toml` says `license = "MIT"`). Only
+facts were taken: field order, sizes and version conditions. No code was copied. The facts were then checked
+against, and corrected by, all 31,914 ODOL v56 models of DayZ: all 31,914 `.p3d` files in the DayZ client, server
+and Experimental PBOs are ODOL version 56, and the reader in `crates/dayzmake-core/src/odol.rs` parses every one
+of them (184,608 LODs). Where the files disagreed with the first draft, this document now says what the files
+hold; those places are marked *(verified)* or *(corrected)*. The reader was written by implementers who had only
+this spec and the game files.
+
 Fields no tool of ours needs are skipped, and their meaning is a guess (marked *unknown*).
 
 Notation: all integers are little endian. `u8/u16/u32/i16/i32/f32` as usual. `cstr` = bytes up to a NUL
@@ -160,6 +166,9 @@ path). **Stage texture**: `u32 render_flags`; `cstr texture`; `u32 stage_id`; `b
 Every count gets checked against the bytes left before it's used to allocate. Strings are capped at 64 KiB. The
 number of LODs, proxies, textures, materials, sections, selections, properties, bones and animation classes is
 capped at 65,536 each (the game files stay far below: at most 2,048 selections per LOD), and decompressed arrays
-are capped at 64 MiB. The LZO decoder is `lzokay-native` (it reports where the stream ended and stops at the
+are capped at 64 MiB, and all arrays of one file together at 256 MiB of decompressed data (LZO shrinks 255:1, so
+without a total a file of a megabyte could ask for terabytes). The bytes of one LOD read into memory are capped at
+256 MiB, and the ranges of the LODs must not overlap: a LOD that starts inside the data of the one before it is
+refused, because LODs that share data would make a small file cost as much work as a big one. The LZO decoder is `lzokay-native` (it reports where the stream ended and stops at the
 declared size); a stream that decompresses to anything but the declared size is an error. A LOD that fails to
 parse is reported as an error naming the LOD index and the file offset.
