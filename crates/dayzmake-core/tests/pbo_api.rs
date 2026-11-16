@@ -999,3 +999,24 @@ fn colliding_names_sign_and_verify_after_a_rewrite() {
     assert_eq!(sign_bytes(&key, &again), sign_bytes(&key, &pbo));
     public.verify(&again, &signature).unwrap();
 }
+
+#[test]
+fn set_header_extension_keeps_the_stored_bytes_of_the_others() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xe9"), (b"other", b"\xc3\xa9")],
+    );
+    let mut pbo = read(&bytes);
+    pbo.set_header_extension("other", "x");
+    pbo.set_header_extension("added", "y");
+    let mut out = Vec::new();
+    pbo.write(&mut out).unwrap();
+    assert_eq!(
+        read(&out).header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xe9".to_vec()),
+            (b"other".to_vec(), b"x".to_vec()),
+            (b"added".to_vec(), b"y".to_vec()),
+        ]
+    );
+}
