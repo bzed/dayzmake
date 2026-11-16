@@ -219,6 +219,8 @@ pub struct PreprocessInfo {
     expanded: usize,
     /// Bytes of token text copied by macro expansion so far.
     expanded_bytes: usize,
+    /// `#include`s processed so far, over the file and its includes.
+    includes: usize,
 }
 
 impl PreprocessInfo {
@@ -332,6 +334,10 @@ fn token_bytes(token: &Token) -> usize {
 
 /// Maximum nesting of `#include`s; deeper input is an error, not a stack overflow.
 const MAX_INCLUDE_DEPTH: usize = 32;
+
+/// Maximum `#include`s processed by one `preprocess` call, nested includes counted (every inclusion of
+/// the same file counts). Bounds exponential include fan-out (#60), which no token budget sees.
+const MAX_INCLUDES: usize = 10_000;
 
 /// The file as the cycle check compares it: canonical when the file system can say, else as given.
 fn identity(path: &Path) -> PathBuf {
@@ -1010,6 +1016,15 @@ fn preprocess_rec(
                             ));
                         }
 
+                        info.includes += 1;
+                        if info.includes > MAX_INCLUDES {
+                            return Err(error!(
+                                "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
+                                printable(&path),
+                                info.includes
+                            ));
+                        }
+
                         info.import_stack.push(file_path.clone());
                         info.include_depth += 1;
 
@@ -1205,6 +1220,7 @@ pub fn preprocess(
         include_depth: 0,
         expanded: 0,
         expanded_bytes: 0,
+        includes: 0,
     };
 
     if let Some(ref path) = origin {

@@ -536,3 +536,25 @@ fn else_branch_is_expanded_and_nesting_is_tracked() {
     let (out, _) = preprocess(input.to_string(), None, &[], &mut Warnings::new()).unwrap();
     assert_eq!(out.trim(), "z = 7;");
 }
+
+/// #60: a moderate include fan-out (4^4 = 256 leaf includes) is fine; the 30-level repro runs in a
+/// limited child (`tests/cli.rs`).
+#[test]
+fn moderate_include_fan_out_works() {
+    let dir = tempdir().unwrap();
+    for i in 0..4 {
+        let body = format!("#include \"f{}.h\"\n", i + 1).repeat(4);
+        std::fs::write(dir.path().join(format!("f{i}.h")), body).unwrap();
+    }
+    std::fs::write(dir.path().join("f4.h"), "x\n").unwrap();
+    let origin = dir.path().join("e.cpp");
+    std::fs::write(&origin, "").unwrap();
+    let (out, _) = preprocess(
+        "#include \"f0.h\"\n".to_string(),
+        Some(origin),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(out.matches('x').count(), 256);
+}

@@ -2035,3 +2035,25 @@ fn exponential_empty_expansion_fails_fast() {
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("expands to more than"), "{err}");
 }
+
+/// #60: exponential `#include` fan-out (four includes per file, 30 levels) fails fast.
+#[cfg(unix)]
+#[test]
+fn include_fan_out_fails_fast() {
+    let mut files: Vec<(String, String)> = Vec::new();
+    for i in 0..30 {
+        let line = format!("#include \"f{}.h\"\n", i + 1);
+        files.push((format!("f{i}.h"), line.repeat(4)));
+    }
+    files.push(("f30.h".to_string(), String::new()));
+    files.push(("e.cpp".to_string(), "#include \"f0.h\"\n".to_string()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(n, c)| (n.as_str(), c.as_str()))
+        .collect();
+    let Some((code, err)) = preprocess_limited(&refs) else {
+        return;
+    };
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("the limit is"), "{err}");
+}
