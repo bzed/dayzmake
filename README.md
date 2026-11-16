@@ -24,6 +24,8 @@ is maintained here.
 
 ## Changes
 
+- Line numbers in warnings and errors stay right after a disabled `#ifdef`/`#ifndef` branch (plain lines, `#define`,
+  `#undef`, `#include`, nested branches); they used to drift up by one per disabled line (#63).
 - Macro expansion also charges its work: every call of a defined macro costs, so an exponential chain whose
   expansion is empty (`#define E(x)` with `E(A)E(A)` levels) fails like the others; at most 100,000 macro calls
   per line, real configs need at most 34 (#59).

@@ -380,3 +380,50 @@ fn empty_value_warning_points_at_the_entry_line() {
     Config::from_string("class A {\n  n =\n;\n};".to_string(), None, &[], &mut w).unwrap();
     assert_eq!(w.warnings()[0].line, Some(2));
 }
+
+fn empty_value_line(src: &str) -> Option<u32> {
+    let mut w = Warnings::default();
+    Config::from_string(src.to_string(), None, &[], &mut w).ok()?;
+    w.warnings().first().and_then(|warning| warning.line)
+}
+
+#[test]
+fn line_numbers_survive_a_disabled_block_of_plain_lines() {
+    // Warning is on line 4 of the source (#63).
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nz=1;\n#endif\nclass X { y = ; };"),
+        Some(4)
+    );
+}
+
+#[test]
+fn line_numbers_survive_disabled_directives() {
+    let src =
+        "#ifdef NOPE\n#define A 1\n#undef B\n#include \"missing.hpp\"\n#endif\nclass X { y = ; };";
+    assert_eq!(empty_value_line(src), Some(6));
+}
+
+#[test]
+fn line_numbers_survive_nested_disabled_branches_with_else() {
+    let src =
+        "#ifdef NOPE\n#ifdef ALSO\na;\n#else\nb;\n#endif\nc;\n#else\nclass Z { w = ; };\n#endif\n";
+    // enabled #else branch: the warning sits on line 9
+    assert_eq!(empty_value_line(src), Some(9));
+    let src = "#ifdef NOPE\n#ifdef ALSO\na;\n#else\nb;\n#endif\n#endif\nclass Z { w = ; };";
+    assert_eq!(empty_value_line(src), Some(8));
+}
+
+#[test]
+fn line_numbers_survive_multiline_comments_and_strings_in_disabled_branches() {
+    let src = "#ifdef NOPE\n/* a\nb\nc */\nx = \"p\\\nq\";\n#define M 1 /* x\ny */\n#endif\nclass X { y = ; };";
+    assert_eq!(empty_value_line(src), Some(10));
+}
+
+#[test]
+fn error_location_survives_nested_disabled_branches() {
+    let src = "#ifdef NOPE\n#ifndef OTHER\na;\n#else\nb;\n#endif\n#endif\nclass X { ;;; @@@ };";
+    let err = Config::from_string(src.to_string(), None, &[], &mut Warnings::default())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("In line 8:"), "{err}");
+}

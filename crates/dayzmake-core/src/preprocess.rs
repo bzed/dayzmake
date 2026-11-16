@@ -981,177 +981,182 @@ fn preprocess_rec(
     let mut level_true = 0;
 
     for line in lines {
-        match line {
-            Line::DirectiveLine(dir, newlines) => {
-                original_lineno += newlines;
+        // Every path leaves this block (never `continue`), so the line counter below always runs (#63).
+        'line: {
+            match line {
+                Line::DirectiveLine(dir, newlines) => {
+                    original_lineno += newlines;
 
-                match dir {
-                    Directive::IncludeDirective(path) => {
-                        if level > level_true {
-                            continue;
-                        }
+                    match dir {
+                        Directive::IncludeDirective(path) => {
+                            if level > level_true {
+                                break 'line;
+                            }
 
-                        let file_path = find_include_file(
-                            &path,
-                            origin,
-                            includefolders,
-                            original_lineno,
-                            warnings,
-                        )?;
+                            let file_path = find_include_file(
+                                &path,
+                                origin,
+                                includefolders,
+                                original_lineno,
+                                warnings,
+                            )?;
 
-                        let wanted = identity(&file_path);
-                        if info.import_stack.iter().any(|p| identity(p) == wanted) {
-                            let chain: Vec<String> = info
-                                .import_stack
-                                .iter()
-                                .chain(std::iter::once(&file_path))
-                                .map(|p| printable(&p.display().to_string()))
-                                .collect();
-                            return Err(error!("Include cycle: {}", chain.join(" -> ")));
-                        }
-                        if info.include_depth >= MAX_INCLUDE_DEPTH {
-                            return Err(error!(
-                                "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                            let wanted = identity(&file_path);
+                            if info.import_stack.iter().any(|p| identity(p) == wanted) {
+                                let chain: Vec<String> = info
+                                    .import_stack
+                                    .iter()
+                                    .chain(std::iter::once(&file_path))
+                                    .map(|p| printable(&p.display().to_string()))
+                                    .collect();
+                                return Err(error!("Include cycle: {}", chain.join(" -> ")));
+                            }
+                            if info.include_depth >= MAX_INCLUDE_DEPTH {
+                                return Err(error!(
+                                    "Include \"{}\" nests too deep (limit {MAX_INCLUDE_DEPTH})",
+                                    printable(&path)
+                                ));
+                            }
+
+                            info.includes += 1;
+                            if info.includes > MAX_INCLUDES {
+                                return Err(error!(
+                                    "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
+                                    printable(&path),
+                                    info.includes
+                                ));
+                            }
+
+                            info.import_stack.push(file_path.clone());
+                            info.include_depth += 1;
+
+                            let mut content = String::new();
+                            File::open(&file_path)?.read_to_string(&mut content)?;
+                            let result = preprocess_rec(
+                                &content,
+                                Some(&file_path),
+                                definition_map,
+                                info,
+                                includefolders,
+                                warnings,
+                            )
+                            .prepend_error(format!(
+                                "Failed to preprocess include \"{}\":",
                                 printable(&path)
-                            ));
+                            ))?;
+
+                            info.import_stack.pop();
+                            info.include_depth -= 1;
+
+                            output += &result;
                         }
+                        Directive::DefineDirective(def) => {
+                            original_lineno += u32::sum(def.value.iter().map(|t| match t {
+                                Token::NewlineToken(_s, n) => *n,
+                                Token::CommentToken(n) => *n,
+                                _ => 0,
+                            }));
 
-                        info.includes += 1;
-                        if info.includes > MAX_INCLUDES {
-                            return Err(error!(
-                                "Include \"{}\" is the {}th include; the limit is {MAX_INCLUDES} per file",
-                                printable(&path),
-                                info.includes
-                            ));
+                            if level > level_true {
+                                break 'line;
+                            }
+
+                            if definition_map.remove(&def.name).is_some() {
+                                // @todo: warn about redefine
+                            }
+
+                            definition_map.insert(def.name.clone(), def);
                         }
+                        Directive::UndefDirective(name) => {
+                            if level > level_true {
+                                break 'line;
+                            }
 
-                        info.import_stack.push(file_path.clone());
-                        info.include_depth += 1;
-
-                        let mut content = String::new();
-                        File::open(&file_path)?.read_to_string(&mut content)?;
-                        let result = preprocess_rec(
-                            &content,
-                            Some(&file_path),
-                            definition_map,
-                            info,
-                            includefolders,
-                            warnings,
-                        )
-                        .prepend_error(format!(
-                            "Failed to preprocess include \"{}\":",
-                            printable(&path)
-                        ))?;
-
-                        info.import_stack.pop();
-                        info.include_depth -= 1;
-
-                        output += &result;
-                    }
-                    Directive::DefineDirective(def) => {
-                        original_lineno += u32::sum(def.value.iter().map(|t| match t {
-                            Token::NewlineToken(_s, n) => *n,
-                            Token::CommentToken(n) => *n,
-                            _ => 0,
-                        }));
-
-                        if level > level_true {
-                            continue;
+                            definition_map.remove(&name);
                         }
-
-                        if definition_map.remove(&def.name).is_some() {
-                            // @todo: warn about redefine
+                        Directive::IfDefDirective(name) => {
+                            level_true += i32::from(
+                                level_true == level && definition_map.contains_key(&name),
+                            );
+                            level += 1;
                         }
-
-                        definition_map.insert(def.name.clone(), def);
-                    }
-                    Directive::UndefDirective(name) => {
-                        if level > level_true {
-                            continue;
+                        Directive::IfNDefDirective(name) => {
+                            level_true += i32::from(
+                                level_true == level && !definition_map.contains_key(&name),
+                            );
+                            level += 1;
                         }
-
-                        definition_map.remove(&name);
-                    }
-                    Directive::IfDefDirective(name) => {
-                        level_true +=
-                            i32::from(level_true == level && definition_map.contains_key(&name));
-                        level += 1;
-                    }
-                    Directive::IfNDefDirective(name) => {
-                        level_true +=
-                            i32::from(level_true == level && !definition_map.contains_key(&name));
-                        level += 1;
-                    }
-                    Directive::ElseDirective => {
-                        if level_true + 1 == level {
-                            level_true = level;
-                        } else if level_true == level {
-                            level_true -= 1;
+                        Directive::ElseDirective => {
+                            if level_true + 1 == level {
+                                level_true = level;
+                            } else if level_true == level {
+                                level_true -= 1;
+                            }
                         }
-                    }
-                    Directive::EndIfDirective => {
-                        if level == 0 {
-                            return Err(error!("#endif without matching #ifdef/#ifndef"));
-                        }
-                        level -= 1;
-                        if level_true > level {
-                            level_true -= 1;
+                        Directive::EndIfDirective => {
+                            if level == 0 {
+                                return Err(error!("#endif without matching #ifdef/#ifndef"));
+                            }
+                            level -= 1;
+                            if level_true > level {
+                                level_true -= 1;
+                            }
                         }
                     }
                 }
-            }
-            Line::TokenLine(tokens) => {
-                if level > level_true {
-                    // A disabled line is never expanded (#61): it can neither error nor cost time.
-                    original_lineno += skipped_newlines(&tokens);
-                    continue;
-                }
-                let stack: Vec<Definition> = Vec::new();
-                let mut mismatches: Vec<String> = Vec::new();
-                let mut budget = Budget::new();
-                let resolved = Macro::resolve_all(
-                    &tokens,
-                    definition_map,
-                    &stack,
-                    0,
-                    &mut mismatches,
-                    &mut budget,
-                )
-                .prepend_error("Failed to resolve macros:");
-                let resolved = resolved?;
-                info.expanded = info.expanded.saturating_add(budget.tokens);
-                info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
-                if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
-                    return Err(error!(
-                        "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
-                    ));
-                }
-
-                let (mut result, newlines) = Token::concat(&resolved);
-                result = result.replace("\r\n", "\n");
-                original_lineno += newlines;
-
-                let before = result.len();
-                result = result.replace("\\\n", "");
-
-                let file = origin.map(|p| p.display().to_string());
-                for msg in mismatches {
-                    let mut warning =
-                        Warning::new(Some("macro-arg-count"), msg).at_line(original_lineno);
-                    if let Some(file) = &file {
-                        warning = warning.in_file(file.clone());
+                Line::TokenLine(tokens) => {
+                    if level > level_true {
+                        // A disabled line is never expanded (#61): it can neither error nor cost time.
+                        original_lineno += skipped_newlines(&tokens);
+                        break 'line;
                     }
-                    warnings.warn(warning);
+                    let stack: Vec<Definition> = Vec::new();
+                    let mut mismatches: Vec<String> = Vec::new();
+                    let mut budget = Budget::new();
+                    let resolved = Macro::resolve_all(
+                        &tokens,
+                        definition_map,
+                        &stack,
+                        0,
+                        &mut mismatches,
+                        &mut budget,
+                    )
+                    .prepend_error("Failed to resolve macros:");
+                    let resolved = resolved?;
+                    info.expanded = info.expanded.saturating_add(budget.tokens);
+                    info.expanded_bytes = info.expanded_bytes.saturating_add(budget.bytes);
+                    if info.expanded > MAX_FILE_EXPANSION || info.expanded_bytes > MAX_FILE_BYTES {
+                        return Err(error!(
+                            "Macro expansion produced more than {MAX_FILE_EXPANSION} tokens or {MAX_FILE_BYTES} bytes in one file"
+                        ));
+                    }
+
+                    let (mut result, newlines) = Token::concat(&resolved);
+                    result = result.replace("\r\n", "\n");
+                    original_lineno += newlines;
+
+                    let before = result.len();
+                    result = result.replace("\\\n", "");
+
+                    let file = origin.map(|p| p.display().to_string());
+                    for msg in mismatches {
+                        let mut warning =
+                            Warning::new(Some("macro-arg-count"), msg).at_line(original_lineno);
+                        if let Some(file) = &file {
+                            warning = warning.in_file(file.clone());
+                        }
+                        warnings.warn(warning);
+                    }
+
+                    output += &result;
+                    output += "\n";
+
+                    info.line_origins
+                        .push((original_lineno, origin.map(Path::to_path_buf)));
+                    let removed = u32::try_from((before - result.len()) / 2)
+                        .map_err(|_| error!("line number out of range"))?;
+                    original_lineno += removed;
                 }
-
-                output += &result;
-                output += "\n";
-
-                info.line_origins
-                    .push((original_lineno, origin.map(Path::to_path_buf)));
-                let removed = u32::try_from((before - result.len()) / 2)
-                    .map_err(|_| error!("line number out of range"))?;
-                original_lineno += removed;
             }
         }
         original_lineno += 1;
