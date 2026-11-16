@@ -931,3 +931,71 @@ fn raw_bytes_keep_utf8_and_windows_1252_apart() {
         .collect();
     assert_eq!(names, vec![b"\xc3\xa9.txt".to_vec(), b"\xe9.txt".to_vec()]);
 }
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn rewrite(bytes: &[u8]) -> PBO {
+    let mut out = Vec::new();
+    read(bytes).write(&mut out).unwrap();
+    read(&out)
+}
+
+#[test]
+fn write_keeps_utf8_and_windows_1252_extensions_apart() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let again = rewrite(&bytes);
+    assert_eq!(
+        again.header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xc3\xa9".to_vec()),
+            (b"other".to_vec(), b"\xe9".to_vec()),
+        ]
+    );
+    // and the other way round
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xe9"), (b"other", b"\xc3\xa9")],
+    );
+    assert_eq!(
+        rewrite(&bytes).header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xe9".to_vec()),
+            (b"other".to_vec(), b"\xc3\xa9".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn write_keeps_the_stored_name_bytes_of_the_entry_that_survives() {
+    // both names decode to the same string, so they are one entry; the last one wins, with its data
+    for (first, second) in [
+        (&b"\xe9.txt"[..], &b"\xc3\xa9.txt"[..]),
+        (&b"\xc3\xa9.txt"[..], &b"\xe9.txt"[..]),
+    ] {
+        let bytes = support::raw_pbo_bytes(&[(first, b"x", 0), (second, b"y", 0)], &[]);
+        let again = rewrite(&bytes);
+        let headers = again.entry_headers();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name_bytes, second);
+        assert_eq!(again.entries().next().unwrap().1, b"y");
+    }
+}
+
+#[cfg(feature = "sign")]
+#[test]
+fn colliding_names_sign_and_verify_after_a_rewrite() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"\xe9.txt", b"x", 0), (b"\xc3\xa9.txt", b"y", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let pbo = rewrite(&bytes);
+    let key = armk();
+    let signature = key.sign(&pbo, BISignVersion::V3).unwrap();
+    let public = key.to_public_key().unwrap();
+    public.verify(&pbo, &signature).unwrap();
+    let again = PBO::read(&mut pbo.to_cursor().unwrap()).unwrap();
+    assert_eq!(sign_bytes(&key, &again), sign_bytes(&key, &pbo));
+    public.verify(&again, &signature).unwrap();
+}

@@ -37,6 +37,8 @@ is maintained here.
 - `inspect --json <file.pbo>` prints the PBO header as one JSON object: the header extensions, the prefix and the
   entries, each name next to the lowercase hex of its raw bytes, so a prefix with a control character or a byte that
   is not UTF-8 is unambiguous. The MCP tool `pbo_inspect` takes the argument `json`. A model gives an error (#91).
+- Writing and signing a PBO keep the stored bytes of header extensions and entry names that a UTF-8 and a windows-1252
+  spelling would otherwise swap (#92).
 
 ### 3.0.2
 

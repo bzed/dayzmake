@@ -176,10 +176,8 @@ pub struct PBO {
     /// Original bytes of entry names that are not valid UTF-8, keyed by their windows-1252 decoding
     /// (the key used in `files`).
     raw_names: HashMap<String, Vec<u8>>,
-    /// Same as `raw_names`, for header extension keys and values.
-    raw_extensions: HashMap<String, Vec<u8>>,
-    /// The stored bytes of every header extension in the order of `header_extensions`; empty once
-    /// the extensions were changed.
+    /// The stored bytes of every header extension in the order of `header_extensions`; empty for a
+    /// PBO that was not read.
     raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
     /// only defined when reading existing PBOs, for created PBOs this is calculated during writing
@@ -237,7 +235,6 @@ impl PBOHeader {
 /// The parsed header block of a PBO: the header extensions and the entry headers.
 struct HeaderBlock {
     extensions: LinkedHashMap<String, String>,
-    raw_extensions: HashMap<String, Vec<u8>>,
     /// The stored bytes of every extension `(key, value)`, in the order of `extensions`.
     raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
@@ -252,7 +249,6 @@ struct HeaderBlock {
 fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
     let mut block = HeaderBlock {
         extensions: LinkedHashMap::new(),
-        raw_extensions: HashMap::new(),
         raw_pairs: Vec::new(),
         headers: Vec::new(),
     };
@@ -267,7 +263,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
             }
             loop {
                 let key_bytes = read_bounded_cstring(input)?;
-                let (key, raw_key) = decode_name(key_bytes.clone());
+                let (key, _) = decode_name(key_bytes.clone());
                 if key.is_empty() {
                     break;
                 }
@@ -275,7 +271,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
                     return Err(error!("PBO has too many header extensions."));
                 }
                 let value_bytes = read_bounded_cstring(input)?;
-                let (value, raw_value) = decode_name(value_bytes.clone());
+                let (value, _) = decode_name(value_bytes.clone());
                 match block.extensions.keys().position(|k| *k == key) {
                     Some(at) => {
                         if let Some(pair) = block.raw_pairs.get_mut(at) {
@@ -283,12 +279,6 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
                         }
                     }
                     None => block.raw_pairs.push((key_bytes, value_bytes)),
-                }
-                if let Some(raw) = raw_key {
-                    block.raw_extensions.insert(key.clone(), raw);
-                }
-                if let Some(raw) = raw_value {
-                    block.raw_extensions.insert(value.clone(), raw);
                 }
                 set_extension(&mut block.extensions, &key, value);
             }
@@ -654,7 +644,6 @@ impl PBO {
             files: LinkedHashMap::new(),
             header_extensions: LinkedHashMap::new(),
             raw_names: HashMap::new(),
-            raw_extensions: HashMap::new(),
             raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
@@ -718,10 +707,25 @@ impl PBO {
 
     /// Sets a header extension; a repeated key keeps its position and takes the new value.
     pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.raw_pairs.clear();
+        let (key, value) = (key.into(), value.into());
+        // the stored bytes stay in step with the extensions; the new value is stored as UTF-8
+        if self.raw_pairs.len() == self.header_extensions.len() {
+            match self.header_extensions.keys().position(|k| *k == key) {
+                Some(at) => {
+                    if let Some(pair) = self.raw_pairs.get_mut(at) {
+                        pair.1 = value.as_bytes().to_vec();
+                    }
+                }
+                None => self
+                    .raw_pairs
+                    .push((key.as_bytes().to_vec(), value.as_bytes().to_vec())),
+            }
+        } else {
+            self.raw_pairs.clear();
+        }
         self.checksum = None;
         self.computed_checksum = None;
-        set_extension(&mut self.header_extensions, &key.into(), value.into());
+        set_extension(&mut self.header_extensions, &key, value);
     }
 
     /// The PBO prefix (the header extension `prefix`).
@@ -816,8 +820,8 @@ impl PBO {
     }
 
     /// The header extensions as `(key, value)` bytes, in the order of [`PBO::header_extensions`]:
-    /// exactly what the PBO header stores for a PBO that was read and whose extensions were not
-    /// changed, the UTF-8 bytes of the strings otherwise. A repeated key has the bytes of its
+    /// what the PBO header stores for a PBO that was read (a value set since is its UTF-8 bytes),
+    /// the UTF-8 bytes of the strings otherwise. A repeated key has the bytes of its
     /// first key and its last value.
     #[must_use]
     pub fn header_extensions_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -829,12 +833,13 @@ impl PBO {
             .collect()
     }
 
-    /// Returns the bytes a header extension key or value is stored as.
-    pub(crate) fn extension_bytes(&self, s: &str) -> Vec<u8> {
-        self.raw_extensions
-            .get(s)
-            .cloned()
-            .unwrap_or_else(|| s.as_bytes().to_vec())
+    /// The bytes the prefix is stored as: the value of the extension `prefix`.
+    pub(crate) fn prefix_bytes(&self) -> Option<Vec<u8>> {
+        let at = self.header_extensions.keys().position(|k| k == "prefix")?;
+        self.header_extensions_bytes()
+            .into_iter()
+            .nth(at)
+            .map(|(_, value)| value)
     }
 
     /// Reads an existing PBO from input.
@@ -850,7 +855,6 @@ impl PBO {
         let input = &mut hashing;
         let HeaderBlock {
             extensions: header_extensions,
-            raw_extensions,
             raw_pairs,
             headers,
         } = read_header_block(input)?;
@@ -858,8 +862,14 @@ impl PBO {
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut raw_names: HashMap<String, Vec<u8>> = HashMap::new();
         for header in &headers {
-            if let Some(raw) = &header.raw_filename {
-                raw_names.insert(header.filename.clone(), raw.clone());
+            // two names that decode alike are one entry whose data is the last one's: keep that name's bytes
+            match &header.raw_filename {
+                Some(raw) => {
+                    raw_names.insert(header.filename.clone(), raw.clone());
+                }
+                None => {
+                    raw_names.remove(&header.filename);
+                }
             }
             // never preallocate the full length from untrusted input
             let mut buffer: Vec<u8> = Vec::new();
@@ -892,7 +902,6 @@ impl PBO {
             files,
             header_extensions,
             raw_names,
-            raw_extensions,
             raw_pairs,
             headers,
             checksum: Some(checksum),
@@ -1247,7 +1256,6 @@ impl PBO {
             files,
             header_extensions,
             raw_names: HashMap::new(),
-            raw_extensions: HashMap::new(),
             raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
@@ -1280,21 +1288,23 @@ impl PBO {
         };
         ext_header.write(&mut headers)?;
 
-        if let Some(prefix) = self.header_extensions.get("prefix") {
+        if let Some(prefix) = self.prefix_bytes() {
             headers.write_all(b"prefix\0")?;
             headers
-                .write_cstring(self.extension_bytes(prefix))
+                .write_cstring(prefix)
                 .prepend_error("Header extension \"prefix\":")?;
         }
 
-        for (key, value) in &self.header_extensions {
+        for ((key, _), (key_bytes, value_bytes)) in
+            self.header_extensions().zip(self.header_extensions_bytes())
+        {
             if key == "prefix" {
                 continue;
             }
 
             headers
-                .write_cstring(self.extension_bytes(key))
-                .and_then(|()| headers.write_cstring(self.extension_bytes(value)))
+                .write_cstring(key_bytes)
+                .and_then(|()| headers.write_cstring(value_bytes))
                 .prepend_error(format!("Header extension \"{}\":", printable(key)))?;
         }
         headers.write_cstring(String::new())?;
