@@ -19,7 +19,8 @@ fn reads_every_field_of_a_synthetic_model() {
     assert_eq!(model.property_class, "ClassName");
     assert_eq!(model.property_damage, "DamageName");
     assert_eq!(model.skeleton_name, "Skel");
-    assert_eq!(model.bone_count, 2);
+    let bone_count: u32 = model.bone_count;
+    assert_eq!(bone_count, 2);
     assert!((model.mass - 12.5).abs() < 1e-6);
     assert_eq!(model.bbox_min, [-1.0, -2.0, -3.0]);
     assert_eq!(model.bbox_max, [1.0, 2.0, 3.0]);

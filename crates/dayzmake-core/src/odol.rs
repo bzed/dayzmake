@@ -6,9 +6,11 @@
 //! left and against a limit before it is used, and a LOD that fails to parse is reported with its index and
 //! file offset.
 //!
-//! The reader seeks a lot and reads small values; wrap a [`std::fs::File`] in a [`std::io::BufReader`].
+//! The reader seeks a lot and reads small values, so it reads the header part through its own buffer and the bytes
+//! of each LOD into memory in one piece (at most 256 MiB per LOD), then parses them from there. Pass a
+//! [`std::fs::File`] directly; a [`std::io::BufReader`] around it is not needed.
 
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -27,10 +29,8 @@ const COMPRESSION_THRESHOLD: usize = 1024;
 /// Most bytes all arrays of one file may decompress to together. LZO shrinks 255:1, so without a total a file of
 /// a megabyte could ask for terabytes.
 const MAX_TOTAL_ARRAY_BYTES: u64 = 256 * 1024 * 1024;
-
-fn invalid<S: Into<String>>(msg: S) -> Error {
-    Error::new(ErrorKind::InvalidData, msg.into())
-}
+/// Most bytes of one LOD that are read into memory.
+const MAX_LOD_BYTES: u64 = 256 * 1024 * 1024;
 
 /// A binarized model: the model-level facts and the LODs.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,7 +45,7 @@ pub struct Odol {
     /// Skeleton name, empty if the model has none.
     pub skeleton_name: String,
     /// Number of bones in the skeleton.
-    pub bone_count: usize,
+    pub bone_count: u32,
     /// Mass of the model.
     pub mass: f32,
     /// Bounding box minimum, model space.
@@ -131,14 +131,14 @@ impl<R: Read + Seek> Rd<'_, R> {
 
     fn need(&mut self, n: u64) -> Result<(), Error> {
         if n > self.left()? {
-            return Err(invalid(format!("{n} bytes wanted, the file ends sooner")));
+            return Err(error!("{n} bytes wanted, the file ends sooner"));
         }
         Ok(())
     }
 
     fn skip(&mut self, n: u64) -> Result<(), Error> {
         self.need(n)?;
-        let n = i64::try_from(n).map_err(|_| invalid("skip too long"))?;
+        let n = i64::try_from(n).map_err(|_| error!("skip too long"))?;
         self.r.seek(SeekFrom::Current(n))?;
         Ok(())
     }
@@ -165,7 +165,7 @@ impl<R: Read + Seek> Rd<'_, R> {
         loop {
             let b = self.u8().map_err(|e| {
                 if e.kind() == ErrorKind::UnexpectedEof {
-                    invalid("a string without end: the file ends inside it")
+                    error!("a string without end: the file ends inside it")
                 } else {
                     e
                 }
@@ -174,9 +174,7 @@ impl<R: Read + Seek> Rd<'_, R> {
                 break;
             }
             if bytes.len() >= MAX_STRING {
-                return Err(invalid(format!(
-                    "a string without end within {MAX_STRING} bytes"
-                )));
+                return Err(error!("a string without end within {MAX_STRING} bytes"));
             }
             bytes.push(b);
         }
@@ -187,17 +185,15 @@ impl<R: Read + Seek> Rd<'_, R> {
     fn count(&mut self, what: &str, max: u32, min_size: u64) -> Result<usize, Error> {
         let n = self.u32()?;
         if n > max {
-            return Err(invalid(format!("too many {what}: {n}")));
+            return Err(error!("too many {what}: {n}"));
         }
         let bytes = u64::from(n)
             .checked_mul(min_size)
-            .ok_or_else(|| invalid(format!("too many {what}: {n}")))?;
+            .ok_or_else(|| error!("too many {what}: {n}"))?;
         if bytes > self.left()? {
-            return Err(invalid(format!(
-                "{n} {what} don't fit into the rest of the file"
-            )));
+            return Err(error!("{n} {what} don't fit into the rest of the file"));
         }
-        usize::try_from(n).map_err(|_| invalid(format!("too many {what}: {n}")))
+        usize::try_from(n).map_err(|_| error!("too many {what}: {n}"))
     }
 
     /// The bytes of an array of `count` elements of `size` bytes: raw below the compression threshold,
@@ -206,11 +202,9 @@ impl<R: Read + Seek> Rd<'_, R> {
         let total = count
             .checked_mul(size)
             .filter(|t| *t <= MAX_ARRAY_BYTES)
-            .ok_or_else(|| invalid(format!("array of {count} elements is too large")))?;
+            .ok_or_else(|| error!("array of {count} elements is too large"))?;
         self.budget = self.budget.checked_sub(total as u64).ok_or_else(|| {
-            invalid(format!(
-                "the arrays of the file decompress to more than {MAX_TOTAL_ARRAY_BYTES} bytes"
-            ))
+            error!("the arrays of the file decompress to more than {MAX_TOTAL_ARRAY_BYTES} bytes")
         })?;
         if total < COMPRESSION_THRESHOLD {
             self.need(total as u64)?;
@@ -219,12 +213,12 @@ impl<R: Read + Seek> Rd<'_, R> {
             return Ok(buf);
         }
         let out = lzokay_native::decompress_bounded(&mut *self.r, total)
-            .map_err(|e| invalid(format!("LZO stream of {total} bytes: {e}")))?;
+            .map_err(|e| error!("LZO stream of {total} bytes: {e}"))?;
         if out.len() != total {
-            return Err(invalid(format!(
+            return Err(error!(
                 "LZO stream gave {} bytes, {total} declared",
                 out.len()
-            )));
+            ));
         }
         Ok(out)
     }
@@ -234,13 +228,13 @@ impl<R: Read + Seek> Rd<'_, R> {
         let bytes = u64::try_from(n)
             .ok()
             .and_then(|n| n.checked_mul(size))
-            .ok_or_else(|| invalid(format!("too many {what}: {n}")))?;
+            .ok_or_else(|| error!("too many {what}: {n}"))?;
         self.skip(bytes)
     }
 
     /// A counted array whose contents are not needed.
     fn skip_array(&mut self, size: usize) -> Result<(), Error> {
-        let count = usize::try_from(self.u32()?).map_err(|_| invalid("count too large"))?;
+        let count = usize::try_from(self.u32()?).map_err(|_| error!("count too large"))?;
         self.array(count, size).map(drop)
     }
 }
@@ -254,8 +248,10 @@ impl Odol {
     pub fn read<R: Read + Seek>(input: &mut R) -> Result<Odol, Error> {
         let len = input.seek(SeekFrom::End(0))?;
         input.seek(SeekFrom::Start(0))?;
+        // the header part is read through a buffer; each LOD is read into memory in one piece
+        let mut buffered = BufReader::new(input);
         let mut rd = Rd {
-            r: input,
+            r: &mut buffered,
             len,
             budget: MAX_TOTAL_ARRAY_BYTES,
         };
@@ -263,13 +259,13 @@ impl Odol {
         let mut magic = [0; 4];
         rd.r.read_exact(&mut magic)?;
         if &magic != b"ODOL" {
-            return Err(invalid("not an ODOL model"));
+            return Err(error!("not an ODOL model"));
         }
         let version = rd.u32()?;
         if version != SUPPORTED_VERSION {
-            return Err(invalid(format!(
+            return Err(error!(
                 "ODOL version {version} is not supported, only {SUPPORTED_VERSION}"
-            )));
+            ));
         }
         let lod_count = rd.count("LODs", MAX_ITEMS, 12)?;
         let mut resolutions = Vec::with_capacity(lod_count);
@@ -314,22 +310,37 @@ impl Odol {
             let end = u64::from(ends.get(index).copied().unwrap_or(0));
             let context = format!("ODOL LOD {index} at offset {start}:");
             if start >= len {
-                return Err(invalid(format!(
-                    "{context}\nstarts past the end of the file"
-                )));
+                return Err(error!("{context}\nstarts past the end of the file"));
             }
             if start < previous_end {
-                return Err(invalid(format!(
+                return Err(error!(
                     "{context}\nstarts inside the data of the LOD before it"
-                )));
+                ));
+            }
+            // The bytes of this LOD go into memory: the parser seeks a lot, and counts are checked against
+            // the bytes of this LOD, not those of the whole file.
+            let stop = end.min(len);
+            let size = stop.saturating_sub(start);
+            if size > MAX_LOD_BYTES {
+                return Err(error!(
+                    "{context}\nthe LOD is {size} bytes, more than the {MAX_LOD_BYTES} accepted"
+                ));
             }
             rd.r.seek(SeekFrom::Start(start))?;
-            // Counts are checked against the bytes of this LOD, not those of the whole file.
-            rd.len = end.min(len);
+            let mut bytes = Vec::new();
+            (&mut *rd.r).take(size).read_to_end(&mut bytes)?;
+            let mut cursor = Cursor::new(bytes);
+            let mut lod_rd = Rd {
+                r: &mut cursor,
+                len: size,
+                budget: rd.budget,
+            };
             let resolution = resolutions.get(index).copied().unwrap_or(0.0);
-            let lod = read_lod(&mut rd, resolution).prepend_error(&context)?;
-            rd.len = len;
-            previous_end = rd.pos()?;
+            let lod = read_lod(&mut lod_rd, resolution).prepend_error(&context)?;
+            rd.budget = lod_rd.budget;
+            previous_end = start
+                .checked_add(lod_rd.pos()?)
+                .ok_or_else(|| error!("{context}\nthe LOD ends beyond the file"))?;
             parsed.push((index, lod));
         }
         parsed.sort_by_key(|(index, _)| *index);
@@ -354,7 +365,7 @@ fn model_info<R: Read + Seek>(rd: &mut Rd<'_, R>, model: &mut Odol) -> Result<()
             rd.cstr()?;
             rd.cstr()?;
         }
-        model.bone_count = bones;
+        model.bone_count = u32::try_from(bones).unwrap_or(u32::MAX);
         rd.cstr()?; // pivots name
     }
     rd.u8()?; // map type
@@ -389,7 +400,7 @@ fn animations<R: Read + Seek>(
             0..=7 => rd.skip(8)?,
             8 => rd.skip(32)?,
             9 => rd.skip(4)?,
-            _ => return Err(invalid(format!("unknown animation type {kind}"))),
+            _ => return Err(error!("unknown animation type {kind}")),
         }
         kinds.push(kind);
         model.animations.push(OdolAnimation { kind, name, source });
@@ -397,11 +408,11 @@ fn animations<R: Read + Seek>(
     // Without animation classes the block count is 0 and no blocks follow.
     let resolutions = rd.u32()?;
     let blocks = usize::try_from(resolutions)
-        .map_err(|_| invalid(format!("too many animation blocks: {resolutions}")))?;
+        .map_err(|_| error!("too many animation blocks: {resolutions}"))?;
     if blocks != lod_count && !(classes == 0 && blocks == 0) {
-        return Err(invalid(format!(
+        return Err(error!(
             "{resolutions} animation LOD blocks for {lod_count} LODs"
-        )));
+        ));
     }
     for _ in 0..blocks {
         let bones = rd.count("animated bones", MAX_ITEMS, 4)?;
@@ -454,9 +465,9 @@ fn read_lod<R: Read + Seek>(rd: &mut Rd<'_, R>, resolution: f32) -> Result<OdolL
     let face_bytes = rd.u32()?;
     rd.skip(2)?;
     if u64::from(face_count) > rd.left()? / 7 {
-        return Err(invalid(format!(
+        return Err(error!(
             "{face_count} faces don't fit into the rest of the file"
-        )));
+        ));
     }
     // Each face is a u8 vertex count (3 or 4) and that many u16 indices. The declared size counts every
     // face as the vertex count plus one u16 each.
@@ -464,15 +475,15 @@ fn read_lod<R: Read + Seek>(rd: &mut Rd<'_, R>, resolution: f32) -> Result<OdolL
     for _ in 0..face_count {
         let n = rd.u8()?;
         if n != 3 && n != 4 {
-            return Err(invalid(format!("a face with {n} vertices")));
+            return Err(error!("a face with {n} vertices"));
         }
         rd.skip(u64::from(n) * 2)?;
         declared += u64::from(n) * 2 + 2;
     }
     if declared != u64::from(face_bytes) {
-        return Err(invalid(format!(
+        return Err(error!(
             "the faces take {declared} bytes, {face_bytes} declared"
-        )));
+        ));
     }
 
     let sections = rd.count("sections", MAX_ITEMS, 34)?;
@@ -503,7 +514,7 @@ fn read_lod<R: Read + Seek>(rd: &mut Rd<'_, R>, resolution: f32) -> Result<OdolL
         properties.push((name, value));
     }
     if rd.pos()? > rd.len {
-        return Err(invalid("the LOD reads past its end offset"));
+        return Err(error!("the LOD reads past its end offset"));
     }
     Ok(OdolLod {
         resolution,
@@ -532,9 +543,9 @@ fn read_material<R: Read + Seek>(rd: &mut Rd<'_, R>) -> Result<OdolMaterial, Err
     let name = rd.cstr()?;
     let version = rd.u32()?;
     if version != MATERIAL_VERSION {
-        return Err(invalid(format!(
+        return Err(error!(
             "material {name:?} has version {version}, only {MATERIAL_VERSION} is supported"
-        )));
+        ));
     }
     // colors and lighting values, specular power, pixel and vertex shader, main light, fog mode
     rd.skip(200 + 4 + 16)?;
