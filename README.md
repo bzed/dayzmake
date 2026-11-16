@@ -8,6 +8,8 @@ dayzmake
 [![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 [![](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 
+Documentation: <https://bzed.github.io/dayzmake/> (guides and a reference of every command, option, MCP tool and warning).
+
 <!-- ANCHOR: intro -->
 DayZ modding tools written in Rust: PBO packing and unpacking, config
 preprocessing and rapification, model inspection and binarization, PAA
@@ -189,7 +191,6 @@ See [testharness/README.md](https://github.com/bzed/dayzmake/blob/main/testharne
 
 <!-- ANCHOR_END: testing -->
 ## Usage
-<!-- ANCHOR: usage-synopsis -->
 
 ```text
 dayzmake
@@ -279,14 +280,11 @@ Options:
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ```
-<!-- ANCHOR_END: usage-synopsis -->
-<!-- ANCHOR: usage-rest -->
 
 See `dayzmake --help` for more.
 
 `build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both; an entry generated from source (the rapified `config.cpp`, a `.p3do`) wins over a plain `config.bin` or `.p3d` of the same name. Model extensions (`.p3d`, `.rtm`) are matched case-insensitively, and `.p3do` files are packed as `.p3d` (a colliding `m.p3d` and `m.p3do` is reported, and the `.p3do` wins). A file that cannot be opened or read fails the build with an error naming it.
 
-<!-- ANCHOR_END: usage-rest -->
 ## Using dayzmake-core as a library
 <!-- ANCHOR: library -->
 
@@ -306,7 +304,6 @@ independently of the CLI.
 
 <!-- ANCHOR_END: library -->
 ## Script API index
-<!-- ANCHOR: api-index -->
 
 `dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a
 declaration lives, compile-time defines) from the installed game, without extracting anything.
@@ -342,9 +339,7 @@ dayzmake api update                           # rebuild the cache now
 - PBO contents are untrusted: entries and prefixes with unsafe paths are skipped with a warning and nothing is
   extracted to disk.
 
-<!-- ANCHOR_END: api-index -->
 ## MCP server
-<!-- ANCHOR: mcp -->
 
 `dayzmake mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server on stdin/stdout
 (newline-delimited JSON-RPC, tools only). Register it with Claude Code:
@@ -371,9 +366,7 @@ register the server with a client you trust to do that. Output is capped at 200 
 (bytes) to fetch the rest, and `api_source` takes `target` to write the files instead. Warnings come first in
 the result, so a cut never drops them, and failures are results with `isError: true`.
 
-<!-- ANCHOR_END: mcp -->
 ## Inspecting models and checking their textures
-<!-- ANCHOR: models -->
 
 `dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections; for a binarized ODOL (or BMTR) only the format and version are known. Without a model header, `inspect` treats the input as a PBO.
 
@@ -395,4 +388,3 @@ dayzmake builds a throw-away sandbox in the temp directory (a copy of `Binarize`
 `binarize.exe` resolves texture and material paths (`my\mod\data\x_ca.paa`) relative to the project root, and only sets a model's alpha flags if it can read the texture. dayzmake therefore gives the sandbox a `P:` drive with the addon linked at its PBO prefix (`P:\my\mod` → the source folder) and runs `binarize.exe` from `P:\`. Paths outside the addon (vanilla `dz\...`) stay unresolved and are reported as `binarize-missing-texture`. The source folder is linked, not copied, so `binarize.exe` can read and in principle write it; its output goes to the sandbox, and the source is not modified.
 
 `dayzmake binarize <source> <target>` has no PBO to take the prefix from: it treats the model's folder as the addon and uses the folder name as the prefix. That only works for a model in the addon root of a single-component prefix; for anything else (a model in `data\`, or a prefix like `my\mod`) use `build --proton-binarize`, which takes the prefix from `$PBOPREFIX$`.
-<!-- ANCHOR_END: models -->
