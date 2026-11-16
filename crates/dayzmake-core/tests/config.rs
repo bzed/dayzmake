@@ -427,3 +427,29 @@ fn error_location_survives_nested_disabled_branches() {
         .to_string();
     assert!(err.contains("In line 8:"), "{err}");
 }
+
+#[test]
+fn line_numbers_count_backslash_continuations_in_disabled_lines() {
+    // The warning is on the last line of each source (#63).
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nx = 1 \\\n;\n#endif\nclass X { y = ; };\n"),
+        Some(5)
+    );
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\nM(1,\\\n2);\n#endif\nclass X { y = ; };\n"),
+        Some(5)
+    );
+    assert_eq!(
+        empty_value_line("#ifdef NOPE\n#define M(a) \\\n  a \\\n  a\n#endif\nclass X { y = ; };\n"),
+        Some(6)
+    );
+}
+
+#[test]
+fn line_numbers_count_backslash_continuations_in_an_enabled_define() {
+    // #65
+    assert_eq!(
+        empty_value_line("#define M(a) \\\n  a \\\n  a\nclass X { y = ; };\n"),
+        Some(4)
+    );
+}

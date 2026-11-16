@@ -7,7 +7,6 @@ use std::env::current_dir;
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
 use std::io::{Error, Read};
-use std::iter::Sum;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::{ErrorExt, PreprocessParseErrorExt, printable};
@@ -643,8 +642,8 @@ impl Token {
     }
 }
 
-/// The newlines of a line that is not expanded: those of its strings and comments, as expansion would
-/// count them (a string inside a macro call is counted once).
+/// The source newlines of tokens that are not expanded: those of strings and comments (a string inside a
+/// macro call is counted once) and every `\`-newline continuation, wherever it sits.
 fn skipped_newlines(tokens: &[Token]) -> u32 {
     let mut total = 0u32;
     for token in tokens {
@@ -652,17 +651,20 @@ fn skipped_newlines(tokens: &[Token]) -> u32 {
             Token::NewlineToken(_, n) | Token::CommentToken(n) => *n,
             Token::MacroToken(m) => {
                 let mut in_string = false;
+                let mut prev = ' ';
                 let mut count = 0u32;
                 for c in m.original.chars() {
                     match c {
                         '"' => in_string = !in_string,
-                        '\n' if in_string => count = count.saturating_add(1),
+                        '\n' if in_string || prev == '\\' => count = count.saturating_add(1),
                         _ => {}
                     }
+                    prev = c;
                 }
                 count
             }
-            Token::RegularToken(_) | Token::ConcatToken => 0,
+            Token::RegularToken(s) => u32::try_from(s.matches("\\\n").count()).unwrap_or(u32::MAX),
+            Token::ConcatToken => 0,
         };
         total = total.saturating_add(n);
     }
@@ -1051,11 +1053,7 @@ fn preprocess_rec(
                             output += &result;
                         }
                         Directive::DefineDirective(def) => {
-                            original_lineno += u32::sum(def.value.iter().map(|t| match t {
-                                Token::NewlineToken(_s, n) => *n,
-                                Token::CommentToken(n) => *n,
-                                _ => 0,
-                            }));
+                            original_lineno += skipped_newlines(&def.value);
 
                             if level > level_true {
                                 break 'line;
