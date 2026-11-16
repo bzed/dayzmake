@@ -323,7 +323,6 @@ impl SelectedEntry {
 #[derive(Debug)]
 pub struct PboSelection {
     header_extensions: LinkedHashMap<String, String>,
-    prefix_bytes: Option<Vec<u8>>,
     names: Vec<String>,
     entries: Vec<SelectedEntry>,
 }
@@ -348,17 +347,76 @@ impl PboSelection {
         self.header_extensions.get(key).map(String::as_str)
     }
 
-    /// The bytes the prefix is stored as.
-    pub(crate) fn prefix_bytes(&self) -> Option<&[u8]> {
-        self.prefix_bytes.as_deref()
-    }
-
     /// The header extensions (`key=value`) in file order.
     pub fn header_extensions(&self) -> impl Iterator<Item = (&str, &str)> {
         self.header_extensions
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
+}
+
+/// Where one entry of a PBO is stored: what [`read_index`] returns, so a reader can seek to the data.
+pub(crate) struct IndexEntry {
+    pub(crate) name: String,
+    /// The stored name is not valid UTF-8 (`name` is its windows-1252 decoding).
+    pub(crate) non_utf8: bool,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+    pub(crate) original_size: u32,
+    pub(crate) compressed: bool,
+}
+
+/// The header block of a PBO and the position of every entry's data.
+pub(crate) struct PboIndex {
+    pub(crate) prefix: Option<String>,
+    pub(crate) prefix_bytes: Option<Vec<u8>>,
+    pub(crate) entries: Vec<IndexEntry>,
+    /// The length of the file; the data of an entry may lie past it in a damaged PBO.
+    pub(crate) len: u64,
+}
+
+/// Reads the header block of a seekable PBO without reading any entry data.
+///
+/// The input is untrusted: the header block is bounded like [`PBO::read_headers`] and nothing is
+/// allocated from a size in the file; offsets use checked arithmetic.
+pub(crate) fn read_index<I: Read + Seek>(input: &mut I) -> Result<PboIndex, Error> {
+    let len = input.seek(SeekFrom::End(0))?;
+    input.seek(SeekFrom::Start(0))?;
+    let mut reader = BufReader::new(&mut *input);
+    let block = read_header_block(&mut reader)?;
+    let mut offset = reader.stream_position()?;
+    let mut entries = Vec::with_capacity(block.headers.len());
+    for h in &block.headers {
+        let size = u64::from(h.data_size);
+        entries.push(IndexEntry {
+            name: h.filename.clone(),
+            non_utf8: h.raw_filename.is_some(),
+            offset,
+            size,
+            original_size: h.original_size,
+            compressed: h.packing_method == PACKING_COMPRESSED,
+        });
+        offset = offset
+            .checked_add(size)
+            .ok_or_else(|| error!("PBO entry sizes overflow."))?;
+    }
+    let prefix_bytes = (block.raw_pairs.len() == block.extensions.len())
+        .then(|| {
+            let at = block.extensions.keys().position(|k| k == "prefix")?;
+            block.raw_pairs.get(at).map(|(_, value)| value.clone())
+        })
+        .flatten();
+    Ok(PboIndex {
+        prefix: block.extensions.get("prefix").cloned(),
+        prefix_bytes,
+        entries,
+        len,
+    })
+}
+
+/// Decompresses the stored bytes of a "Cprs" entry (see `lzss_decompress`).
+pub(crate) fn decompress_entry(data: &[u8], original_size: u32) -> Result<Vec<u8>, Error> {
+    lzss_decompress(data, original_size as usize)
 }
 
 /// Packing method of entries compressed with Bohemia's LZSS variant ("Cprs").
@@ -983,14 +1041,7 @@ impl PBO {
             }
             offset = end;
         }
-        let prefix_bytes = (block.raw_pairs.len() == block.extensions.len())
-            .then(|| {
-                let at = block.extensions.keys().position(|k| k == "prefix")?;
-                block.raw_pairs.get(at).map(|(_, value)| value.clone())
-            })
-            .flatten();
         Ok(PboSelection {
-            prefix_bytes,
             header_extensions: block.extensions,
             names: block.headers.into_iter().map(|h| h.filename).collect(),
             entries,

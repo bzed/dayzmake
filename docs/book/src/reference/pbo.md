@@ -386,15 +386,21 @@ Behaviour:
   `.<name>.extract-<pid>-<n>`) and replaces `<targetfolder>` with a rename when everything succeeded, then the old
   tree is removed. A re-run therefore drops files that no longer exist, and a failure (a PBO that cannot be read)
   leaves the old tree untouched and removes the staging folder.
-- Without `-f`, an existing `<targetfolder>` is an error. With `-f` it must be a folder (not a file or a
-  symbolic link) that does not contain `<source>`; it is deleted after the swap, so point it only at a
-  folder that `extract` made.
+- Without `-f`, an existing `<targetfolder>` is an error. With `-f` it is replaced and deleted after the swap, but
+  only when it is an empty folder or holds a `pbo-map.tsv` at its top level, that is, looks like the result of an
+  earlier `extract`; any other folder is refused with an error that names it, so a wrong target cannot wipe a home
+  folder. It must also be a real folder (not a file or a symbolic link), must not contain the source and must not lie
+  inside it: `extract -f m m/addons` is refused, so the PBOs are never deleted.
+- Everything that goes wrong with a PBO is an error that leaves the old tree alone: a PBO or entry that cannot be
+  read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names
+  and a `.bin` that cannot be derapified are skipped, with a warning.
 - `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
   <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
   name without `.pbo`. The prefix bytes are written as they are, except TAB, CR and LF, which are written
   as `\t`, `\r` and `\n`. The PBOs whose files were skipped because of their prefix are listed too.
-- Memory: only the selected entries of one PBO are held at a time, so `--only` keeps the extraction of an
-  install small.
+- Memory: an entry that is stored uncompressed is copied from the PBO to its file in pieces. Only compressed entries
+  and, with `--derapify`, `*.bin` files that start with the rapified signature are read into memory, up to 512 MiB
+  each (a compressed entry over that is an error), so the largest PBOs extract in a small amount of memory.
 
 Example:
 

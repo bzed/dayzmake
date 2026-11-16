@@ -34,7 +34,9 @@ is maintained here.
 - `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the
   `dta` and `addons` folders of a DayZ install or mod, or a single PBO, into `<targetfolder>/<prefix>/`, optionally
   derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix, TAB, PBO path). The tree is
-  written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree. The MCP
+  written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree; `-f`
+  only replaces an empty folder or an earlier result (one with a `pbo-map.tsv`) and never one that contains or lies
+  inside the source. The MCP
   tool is `extract` (#87).
 - `api grep <regex>` searches the lines of every `.c` file of vanilla and of the selected mods, straight from the
   PBOs, and prints `[<source>] <prefix>\<path>:<line>: <text>` sorted by source, path and line. `--ignore-case`

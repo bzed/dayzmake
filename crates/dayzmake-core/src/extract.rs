@@ -7,13 +7,15 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{BufReader, Cursor, Error, ErrorKind};
+use std::io::{self, BufReader, Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::config::{Config, WriteOptions, is_rapified};
 use crate::error::{ErrorExt, printable};
-use crate::pbo::warn_leading_separator;
-use crate::pbo::{EntryFilter, PBO, prefix_relative, safe_relative_path, unpack_relative};
+use crate::pbo::{
+    EntryFilter, IndexEntry, decompress_entry, prefix_relative, read_index, safe_relative_path,
+    unpack_relative, warn_leading_separator,
+};
 use crate::warning::{Warning, WarningSink};
 
 /// The file in the target that maps every prefix to its PBO.
@@ -132,9 +134,21 @@ fn find_pbos(source: &Path) -> Result<Vec<SourcePbo>, Error> {
     Ok(found)
 }
 
+/// Whether `folder` is empty or holds the `pbo-map.tsv` of an earlier run, so that replacing it cannot
+/// destroy anything but an extract result.
+fn looks_like_extract_result(folder: &Path) -> bool {
+    let is_empty = fs::read_dir(folder).is_ok_and(|mut entries| entries.next().is_none());
+    is_empty || fs::symlink_metadata(folder.join(MAP_FILE)).is_ok_and(|m| m.is_file())
+}
+
 /// Checks the target before anything is written: an existing one needs `force`, must be a real folder
-/// and must not contain the source.
-fn check_target(source: &Path, target: &Path, force: bool) -> Result<(), Error> {
+/// that is empty or an earlier result, and must neither contain nor lie inside the source.
+fn check_target(
+    sources: &[SourcePbo],
+    source: &Path,
+    target: &Path,
+    force: bool,
+) -> Result<(), Error> {
     let shown = printable(&target.display().to_string());
     match fs::symlink_metadata(target) {
         Ok(meta) => {
@@ -146,16 +160,29 @@ fn check_target(source: &Path, target: &Path, force: bool) -> Result<(), Error> 
                     "Target folder \"{shown}\" already exists. Use --force to replace it."
                 ));
             }
-            let contains = |inner: &Path| {
-                match (target.canonicalize(), inner.canonicalize()) {
-                    (Ok(outer), Ok(inner)) => inner.starts_with(outer),
-                    // not comparable: do not take the chance of deleting the source
-                    _ => true,
-                }
+            // paths that cannot be compared count as overlapping: better refuse than delete the source
+            let outer = target.canonicalize();
+            let overlaps = |inner: &Path| match (&outer, inner.canonicalize()) {
+                (Ok(outer), Ok(inner)) => inner.starts_with(outer),
+                _ => true,
             };
-            if contains(source) {
+            let inside = match (&outer, source.canonicalize()) {
+                (Ok(outer), Ok(source)) => outer.starts_with(source),
+                _ => true,
+            };
+            if inside {
+                return Err(error!(
+                    "Target folder \"{shown}\" is inside the source; refusing to replace it."
+                ));
+            }
+            if overlaps(source) || sources.iter().any(|s| overlaps(&s.path)) {
                 return Err(error!(
                     "Target folder \"{shown}\" contains the source; refusing to replace it."
+                ));
+            }
+            if !looks_like_extract_result(target) {
+                return Err(error!(
+                    "Target folder \"{shown}\" is not empty and not the result of an earlier extract (it has no {MAP_FILE}); refusing to replace it."
                 ));
             }
             Ok(())
@@ -217,11 +244,27 @@ fn escape(bytes: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+/// The largest entry that is read into memory (compressed ones and derapify candidates); everything
+/// else is copied from the PBO to the file in pieces.
+const MAX_IN_MEMORY: u64 = 1 << 29;
+
+/// What an entry's file will hold.
+enum Content {
+    /// Copy this many bytes from the PBO, starting at the offset.
+    Stream {
+        offset: u64,
+        size: u64,
+    },
+    Bytes(Vec<u8>),
+}
+
 /// The state that spans all PBOs of one run.
 struct Run<'a> {
     staging: &'a Path,
     options: &'a ExtractOptions,
     filter: EntryFilter,
+    /// The PBO paths, by index.
+    names: Vec<String>,
     /// Lowercase relative path of every file written -> (path as written, index of its PBO).
     owners: BTreeMap<String, (PathBuf, usize)>,
     /// Prefix bytes and PBO path of every PBO.
@@ -230,44 +273,35 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
-    /// Extracts one PBO. A PBO that cannot be read is an error; unsafe names are skipped.
+    /// Extracts one PBO. A PBO that cannot be read or an entry that cannot be decompressed or written is
+    /// an error; unsafe names are skipped.
     fn pbo(
         &mut self,
         index: usize,
-        sources: &[SourcePbo],
+        source: &SourcePbo,
         warnings: &mut dyn WarningSink,
     ) -> Result<(), Error> {
-        let Some(source) = sources.get(index) else {
-            return Ok(());
-        };
         let shown = printable(&source.relative);
-        let file =
-            File::open(&source.path).prepend_error(format!("Failed to open PBO \"{shown}\":"))?;
-        let selection =
-            PBO::read_entries(&mut BufReader::new(file), |name| self.filter.matches(name))
-                .prepend_error(format!("Failed to read PBO \"{shown}\":"))?;
+        let mut file = BufReader::new(
+            File::open(&source.path).prepend_error(format!("Failed to open PBO \"{shown}\":"))?,
+        );
+        let pbo_index =
+            read_index(&mut file).prepend_error(format!("Failed to read PBO \"{shown}\":"))?;
 
         let stem = source
             .path
             .file_stem()
             .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
-        let prefix = selection.header_extension("prefix");
-        let (map_prefix, folder) = match prefix_relative(prefix) {
-            Ok(Some(relative)) => (
-                selection.prefix_bytes().map_or_else(
-                    || prefix.unwrap_or_default().as_bytes().to_vec(),
-                    <[u8]>::to_vec,
-                ),
-                Some(relative),
-            ),
-            Ok(None) => (stem.as_bytes().to_vec(), safe_relative_path(&stem)),
-            Err(_) => (
-                selection.prefix_bytes().map_or_else(
-                    || prefix.unwrap_or_default().as_bytes().to_vec(),
-                    <[u8]>::to_vec,
-                ),
-                None,
-            ),
+        let prefix = pbo_index.prefix.as_deref();
+        let folder = match prefix_relative(prefix) {
+            Ok(Some(relative)) => Some(relative),
+            Ok(None) => safe_relative_path(&stem),
+            Err(_) => None,
+        };
+        let map_prefix = match (prefix_relative(prefix), pbo_index.prefix_bytes) {
+            (Ok(None), _) => stem.as_bytes().to_vec(),
+            (_, Some(raw)) => raw,
+            (_, None) => prefix.unwrap_or_default().as_bytes().to_vec(),
         };
         self.map.push((map_prefix, source.relative.clone()));
         let folder = folder.filter(|f| {
@@ -285,45 +319,45 @@ impl Run<'_> {
             return Ok(());
         };
 
-        for entry in selection.entries() {
-            self.entry(
-                index,
-                sources,
-                &folder,
-                entry.name(),
-                entry.data(),
-                warnings,
-            );
+        for entry in &pbo_index.entries {
+            if !self.filter.matches(&entry.name) {
+                continue;
+            }
+            let end = entry.offset.checked_add(entry.size);
+            if end.is_none_or(|end| end > pbo_index.len) {
+                return Err(error!(
+                    "PBO \"{shown}\": entry \"{}\" is truncated (its data ends past the end of the file).",
+                    printable(&entry.name)
+                ));
+            }
+            self.entry(index, &folder, entry, &mut file, warnings)
+                .prepend_error(format!("PBO \"{shown}\":"))?;
         }
         Ok(())
     }
 
-    /// Writes one entry below `folder`, or warns why not.
-    fn entry(
+    /// Writes one entry below `folder`, or warns why it is skipped.
+    fn entry<F: Read + Seek>(
         &mut self,
         index: usize,
-        sources: &[SourcePbo],
         folder: &Path,
-        name: &str,
-        data: Result<&[u8], &Error>,
+        entry: &IndexEntry,
+        file: &mut F,
         warnings: &mut dyn WarningSink,
-    ) {
+    ) -> Result<(), Error> {
+        let name = entry.name.as_str();
+        if entry.non_utf8 {
+            warnings.warn(Warning::new(
+                Some("non-utf8-filename"),
+                format!("Entry name {name:?} is not valid UTF-8; extracting it as windows-1252."),
+            ));
+        }
         let Some((relative, stripped)) = unpack_relative(name) else {
             warnings.warn(Warning::new(
                 Some("unsafe-path"),
                 format!("Skipping \"{}\": unsafe path.", printable(name)),
             ));
-            return;
-        };
-        let data = match data {
-            Ok(data) => data,
-            Err(e) => {
-                warnings.warn(Warning::new(
-                    None,
-                    format!("Skipping \"{}\": {e}", printable(name)),
-                ));
-                return;
-            }
+            return Ok(());
         };
         if stripped {
             warn_leading_separator(name, &relative, warnings);
@@ -331,20 +365,32 @@ impl Run<'_> {
         let is_bin = relative
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("bin"));
-        let (relative, data) = if self.options.derapify && is_bin && is_rapified(data) {
-            match derapify(data) {
-                Ok(text) => (relative.with_extension("cpp"), text),
-                Err(e) => {
-                    warnings.warn(Warning::new(
-                        Some("derapify-failed"),
-                        format!("Keeping \"{}\" as it is: {e}", printable(name)),
-                    ));
-                    (relative, data.to_vec())
-                }
-            }
-        } else {
-            (relative, data.to_vec())
+        let fail = |what: &str| format!("{what} \"{}\":", printable(name));
+        let mut relative = relative;
+        let mut content = Content::Stream {
+            offset: entry.offset,
+            size: entry.size,
         };
+        if entry.compressed {
+            if entry.size > MAX_IN_MEMORY || u64::from(entry.original_size) > MAX_IN_MEMORY {
+                return Err(error!(
+                    "Compressed entry \"{}\" is too large.",
+                    printable(name)
+                ));
+            }
+            let stored =
+                read_at(file, entry.offset, entry.size).prepend_error(fail("Failed to read"))?;
+            let data = decompress_entry(&stored, entry.original_size)
+                .prepend_error(fail("Failed to decompress"))?;
+            content = Content::Bytes(data);
+        }
+        if self.options.derapify && is_bin {
+            let (derapified, kept) = derapify_entry(entry, content, file, warnings)?;
+            if derapified {
+                relative = relative.with_extension("cpp");
+            }
+            content = kept;
+        }
         let relative = folder.join(relative);
         let key = relative.to_string_lossy().to_lowercase();
         if let Some((old, owner)) = self.owners.get(&key).cloned() {
@@ -356,9 +402,9 @@ impl Run<'_> {
                         printable(name)
                     ),
                 ));
-                return;
+                return Ok(());
             }
-            let pbo_name = |i: usize| sources.get(i).map_or("?", |s| s.relative.as_str());
+            let pbo_name = |i: usize| self.names.get(i).map_or("?", String::as_str);
             warnings.warn(Warning::new(
                 Some("duplicate-path"),
                 format!(
@@ -374,22 +420,94 @@ impl Run<'_> {
         }
         let path = self.staging.join(&relative);
         // the staging folder is new and holds nothing but what this run wrote, so no path in it is a symlink
-        let written = path
-            .parent()
-            .map_or(Ok(()), fs::create_dir_all)
-            .and_then(|()| fs::write(&path, &data));
-        match written {
-            Ok(()) => {
-                if self.owners.insert(key, (relative, index)).is_none() {
-                    self.files += 1;
-                }
-            }
-            Err(e) => warnings.warn(Warning::new(
-                None,
-                format!("Skipping \"{}\": {e}", printable(name)),
-            )),
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).prepend_error(fail("Failed to create the folder of"))?;
+        }
+        match content {
+            Content::Bytes(data) => fs::write(&path, data),
+            Content::Stream { offset, size } => file
+                .seek(SeekFrom::Start(offset))
+                .and_then(|_| File::create(&path))
+                .and_then(|mut out| {
+                    let copied = io::copy(&mut file.by_ref().take(size), &mut out)?;
+                    if copied == size {
+                        Ok(())
+                    } else {
+                        Err(Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "the entry is truncated",
+                        ))
+                    }
+                }),
+        }
+        .prepend_error(fail("Failed to write"))?;
+        if self.owners.insert(key, (relative, index)).is_none() {
+            self.files += 1;
+        }
+        Ok(())
+    }
+}
+
+/// The content of a `.bin` entry as text when it is a rapified config (`true`), else as it was. A config
+/// that cannot be derapified is kept with a `derapify-failed` warning.
+fn derapify_entry<F: Read + Seek>(
+    entry: &IndexEntry,
+    content: Content,
+    file: &mut F,
+    warnings: &mut dyn WarningSink,
+) -> Result<(bool, Content), Error> {
+    let name = entry.name.as_str();
+    let fail = |what: &str| format!("{what} \"{}\":", printable(name));
+    let head = match &content {
+        Content::Bytes(data) => data.get(..4).map(<[u8]>::to_vec),
+        Content::Stream { offset, size } if *size >= 4 => {
+            Some(read_at(file, *offset, 4).prepend_error(fail("Failed to read"))?)
+        }
+        Content::Stream { .. } => None,
+    };
+    if !head.is_some_and(|h| is_rapified(&h)) {
+        return Ok((false, content));
+    }
+    let data = match content {
+        Content::Bytes(data) => data,
+        Content::Stream { offset, size } if size <= MAX_IN_MEMORY => {
+            read_at(file, offset, size).prepend_error(fail("Failed to read"))?
+        }
+        Content::Stream { offset, size } => {
+            warnings.warn(Warning::new(
+                Some("derapify-failed"),
+                format!(
+                    "Keeping \"{}\" as it is: the entry is too large to derapify.",
+                    printable(name)
+                ),
+            ));
+            return Ok((false, Content::Stream { offset, size }));
+        }
+    };
+    match derapify(&data) {
+        Ok(text) => Ok((true, Content::Bytes(text))),
+        Err(e) => {
+            warnings.warn(Warning::new(
+                Some("derapify-failed"),
+                format!("Keeping \"{}\" as it is: {e}", printable(name)),
+            ));
+            Ok((false, Content::Bytes(data)))
         }
     }
+}
+
+/// `size` bytes of `file` at `offset`; the caller has checked `size` against `MAX_IN_MEMORY`.
+fn read_at<F: Read + Seek>(file: &mut F, offset: u64, size: u64) -> Result<Vec<u8>, Error> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut data = Vec::new();
+    file.by_ref().take(size).read_to_end(&mut data)?;
+    if u64::try_from(data.len()).ok() != Some(size) {
+        return Err(Error::new(
+            ErrorKind::UnexpectedEof,
+            "the entry is truncated",
+        ));
+    }
+    Ok(data)
 }
 
 /// Replaces `target` with the finished `staging` folder. The old tree is renamed away first, so a failure
@@ -461,18 +579,19 @@ pub fn extract(
     warnings: &mut dyn WarningSink,
 ) -> Result<ExtractSummary, Error> {
     let sources = find_pbos(source)?;
-    check_target(source, target, options.force)?;
+    check_target(&sources, source, target, options.force)?;
     let mut staging = create_staging(target)?;
     let mut run = Run {
         staging: &staging.path.clone(),
         options,
+        names: sources.iter().map(|s| s.relative.clone()).collect(),
         filter: EntryFilter::new(options.only.clone(), options.exclude.clone()),
         owners: BTreeMap::new(),
         map: Vec::new(),
         files: 0,
     };
-    for index in 0..sources.len() {
-        run.pbo(index, &sources, warnings)?;
+    for (index, source) in sources.iter().enumerate() {
+        run.pbo(index, source, warnings)?;
     }
     run.map.sort();
     let mut text = Vec::new();

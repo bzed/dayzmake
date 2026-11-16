@@ -387,3 +387,202 @@ fn a_target_that_is_a_file_is_refused_even_with_force() {
     assert!(err.to_string().contains("not a folder"), "{err}");
     assert_eq!(fs::read(&target).unwrap(), b"file");
 }
+
+/// `m/addons/a.pbo` and a target below it that an earlier extract made.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn mod_with_target_inside(
+    target_rel: &str,
+) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    let target = src.join(target_rel);
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("pbo-map.tsv"), "").unwrap();
+    (tmp, src, target)
+}
+
+#[test]
+fn force_never_deletes_the_source_when_the_target_is_inside_it() {
+    for rel in ["addons", "addons/out", "."] {
+        let (_tmp, src, target) = mod_with_target_inside(rel);
+        let mut options = ExtractOptions::default();
+        options.force = true;
+        let result = extract(&src, &target, &options, &mut Warnings::new());
+        assert!(result.is_err(), "{rel}");
+        assert!(
+            src.join("addons/a.pbo").exists(),
+            "{rel}: the source was deleted"
+        );
+    }
+}
+
+#[test]
+fn force_refuses_a_folder_that_is_not_an_extract_result() {
+    let tmp = install();
+    let target = tmp.path().join("home");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("precious.txt"), "mine").unwrap();
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    let err = extract(
+        &tmp.path().join("install"),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("not the result of"), "{err}");
+    assert!(err.to_string().contains("home"), "{err}");
+    assert_eq!(fs::read(target.join("precious.txt")).unwrap(), b"mine");
+}
+
+#[test]
+fn force_replaces_an_empty_folder() {
+    let tmp = install();
+    let target = tmp.path().join("out");
+    fs::create_dir_all(&target).unwrap();
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    extract(
+        &tmp.path().join("install"),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(target.join("pbo-map.tsv").is_file());
+}
+
+/// A tree from an earlier run, to see that a failed run leaves it alone.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn previous_tree(tmp: &Path) -> (std::path::PathBuf, Vec<String>) {
+    let target = tmp.join("out");
+    let src = tmp.join("install");
+    extract(
+        &src,
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    let before = files_below(&target);
+    (target, before)
+}
+
+#[test]
+fn a_corrupt_compressed_entry_fails_and_keeps_the_old_tree() {
+    let tmp = install();
+    let (target, before) = previous_tree(tmp.path());
+    let pbo = support::raw_pbo_with_headers(
+        &[("bad.txt", &[0, 1], support::CPRS, 100)],
+        &[("prefix", "z")],
+    );
+    fs::write(tmp.path().join("install/dta/z.pbo"), pbo).unwrap();
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    let err = extract(
+        &tmp.path().join("install"),
+        &target,
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("bad.txt"), "{err}");
+    assert_eq!(files_below(&target), before);
+    assert_eq!(
+        fs::read_dir(tmp.path()).unwrap().count(),
+        2,
+        "staging dir left behind"
+    );
+}
+
+#[test]
+fn a_write_failure_fails_and_keeps_the_old_tree() {
+    let tmp = install();
+    let (target, before) = previous_tree(tmp.path());
+    // "a" is a file, so "a/b" cannot be written
+    write_pbo(
+        &tmp.path().join("install/dta/z.pbo"),
+        "z",
+        &[("a", b"1"), ("a\\b", b"2")],
+    );
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    assert!(
+        extract(
+            &tmp.path().join("install"),
+            &target,
+            &options,
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+    assert_eq!(files_below(&target), before);
+    assert_eq!(
+        fs::read_dir(tmp.path()).unwrap().count(),
+        2,
+        "staging dir left behind"
+    );
+}
+
+#[test]
+fn a_truncated_entry_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("t.pbo");
+    let mut bytes = support::raw_pbo(&[("a.txt", b"0123456789")], &[("prefix", "p")]);
+    // cut into the data
+    bytes.truncate(bytes.len() - 20 - 1 - 4);
+    fs::write(&pbo, bytes).unwrap();
+    let err = extract(
+        &pbo,
+        &tmp.path().join("out"),
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("truncated"), "{err}");
+    assert!(!tmp.path().join("out").exists());
+}
+
+#[test]
+fn compressed_and_large_entries_are_extracted_intact() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("c.pbo");
+    let big = vec![b'z'; 3 << 20];
+    let packed = support::lzss_literals(b"hello world");
+    let bytes = support::raw_pbo_with_headers(
+        &[
+            ("c.txt", &packed, support::CPRS, 11),
+            ("big.bin", &big, 0, u32::try_from(big.len()).unwrap()),
+        ],
+        &[("prefix", "p")],
+    );
+    fs::write(&pbo, bytes).unwrap();
+    let mut options = ExtractOptions::default();
+    options.derapify = true;
+    let out = tmp.path().join("out");
+    extract(&pbo, &out, &options, &mut Warnings::new()).unwrap();
+    assert_eq!(fs::read(out.join("p/c.txt")).unwrap(), b"hello world");
+    assert_eq!(fs::read(out.join("p/big.bin")).unwrap(), big);
+}
+
+#[test]
+fn a_non_utf8_entry_name_warns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("n.pbo");
+    fs::write(
+        &pbo,
+        support::raw_pbo_bytes(&[(b"a\xffb.txt", b"x", 0)], &[(b"prefix", b"p")]),
+    )
+    .unwrap();
+    let mut warnings = Warnings::new();
+    extract(
+        &pbo,
+        &tmp.path().join("out"),
+        &ExtractOptions::default(),
+        &mut warnings,
+    )
+    .unwrap();
+    assert_eq!(names(&warnings), ["non-utf8-filename"]);
+}
