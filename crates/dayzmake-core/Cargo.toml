@@ -37,6 +37,7 @@ sha1 = { version = "0.11.0", default-features = false }
 same-file = "1.0.6"
 getrandom = { version = "0.4", default-features = false, features = ["sys_rng"], optional = true }
 zeroize = { version = "1.9.1", optional = true }
+lzokay-native = { version = "0.2.1", default-features = false, features = ["decompress"] }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

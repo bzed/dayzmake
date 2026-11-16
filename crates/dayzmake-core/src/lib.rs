@@ -5,7 +5,8 @@
 //!
 //! - [`pbo`]: read, build, pack, unpack and selectively read PBO archives ([`pbo::PBO`]).
 //! - [`config`], [`preprocess`]: config parsing, rapification and derapification.
-//! - [`p3d`]: MLOD model reading and inspection (ODOL is only detected, not read).
+//! - [`p3d`]: MLOD model reading and inspection (ODOL is only detected there).
+//! - [`odol`]: binarized ODOL v56 models, read for what a listing needs (LODs, textures, materials, proxies).
 //! - [`paa`]: PAA textures, with conversion from and to images (feature `image`).
 //! - `sign`: BI keys and `.bisign` signatures (feature `sign`).
 //! - [`binarize`]: BI's `binarize.exe`, natively on Windows or under Proton.
@@ -96,6 +97,8 @@ pub mod fileid;
 pub(crate) mod io;
 /// Bohemia's LZSS compression.
 pub(crate) mod lzss;
+/// Binarized ODOL v56 model reading.
+pub mod odol;
 /// P3D model reading and inspection.
 pub mod p3d;
 /// PAA texture conversion.
