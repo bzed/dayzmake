@@ -360,7 +360,7 @@ Convert an image to a PAA texture.
 |---|---|---|---|
 | `source` | string | yes | Image file. |
 | `target` | string | yes | PAA file to write. |
-| `compress` | boolean | no | LZO-compress the DXT mipmaps wider than 128 pixels. `image_to_paa` already does this by default, so the output does not change. |
+| `compress` | boolean | no | LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility). |
 | `force` | boolean | no | Overwrite existing target files. |
 | `type` | string | no | PAA type, e.g. dxt1, dxt5 (default dxt5). |
 

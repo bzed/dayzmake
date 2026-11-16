@@ -970,10 +970,16 @@ impl WriteOptions {
     /// Returns an error naming the value if it contains other characters or is too long.
     pub fn indent(mut self, indent: impl Into<String>) -> Result<Self, Error> {
         let indent = indent.into();
-        if indent.chars().count() > 64 || !indent.chars().all(|c| c == ' ' || c == '\t') {
+        let length = indent.chars().count();
+        if length > 64 {
             return Err(error!(
-                "Invalid indentation \"{}\": use at most 64 spaces and tabs.",
-                printable(&indent.chars().take(64).collect::<String>())
+                "Invalid indentation: it is {length} characters, at most 64 are allowed."
+            ));
+        }
+        if !indent.chars().all(|c| c == ' ' || c == '\t') {
+            return Err(error!(
+                "Invalid indentation \"{}\": use spaces and tabs only.",
+                printable(&indent)
             ));
         }
         self.indent = indent;

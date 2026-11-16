@@ -81,7 +81,7 @@ Options:
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as \"key=value\".
     -k --key <privatekey>       Sign the PBO with the given private key.
-    -c --compress               Compress the output PAA file.
+    -c --compress               LZO-compress DXT mipmaps wider than 128 px (always done; kept for compatibility).
     -t --type <paatype>         PAA compression type (e.g. dxt1, dxt5). [default: dxt5]
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
@@ -239,7 +239,7 @@ fn run_command(
         config::cmd_derapify(
             &mut get_input(args)?,
             &mut output,
-            args.flag_indent.as_deref().unwrap_or("    "),
+            args.flag_indent.as_deref(),
         )?;
         output.commit()
     } else if args.cmd_preprocess {
@@ -504,10 +504,6 @@ mod tests {
 
 /// Entry point driving the CLI: handles `--version`, then dispatches to the command.
 pub fn args(args: &mut Args) {
-    if args.flag_indent.is_none() {
-        args.flag_indent = Some("    ".to_string());
-    }
-
     if args.flag_version {
         // a closed pipe is not worth a message here either
         let _ = writeln!(StdoutState::default().writer(), "v{VERSION}");

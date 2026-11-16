@@ -539,11 +539,11 @@ impl Paa {
         let compression = self.compression.clone();
         for mipmap in &mut self.mipmaps {
             let raw = raw_mipmap_size(&compression, width, height);
-            if width > 128 && raw.is_some_and(|raw| mipmap.len() >= raw) {
+            if let Some(raw) = raw.filter(|&raw| width > 128 && mipmap.len() == raw) {
                 // The stream already ends with the LZO end marker (11 00 00); a byte after it makes
                 // the game reject the mipmap.
                 let compressed = lzo1x::compress(mipmap, lzo1x::CompressLevel::default());
-                if compressed.len() < mipmap.len() {
+                if compressed.len() < raw {
                     *mipmap = compressed;
                 }
             }

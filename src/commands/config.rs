@@ -52,7 +52,7 @@ pub fn cmd_rapify<I: Read, O: Write>(
 }
 
 /// Reads input, derapifies it and writes to output, indenting with `indent`
-/// (spaces and tabs only).
+/// (spaces and tabs only; `None` is the default of [`WriteOptions`]).
 ///
 /// # Errors
 ///
@@ -60,9 +60,12 @@ pub fn cmd_rapify<I: Read, O: Write>(
 pub fn cmd_derapify<I: Read + Seek, O: Write>(
     input: &mut I,
     output: &mut O,
-    indent: &str,
+    indent: Option<&str>,
 ) -> Result<(), Error> {
-    let options = WriteOptions::new().indent(indent)?;
+    let options = match indent {
+        Some(indent) => WriteOptions::new().indent(indent)?,
+        None => WriteOptions::new(),
+    };
     let config = Config::read_rapified(input).prepend_error("Failed to read rapified config:")?;
 
     config

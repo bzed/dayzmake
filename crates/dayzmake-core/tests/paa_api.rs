@@ -159,3 +159,52 @@ fn lzo_compress_twice_is_idempotent() {
     paa.lzo_compress().expect("compresses");
     assert_eq!(to_bytes(&paa), once);
 }
+
+/// A DXT1 PAA of 256 x 256 whose first mipmap is stored raw but longer than the raw size.
+#[cfg(feature = "image")]
+#[expect(clippy::expect_used, reason = "tests fail by panicking")]
+fn oversized_first_mipmap_file() -> Vec<u8> {
+    let first: Vec<u8> = (0..40000u32)
+        .map(|i| u8::try_from(i / 160).unwrap_or(255))
+        .collect();
+    let second = vec![7u8; 8192];
+    let offset0 = 2u32 + 8 + 4 + 64 + 2;
+    let offset1 = offset0 + 7 + u32::try_from(first.len()).expect("fits");
+    let mut out = vec![0x01, 0xff];
+    out.extend_from_slice(b"GGATSFFO");
+    out.extend_from_slice(&64u32.to_le_bytes());
+    let mut table = vec![offset0, offset1];
+    table.resize(16, 0);
+    for o in table {
+        out.extend_from_slice(&o.to_le_bytes());
+    }
+    out.extend_from_slice(&0u16.to_le_bytes());
+    for (w, h, data) in [(256u16, 256u16, &first), (128, 128, &second)] {
+        out.extend_from_slice(&w.to_le_bytes());
+        out.extend_from_slice(&h.to_le_bytes());
+        out.extend_from_slice(&u32::try_from(data.len()).expect("fits").to_le_bytes()[..3]);
+        out.extend_from_slice(data);
+    }
+    out.extend_from_slice(&[0; 6]);
+    out
+}
+
+#[cfg(feature = "image")]
+#[test]
+fn lzo_compress_leaves_an_oversized_raw_mipmap_readable() {
+    let mut paa = Paa::read(&mut Cursor::new(oversized_first_mipmap_file())).expect("reads");
+    let before = paa.to_dynamic_image().expect("decodes").to_rgba8();
+    paa.lzo_compress().expect("no error");
+    let back = Paa::read(&mut Cursor::new(to_bytes(&paa))).expect("the written file reads");
+    assert_eq!(back.to_dynamic_image().expect("decodes").to_rgba8(), before);
+}
+
+#[test]
+fn indent_too_long_reports_the_length() {
+    let msg = dayzmake_core::config::WriteOptions::new()
+        .indent(" ".repeat(65))
+        .expect_err("too long")
+        .to_string();
+    assert!(msg.contains("65 characters"), "{msg}");
+    assert!(msg.len() < 120, "{msg}");
+}
