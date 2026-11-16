@@ -40,6 +40,8 @@ make_dist() {
 
 secret=$(make_key "$work/key-home" "correct horse")
 gpg --homedir "$work/key-home" --armor --export >"$work/public.asc" 2>/dev/null
+# the "published" key of these tests
+export RELEASE_GPG_PUBLIC_KEY="$work/public.asc"
 
 # 1. success: two files in, sorted bare names in both sums files, valid signatures, sums check out
 make_dist "$work/dist"
@@ -97,10 +99,28 @@ gpg --homedir "$work/expired-home" --batch --quiet --pinentry-mode loopback --pa
     --faked-system-time 20200101T000000 --quick-generate-key "expired test key" ed25519 sign 1d 2>/dev/null
 expired=$(gpg --homedir "$work/expired-home" --batch --quiet --pinentry-mode loopback --passphrase pw \
     --armor --export-secret-keys 2>/dev/null)
-if RELEASE_GPG_PRIVATE_KEY=$expired RELEASE_GPG_PASSPHRASE=pw "$script" "$work/dist2" >"$work/e4.log" 2>&1; then
+gpg --homedir "$work/expired-home" --armor --export >"$work/expired-public.asc" 2>/dev/null
+if RELEASE_GPG_PUBLIC_KEY="$work/expired-public.asc" RELEASE_GPG_PRIVATE_KEY=$expired RELEASE_GPG_PASSPHRASE=pw "$script" "$work/dist2" >"$work/e4.log" 2>&1; then
     fail "an expired key was accepted"
 fi
 [ ! -e "$work/dist2/SHA256SUMS.asc" ] || fail "signatures were left behind after an expired key"
+
+# 6b. a wrong passphrase shows what gpg said
+grep -q 'gpg said' "$work/e3.log" || fail "gpg's own message is not shown for a wrong passphrase: $(cat "$work/e3.log")"
+
+# 6c. a key that is not the published one fails, even with a valid signature
+other=$(make_key "$work/other-home" "pw2")
+if RELEASE_GPG_PRIVATE_KEY=$other RELEASE_GPG_PASSPHRASE=pw2 "$script" "$work/dist2" >"$work/e5.log" 2>&1; then
+    fail "a key other than the published one was accepted"
+elif ! grep -q 'not the published key' "$work/e5.log"; then
+    fail "the error for a foreign key does not say so: $(cat "$work/e5.log")"
+fi
+[ ! -e "$work/dist2/SHA256SUMS.asc" ] || fail "signatures were left behind after a foreign key"
+
+# 6d. a missing public key file fails
+if RELEASE_GPG_PUBLIC_KEY="$work/none.asc" RELEASE_GPG_PRIVATE_KEY=$secret RELEASE_GPG_PASSPHRASE="correct horse" "$script" "$work/dist2" >/dev/null 2>&1; then
+    fail "a missing public key file was accepted"
+fi
 
 # 7. the secrets never show up in the output
 if grep -q -e 'correct horse' -e 'BEGIN PGP PRIVATE' "$work/ok.log" "$work"/e*.log; then
