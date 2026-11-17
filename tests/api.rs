@@ -2272,6 +2272,24 @@ mod from_pbo {
     }
 
     #[test]
+    fn api_grep_cut_backs_up_over_a_four_byte_character() {
+        let w = World::new();
+        // characters start at 1, 5, ..., 509; byte 512 is inside the one that starts at 509
+        let m = long_line_mod(&w, &format!("a{}\n", "\u{1F600}".repeat(500)));
+        let (code, out, err) = w.run(&["api", "grep", "^a", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let line = out
+            .lines()
+            .find(|l| l.contains("lg\\a.c:1: "))
+            .expect("hit");
+        let text = line.split_once("lg\\a.c:1: ").expect("sep").1;
+        let cut = text.strip_suffix(" [\u{2026}]").expect("marker");
+        assert!(cut.len() <= 512, "{}", cut.len());
+        assert_eq!(cut.len(), 509);
+        assert!(cut.ends_with('\u{1F600}'), "{cut}");
+    }
+
+    #[test]
     fn api_grep_invalid_regex_is_a_clear_error() {
         let w = World::new();
         let (code, out, err) = w.run(&["api", "grep", "(unclosed"]);

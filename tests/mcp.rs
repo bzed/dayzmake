@@ -393,6 +393,28 @@ fn mcp_api_source_context_and_lines() {
 }
 
 #[test]
+fn mcp_api_source_target_without_cat_is_an_error() {
+    let w = fake_steam();
+    let t = w.home.join("out.txt");
+    let r = run_raw(
+        lines(&[call(1, "api_source", &json!({"name":"Base","target":t}))]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("target is only used with cat"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(!t.exists());
+}
+
+#[test]
 fn mcp_api_source_target_with_a_range_is_an_error() {
     let w = fake_steam();
     let t = w.home.join("out.txt");
