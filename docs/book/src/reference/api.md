@@ -392,7 +392,7 @@ index is needed (`--refresh` does not apply). Output is `<prefix>\<path>:<line>:
 in `-m` order), then path, then line. `--max` limits the printed lines but the whole input is scanned, so the
 number in the `... N more lines` note is exact (a full scan of the game's scripts takes well under a second).
 `no match` is printed when nothing matches; control characters in the text are escaped (a tab shows as `\t`).
-A matching line is printed up to 512 bytes, cut back to the previous character boundary and followed by ` […]`;
+A matching line is printed up to its first 512 bytes (counted before escaping), cut back to the previous character boundary and followed by ` […]`;
 in JSON `text` is cut the same way (without the marker) and the hit gets `"truncated": true`, only when it was cut.
 JSON has no truncation note: it holds the first `--max` hits. An invalid regex is an error that names the pattern.
 A mod PBO that cannot be read is skipped with a warning.

@@ -105,10 +105,10 @@ In file …/mod/addons/huge.pbo: warning: the config of mod is too large (more t
 
 Raised by: `api config`, `mcp`.
 
-The `requiredAddons` of the `CfgPatches` of some PBOs of one source depend on each other in a cycle, so no order satisfies them. The PBOs of the cycle load after the others, in path order.
+The `requiredAddons` of the `CfgPatches` of some PBOs depend on each other in a cycle (the PBOs can belong to different sources), so no order satisfies them. The PBOs of the cycle, and the PBOs that depend on them, load after the others, in the global tie-break order: the source (the game first, then the mods in `-m` order), then the path. Only the PBOs that really are in the cycle are named and counted, each as `[<source>] <pbo>`. The warning is raised on every query, not only when the index is built, because the merge runs for every query; the same holds for `api-config-base-changed` of a change across PBOs.
 
 ```text
-warning: requiredAddons form a cycle between 2 configs (Addons/c1.pbo, Addons/c2.pbo); they load in path order [api-config-order]
+warning: requiredAddons form a cycle between 2 configs ([vanilla] Addons/c1.pbo, [vanilla] Addons/c2.pbo); they and the configs that depend on them load last, in source and path order [api-config-order]
 ```
 
 ## api-unsafe-entry
@@ -353,7 +353,7 @@ In file data/pipe: warning: Skipping a file that is not a regular file (FIFO, de
 
 ## unterminated-comment
 
-Raised by: `rapify`, `preprocess`, `build`.
+Raised by: `rapify`, `preprocess`, `build`, `api config`, `mcp`.
 
 A `/*` comment is never closed. Like CfgConvert, which says nothing about it, dayzmake takes the rest of the file as the comment, so every line after it is ignored, also an `#include` (which is then not even looked up). In an included file the comment ends with that file. The warning names the file and the line of the `/*`; it is not raised for `/*` inside a string. It also covers a comment that opens after a directive (`#endif /* c`, `#define X 1 /* c`), and one in a disabled `#ifdef` branch.
 
