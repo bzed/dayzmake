@@ -99,6 +99,13 @@ fn fan_height(verts: &[[f32; 3]], pos: &[f32; 3]) -> Option<f32> {
 ///
 /// A position over the polygon that no fan triangle contains (a degenerate triangle) gets the
 /// height of the closest point on the polygon's edges.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the public nearest-polygon query that follows"
+    )
+)]
 pub(crate) fn get_poly_height(tile: &TileData, poly: usize, pos: &[f32; 3]) -> Option<f32> {
     if tile.polys.get(poly)?.poly_type() == POLYTYPE_OFFMESH {
         return None;
@@ -120,9 +127,10 @@ fn clamp_to_edges(pos: &[f32; 3], verts: &[[f32; 3]]) -> Option<(bool, [f32; 3])
     let mut ed = [0.0_f32; VERTS_PER_POLYGON];
     let mut et = [0.0_f32; VERTS_PER_POLYGON];
     let inside = distance_pt_poly_edges_sqr(pos, verts, &mut ed, &mut et)?;
-    let mut dmin = f32::MAX;
+    // As upstream: start from the first edge and scan the rest.
+    let mut dmin = *ed.first()?;
     let mut imin = 0;
-    for (i, &d) in ed.iter().enumerate().take(verts.len()) {
+    for (i, &d) in ed.iter().enumerate().take(verts.len()).skip(1) {
         if d < dmin {
             dmin = d;
             imin = i;
@@ -136,7 +144,8 @@ fn clamp_to_edges(pos: &[f32; 3], verts: &[[f32; 3]]) -> Option<(bool, [f32; 3])
 /// `closestPointOnPoly`: the point of polygon `poly` closest to `pos` and whether `pos` is over
 /// the polygon (`posOverPoly`). `None` when the polygon does not exist.
 ///
-/// Over the polygon, the point is `pos` at the polygon's height. An off-mesh polygon interpolates
+/// Over the polygon, the point is `pos` at the height of the fan triangle containing it (its own
+/// `y` when no triangle does). An off-mesh polygon interpolates
 /// between its two end points by the ratio of the distances. Otherwise the point is clamped to the
 /// nearest edge, and its height is that of the fan triangle containing the *original* position, if
 /// one does, else the clamped edge point's own height (spec 10.2).
@@ -147,9 +156,14 @@ pub(crate) fn closest_point_on_poly(
 ) -> Option<([f32; 3], bool)> {
     let p = tile.polys.get(poly)?;
     let mut closest = *pos;
-    if let Some(h) = get_poly_height(tile, poly, pos) {
-        closest[1] = h;
-        return Some((closest, true));
+    if p.poly_type() != POLYTYPE_OFFMESH {
+        let (arr, nv) = poly_verts(tile, poly)?;
+        let verts = arr.get(..nv)?;
+        if point_in_polygon(pos, verts) {
+            // Over the polygon: the point keeps its own y when no fan triangle contains it.
+            closest[1] = fan_height(verts, pos).unwrap_or(pos[1]);
+            return Some((closest, true));
+        }
     }
     if p.poly_type() == POLYTYPE_OFFMESH {
         let v0 = tile.verts.get(usize::from(*p.verts.first()?))?;
@@ -334,6 +348,30 @@ mod tests {
         assert!(get_poly_height(&t, 1, &[25.0, 0.0, 0.0]).is_none());
         let (c, over) = closest_point_on_poly(&t, 0, &[2.0, 50.0, 8.0]).expect("poly");
         assert!(over && (c[1] - 2.0).abs() < 1e-4 && (c[0] - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn inside_point_no_fan_triangle_contains_keeps_its_y() {
+        // With huge coordinates the barycentric denominators overflow to inf - inf = NaN, so no
+        // fan triangle contains the point, which is still over the polygon (the numerically
+        // degenerate case of upstream's "directly over, but no triangle" fall-through).
+        let mut t = slope();
+        t.verts = vec![
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1e10],
+            [1e10, 0.0, 1e10],
+            [1e10, 0.0, 0.0],
+            [0.0; 3],
+            [0.0; 3],
+        ];
+        let pos = [5e9, 77.0, 5e9];
+        assert!(fan_height(&t.verts[..4], &pos).is_none());
+        let (c, over) = closest_point_on_poly(&t, 0, &pos).expect("poly");
+        assert!(over);
+        assert!((c[1] - 77.0).abs() < f32::EPSILON);
+        // `get_poly_height` falls back to the height of the closest edge point.
+        let h = get_poly_height(&t, 0, &pos).expect("over the polygon");
+        assert!(h.abs() < f32::EPSILON);
     }
 
     #[test]

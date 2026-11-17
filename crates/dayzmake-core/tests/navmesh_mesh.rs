@@ -321,6 +321,7 @@ fn from_set_roundtrip() {
 fn from_set_keeps_refs_and_slot_order() {
     let mut set = empty_set(2, 2);
     let mut late = set_tile(3, square(1, 1, [NIL; 4]));
+    late.padding = 0xdead_beef;
     late.tile_ref = encode_poly_ref(7, 3, 0);
     set.tiles = vec![late, set_tile(1, square(1, 0, [NIL; 4]))];
     let mesh = NavMesh::from_set(&set).unwrap();
@@ -332,6 +333,19 @@ fn from_set_keeps_refs_and_slot_order() {
     let out = mesh.to_set(2, 2);
     assert_eq!(out.tiles[0].tile_ref, encode_poly_ref(1, 1, 0));
     assert_eq!(out.tiles[1].tile_ref, encode_poly_ref(7, 3, 0));
+    // The record padding is preserved; a tile added later gets 0.
+    assert_eq!(out.tiles[0].padding, 0);
+    assert_eq!(out.tiles[1].padding, 0xdead_beef);
+    let mut mesh = mesh;
+    mesh.set_tile(square(0, 0, [NIL; 4])).unwrap();
+    assert!(
+        mesh.to_set(2, 2)
+            .tiles
+            .iter()
+            .filter(|t| t.padding == 0)
+            .count()
+            >= 2
+    );
     assert_eq!(out.params, set.params);
 }
 
@@ -401,10 +415,78 @@ fn section_at(t: &TileData, offset: usize) -> &'static str {
     "extra section"
 }
 
-/// The first difference between two tile sets, with every obstacle y zeroed.
-fn first_difference(a: &NavMeshSet, b: &NavMeshSet) -> Option<String> {
+/// Describes how tile `y` differs from tile `x`, field by field (empty: equal).
+fn tile_differences(x: &TileData, y: &TileData) -> Vec<String> {
+    let mut out = Vec::new();
+    if x.header != y.header {
+        out.push(format!("header {:?} against {:?}", x.header, y.header));
+    }
+    for (i, (p, q)) in x.verts.iter().zip(&y.verts).enumerate() {
+        if p.map(f32::to_bits) != q.map(f32::to_bits) {
+            let owner = x
+                .polys
+                .iter()
+                .enumerate()
+                .find(|(_, poly)| {
+                    poly.verts
+                        .iter()
+                        .take(usize::from(poly.vert_count))
+                        .any(|&v| usize::from(v) == i)
+                })
+                .map(|(n, poly)| {
+                    let con = x.off_mesh.iter().position(|c| usize::from(c.poly) == n);
+                    format!(
+                        "poly {n} (type {}, off-mesh connection {con:?}, flags {:#x})",
+                        poly.poly_type(),
+                        poly.flags
+                    )
+                });
+            out.push(format!(
+                "vertex {i} (byte offset {} of the blob) {p:?} against {q:?}, owner {owner:?}",
+                104 + 12 * i
+            ));
+        }
+    }
+    for (i, (p, q)) in x.polys.iter().zip(&y.polys).enumerate() {
+        if p != q {
+            out.push(format!("poly {i}: {p:?} against {q:?}"));
+        }
+    }
+    for (i, (p, q)) in x.links.iter().zip(&y.links).enumerate() {
+        if p != q {
+            out.push(format!("link {i}: {p:?} against {q:?}"));
+        }
+    }
+    for (i, (p, q)) in x.off_mesh.iter().zip(&y.off_mesh).enumerate() {
+        if p != q {
+            out.push(format!("off-mesh connection {i}: {p:?} against {q:?}"));
+        }
+    }
+    if x.bv_tree != y.bv_tree {
+        out.push("bv tree differs".to_owned());
+    }
+    if x.extra != y.extra {
+        out.push("extra section differs".to_owned());
+    }
+    let (bx, by) = (x.to_bytes(), y.to_bytes());
+    if out.is_empty()
+        && let Some(i) = bx.iter().zip(&by).position(|(p, q)| p != q)
+    {
+        out.push(format!(
+            "section {} differs at byte offset {i}: {:#04x} against {:#04x}",
+            section_at(x, i),
+            bx[i],
+            by[i]
+        ));
+    }
+    out
+}
+
+/// Every difference between two tile sets, with every obstacle y zeroed: one entry per differing
+/// tile, naming the tile ref and the differences.
+fn differences(a: &NavMeshSet, b: &NavMeshSet) -> Vec<String> {
     if a.tiles.len() != b.tiles.len() {
-        return Some(format!("{} tiles against {}", a.tiles.len(), b.tiles.len()));
+        return vec![format!("{} tiles against {}", a.tiles.len(), b.tiles.len())];
     }
     let strip = |t: &SetTile| {
         let mut t = t.clone();
@@ -413,34 +495,22 @@ fn first_difference(a: &NavMeshSet, b: &NavMeshSet) -> Option<String> {
         }
         t
     };
+    let mut out = Vec::new();
     for (x, y) in a.tiles.iter().zip(&b.tiles) {
         let (x, y) = (strip(x), strip(y));
         if x.tile_ref != y.tile_ref {
-            return Some(format!(
+            out.push(format!(
                 "tile ref {:#x} against {:#x}",
                 x.tile_ref, y.tile_ref
             ));
+            continue;
         }
-        let (bx, by) = (x.data.to_bytes(), y.data.to_bytes());
-        if let Some(i) = bx.iter().zip(&by).position(|(p, q)| p != q) {
-            return Some(format!(
-                "tile {:#x}: section {} differs at byte offset {i}: {:#04x} against {:#04x}",
-                x.tile_ref,
-                section_at(&x.data, i),
-                bx[i],
-                by[i]
-            ));
-        }
-        if bx.len() != by.len() {
-            return Some(format!(
-                "tile {:#x}: {} bytes against {}",
-                x.tile_ref,
-                bx.len(),
-                by.len()
-            ));
+        let d = tile_differences(&x.data, &y.data);
+        if !d.is_empty() {
+            out.push(format!("tile {:#x}: {}", x.tile_ref, d.join("; ")));
         }
     }
-    None
+    out
 }
 
 #[test]
@@ -460,7 +530,18 @@ fn shipped_navmesh_relinks_identically() {
     let rebuilt = NavMesh::from_set(&zeroed)
         .expect("add the tiles")
         .to_set(original.tiles_x, original.tiles_z);
-    if let Some(diff) = first_difference(&original, &rebuilt) {
-        panic!("relinking does not reproduce the shipped navmesh: {diff}");
-    }
+    let diffs = differences(&original, &rebuilt);
+    // DAYZ_NAVMESH_VERBOSE=1 prints every differing tile, else the first few.
+    let shown = if std::env::var_os("DAYZ_NAVMESH_VERBOSE").is_some() {
+        diffs.len()
+    } else {
+        3
+    };
+    assert!(
+        diffs.is_empty(),
+        "relinking does not reproduce the shipped navmesh: {} of {} tiles differ\n{}",
+        diffs.len(),
+        original.tiles.len(),
+        diffs[..diffs.len().min(shown)].join("\n")
+    );
 }

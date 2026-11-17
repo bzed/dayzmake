@@ -62,6 +62,8 @@ const OBSTACLE_SNAP_HALF_HEIGHT: f32 = 30.0;
 struct MeshTile {
     data: TileData,
     links_free_list: u32,
+    /// The padding word of the set record, kept on rewrite.
+    padding: u32,
 }
 
 /// One tile slot. A slot that was never touched has salt 1 and no tile.
@@ -137,7 +139,7 @@ fn push_link(
     }
     let Some(first) = t.data.polys.get(poly).map(|p| p.first_link) else {
         free_link(t, idx);
-        return true;
+        return false;
     };
     let linked = usize::try_from(idx)
         .ok()
@@ -550,7 +552,7 @@ impl NavMesh {
     pub fn from_set(set: &NavMeshSet) -> io::Result<Self> {
         let mut mesh = Self::new(set.params.clone())?;
         for (i, t) in set.tiles.iter().enumerate() {
-            mesh.add_tile(t.data.clone(), t.tile_ref)
+            mesh.add_tile(t.data.clone(), t.tile_ref, t.padding)
                 .prepend_error(format!("tile record {i}:"))?;
         }
         Ok(mesh)
@@ -579,7 +581,7 @@ impl NavMesh {
             }
             None => 0,
         };
-        self.add_tile(data, last_ref)
+        self.add_tile(data, last_ref, 0)
     }
 
     /// Removes the tile in grid cell `(x, y)` and unlinks its neighbours. Returns whether there
@@ -611,7 +613,7 @@ impl NavMesh {
     }
 
     /// The mesh as a set file for a `tiles_x` by `tiles_z` grid: the tiles in slot order with
-    /// their references and padding 0.
+    /// their references and record padding (kept from `from_set`, 0 for tiles added with `set_tile`).
     #[must_use]
     pub fn to_set(&self, tiles_x: i32, tiles_z: i32) -> NavMeshSet {
         NavMeshSet {
@@ -620,11 +622,14 @@ impl NavMesh {
             tiles_z,
             params: self.params.clone(),
             tiles: self
-                .tiles()
-                .map(|(tile_ref, data)| SetTile {
-                    tile_ref,
-                    padding: 0,
-                    data: data.clone(),
+                .slots
+                .iter()
+                .filter_map(|(&slot, s)| {
+                    s.tile.as_ref().map(|t| SetTile {
+                        tile_ref: encode_poly_ref(s.salt, slot, 0),
+                        padding: t.padding,
+                        data: t.data.clone(),
+                    })
                 })
                 .collect(),
         }
@@ -714,7 +719,7 @@ impl NavMesh {
     }
 
     /// `dtNavMesh::addTile` with `lastRef` (0: none); returns the tile reference.
-    fn add_tile(&mut self, mut data: TileData, last_ref: u64) -> io::Result<u64> {
+    fn add_tile(&mut self, mut data: TileData, last_ref: u64, padding: u32) -> io::Result<u64> {
         Self::validate_tile(&data)?;
         let key = (data.header.x, data.header.y);
         if self.grid.contains_key(&key) {
@@ -746,6 +751,7 @@ impl NavMesh {
                 tile: Some(MeshTile {
                     data,
                     links_free_list,
+                    padding,
                 }),
             },
         );
