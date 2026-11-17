@@ -241,6 +241,31 @@ fn mcp_unknown_method_is_32601() {
     assert_eq!(r.replies[0]["id"], "a");
 }
 
+/// Blank and whitespace-only lines are skipped: no reply, no parse error.
+#[test]
+fn mcp_blank_lines_get_no_reply() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let mut input = b"\n   \t\n".to_vec();
+    input.extend(lines(&[json!({"jsonrpc":"2.0","id":7,"method":"ping"})]));
+    let r = run_raw(input, &[], tmp.path());
+    assert_eq!(r.replies.len(), 1, "{}", r.stdout);
+    assert_eq!(r.replies[0]["id"], 7);
+}
+
+/// `arguments` may be missing or `null`: the tool then reports its own missing argument.
+#[test]
+fn mcp_missing_or_null_arguments_are_a_tool_error() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let missing =
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"pbo_inspect"}});
+    let r = run(&[missing, call(2, "pbo_inspect", &Value::Null)], tmp.path());
+    assert_eq!(r.replies.len(), 2);
+    for reply in &r.replies {
+        assert!(reply["error"].is_null(), "{reply}");
+        assert!(is_error(reply), "{reply}");
+    }
+}
+
 #[test]
 fn mcp_parse_error_is_32700() {
     let tmp = tempfile::tempdir().expect("tmp");

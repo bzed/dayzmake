@@ -1380,3 +1380,59 @@ fn int64_fuzz_seeds() {
     let err = Config::read_rapified(&mut Cursor::new(cut)).unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
 }
+
+/// A writer that fails once `left` bytes are written.
+struct FailAfter {
+    left: usize,
+}
+
+impl std::io::Write for FailAfter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.left == 0 {
+            return Err(std::io::Error::other("disk full"));
+        }
+        let n = buf.len().min(self.left);
+        self.left -= n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An output that fails at any byte is an error, never a panic or a silent short write.
+#[test]
+fn write_reports_an_output_failure_at_every_position() {
+    let src = "\
+class A;
+class B: A {};
+class C: A {
+    s = \"a\"\"b\";
+    i = 5;
+    big = 5000000000;
+    f = 1.5;
+    a[] = {1, 2.5, \"x\", {3}};
+    a[] += {4};
+    class D { x = 1; };
+};
+delete E;
+enum { X = 1, Y };
+";
+    let config =
+        Config::from_string(src.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap();
+    let mut text = Vec::new();
+    config.write(&mut text).unwrap();
+    let mut rapified = Vec::new();
+    config.write_rapified(&mut rapified).unwrap();
+    for (len, rapify) in [(text.len(), false), (rapified.len(), true)] {
+        for left in 0..len {
+            let mut out = FailAfter { left };
+            let result = if rapify {
+                config.write_rapified(&mut out)
+            } else {
+                config.write(&mut out)
+            };
+            assert!(result.is_err(), "rapify={rapify} left={left}");
+        }
+    }
+}
