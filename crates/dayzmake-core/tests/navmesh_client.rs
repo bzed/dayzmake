@@ -209,6 +209,7 @@ fn recv_timeout_is_a_network_error() {
     let mut client = Client::connect(&host, &p).expect("connect");
     let e = client.tile(0, 0, &world()).expect_err("times out");
     assert!(matches!(e, FetchError::Network(_)), "{e}");
+    assert!(e.to_string().contains("timed out"), "{e}");
 }
 
 #[test]

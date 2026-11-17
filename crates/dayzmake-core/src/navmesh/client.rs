@@ -197,7 +197,13 @@ impl Read for DeadlineReader<'_> {
             self.stream
                 .set_read_timeout(Some(at_least_a_millisecond(left)))?;
         }
-        self.stream.read(buf)
+        // An expired socket timeout is `WouldBlock` on Unix and `TimedOut` on Windows.
+        self.stream.read(buf).map_err(|e| match e.kind() {
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+                io::Error::new(io::ErrorKind::TimedOut, "receive timed out")
+            }
+            _ => e,
+        })
     }
 }
 
