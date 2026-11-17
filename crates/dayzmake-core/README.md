@@ -32,7 +32,7 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
-- `Config::read`/`from_string`: a config entry that ends at the line end without `;` keeps its value type (CfgConvert does the same) instead of becoming a string, and the same entry at the end of a file without a line end is a parse error (#95).
+- `Config::read`/`from_string`: any config entry may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
 - Config errors raised from a grammar action (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) start with `In line <file>:<line>:` like a parse error (#94).
 - New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute, drive and `..` paths are errors and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
 - `extract`: the `pbo-map.tsv` prefix is written with `/` instead of `\`, and `\` is escaped as `\\` in both columns (#87).

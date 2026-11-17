@@ -1043,3 +1043,28 @@ fn last_entry_at_end_of_file_without_terminator_is_an_error() {
         );
     }
 }
+
+/// A directive as the last line without a line end does not make the entry before it
+/// unterminated: its own line end is in the source (`CfgConvert` accepts all of these).
+#[test]
+fn last_entry_before_a_final_directive_or_comment_keeps_its_type() {
+    for src in [
+        "#ifndef X\nx = 1\n#endif",
+        "x = 1\n#define Y 1",
+        "x = 1.5\n#define Y 1",
+    ] {
+        let text = text_of(src);
+        assert!(text.starts_with("x = 1"), "{src:?}: {text:?}");
+        assert!(!text.contains('"'), "{src:?}: {text:?}");
+    }
+}
+
+/// Any entry, not only the last one, may end at the line end (`CfgConvert`, `last_mid.cpp`).
+#[test]
+fn entries_in_the_middle_may_end_at_the_line_end() {
+    assert_eq!(
+        text_of("x = 1.5\ny = \"s\"\nz = 2\nw = 3;\n"),
+        "x = 1.5;\ny = \"s\";\nz = 2;\nw = 3;\n"
+    );
+    assert_eq!(text_of("x = __EVAL(1+1)\n"), "x = 2;\n");
+}

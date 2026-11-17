@@ -97,6 +97,22 @@ fn golden_last_exp() {
 fn golden_last_str() {
     golden("last_str");
 }
+#[test]
+fn golden_last_mid() {
+    golden("last_mid");
+}
+#[test]
+fn golden_last_endif() {
+    golden("last_endif");
+}
+#[test]
+fn golden_last_define() {
+    golden("last_define");
+}
+#[test]
+fn golden_last_eval() {
+    golden("last_eval");
+}
 
 /// `enum { A, B = 5, A };`: `CfgConvert` accepts it silently and its table holds `a` once, at the
 /// first position, with the last value (`a = 6`, `b = 5`). dayzmake keeps every name, so
@@ -104,25 +120,30 @@ fn golden_last_str() {
 #[test]
 fn enum_duplicate_resolves_like_cfgconvert() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/cfgconvert");
-    let bi = std::fs::read(dir.join("enum_dup.bin")).unwrap();
-    let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
-    assert_eq!(
-        bi.enum_values(),
-        &[("a".to_string(), 6), ("b".to_string(), 5)]
-    );
+    for (name, table) in [
+        ("enum_dup", vec![("a", 6), ("b", 5)]),
+        ("enum_dup2", vec![("a", 2)]),
+    ] {
+        let bi = std::fs::read(dir.join(format!("{name}.bin"))).unwrap();
+        let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+        let table: Vec<(String, i32)> =
+            table.into_iter().map(|(n, v)| (n.to_string(), v)).collect();
+        assert_eq!(bi.enum_values(), table.as_slice(), "{name}");
 
-    let src = std::fs::read_to_string(dir.join("enum_dup.cpp")).unwrap();
-    let mut warnings = Warnings::new();
-    let ours = Config::from_string(src, None, &Vec::new(), &mut warnings).unwrap();
-    assert!(warnings.warnings().is_empty(), "silent, like CfgConvert");
-    let last = |name: &str| {
-        ours.enum_values()
-            .iter()
-            .rev()
-            .find(|(n, _)| n == name)
-            .map(|(_, v)| *v)
-    };
-    for (name, value) in bi.enum_values() {
-        assert_eq!(last(name), Some(*value), "enum {name}");
+        let src = std::fs::read_to_string(dir.join(format!("{name}.cpp"))).unwrap();
+        let mut warnings = Warnings::new();
+        let ours = Config::from_string(src, None, &Vec::new(), &mut warnings).unwrap();
+        // only the unquoted `y = A;` is warned about; the duplicate names are not
+        assert!(
+            warnings
+                .warnings()
+                .iter()
+                .all(|w| w.name == Some("unquoted-string")),
+            "{name}: silent about the enum, like CfgConvert"
+        );
+        for (n, value) in &table {
+            let last = ours.enum_values().iter().rev().find(|(x, _)| x == n);
+            assert_eq!(last.map(|(_, v)| *v), Some(*value), "{name}: enum {n}");
+        }
     }
 }
