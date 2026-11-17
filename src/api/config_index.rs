@@ -943,8 +943,8 @@ fn cycle_members(nodes: &[usize], edges: &[Vec<usize>]) -> Vec<usize> {
                 continue;
             }
             let Some(w) = succ else { continue };
-            if !index.contains_key(&w) {
-                index.insert(w, next);
+            if let std::collections::hash_map::Entry::Vacant(slot) = index.entry(w) {
+                slot.insert(next);
                 low.insert(w, next);
                 next += 1;
                 stack.push(w);
