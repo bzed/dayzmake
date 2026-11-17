@@ -495,6 +495,22 @@ fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
     true
 }
 
+/// The bounds of [`PBO::read_entries_tolerant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TolerantRead {
+    /// The most bytes of decompressed entry data the selection reads in total.
+    pub max_bytes: u64,
+}
+
+impl TolerantRead {
+    /// Bounds the selection to `max_bytes` of decompressed entry data.
+    #[must_use]
+    pub fn new(max_bytes: u64) -> Self {
+        TolerantRead { max_bytes }
+    }
+}
+
 /// What [`PBO::from_directory`] does with a folder.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -988,7 +1004,7 @@ impl PBO {
     ///
     /// A selected entry whose data is truncated or cannot be decompressed is an error of its own
     /// ([`SelectedEntry::data`]). The decompressed sizes of the selected entries are added up in file
-    /// order; the first entry that would take the total past `max_bytes` is not read, and neither is any
+    /// order; the first entry that would take the total past [`TolerantRead::max_bytes`] is not read, and neither is any
     /// selected entry after it (a smaller later one included); each reports [`SelectedEntry::is_over_limit`]. A malformed header
     /// block is still an error.
     ///
@@ -999,9 +1015,9 @@ impl PBO {
     pub fn read_entries_tolerant<I: Read + Seek>(
         input: &mut I,
         wanted: impl Fn(&str) -> bool,
-        max_bytes: u64,
+        options: &TolerantRead,
     ) -> Result<PboSelection, Error> {
-        Self::read_selected(input, wanted, Some(max_bytes))
+        Self::read_selected(input, wanted, Some(options.max_bytes))
     }
 
     /// `limit` set means the tolerant mode.

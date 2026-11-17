@@ -33,7 +33,7 @@ use dayzmake_core::config::{
 };
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
-use dayzmake_core::pbo::{EntryFilter, PBO, SelectedEntry};
+use dayzmake_core::pbo::{EntryFilter, PBO, SelectedEntry, TolerantRead};
 use dayzmake_core::preprocess::{IncludeFolders, MemoryIncludes};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
@@ -639,7 +639,7 @@ fn read_includes(
     let rest = PBO::read_entries_tolerant(
         file,
         |n| is_includable(n) && !filter.matches(n),
-        cap.saturating_sub(used),
+        &TolerantRead::new(cap.saturating_sub(used)),
     )
     .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
     let mut unreadable: Vec<(String, String)> = Vec::new();

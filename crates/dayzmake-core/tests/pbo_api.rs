@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-use dayzmake_core::pbo::{PBO, PackOptions, UnpackOptions, unpack};
+use dayzmake_core::pbo::{PBO, PackOptions, TolerantRead, UnpackOptions, unpack};
 #[cfg(feature = "sign")]
 use dayzmake_core::sign::{BIPrivateKey, BISignVersion};
 use dayzmake_core::warning::Warnings;
@@ -304,7 +304,12 @@ fn tolerant_selection_keeps_the_good_entries_next_to_a_truncated_one() {
     );
     bytes.truncate(bytes.len() - 30);
     assert!(PBO::read_entries(&mut Cursor::new(&bytes), |_| true).is_err());
-    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 1 << 20).unwrap();
+    let sel = PBO::read_entries_tolerant(
+        &mut Cursor::new(&bytes),
+        |_| true,
+        &TolerantRead::new(1 << 20),
+    )
+    .unwrap();
     let entries = sel.into_entries();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].data().unwrap(), b"aaaa");
@@ -327,7 +332,9 @@ fn tolerant_selection_stops_reading_at_the_byte_limit() {
         ],
         &[],
     );
-    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 15).unwrap();
+    let sel =
+        PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, &TolerantRead::new(15))
+            .unwrap();
     let entries = sel.entries();
     assert_eq!(entries[0].data().unwrap(), &[b'a'; 10]);
     assert!(entries[1].is_over_limit() && entries[1].data().is_err());
@@ -341,7 +348,9 @@ fn tolerant_selection_stops_reading_at_the_byte_limit() {
         ],
         &[],
     );
-    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 12).unwrap();
+    let sel =
+        PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, &TolerantRead::new(12))
+            .unwrap();
     assert!(sel.entries()[0].data().is_ok());
     assert!(sel.entries()[1].is_over_limit());
     assert!(sel.entries()[2].is_over_limit() && sel.entries()[2].data().is_err());
