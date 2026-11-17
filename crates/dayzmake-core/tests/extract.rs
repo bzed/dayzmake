@@ -951,13 +951,9 @@ fn a_file_and_folder_clash_across_pbos_skips_the_later_entry() {
     extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
     assert_eq!(names(&warnings), ["extract-path-clash"]);
     let text = &warnings.warnings()[0].message;
-    assert!(
-        text.contains("addons/a.pbo") && text.contains("addons/b.pbo"),
-        "{text}"
-    );
-    assert!(
-        text.contains("p/x/y.txt") || text.contains("p\\x\\y.txt"),
-        "{text}"
+    assert_eq!(
+        text,
+        "Skipping \"p/x\" from addons/b.pbo: it is a folder, but addons/a.pbo has a file there."
     );
     assert_eq!(files_below(&target), ["p/x", "p/z.txt", "pbo-map.tsv"]);
     assert_eq!(fs::read(target.join("p/x")).unwrap(), b"file");
@@ -969,7 +965,27 @@ fn a_file_and_folder_clash_across_pbos_skips_the_later_entry() {
     extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
     assert_eq!(names(&warnings), ["extract-path-clash"]);
     assert_eq!(
+        warnings.warnings()[0].message,
+        "Skipping \"p/x\" from addons/b.pbo: it is a file, but addons/a.pbo has a folder there."
+    );
+    assert_eq!(
         files_below(&target),
         ["p/x/y.txt", "p/z.txt", "pbo-map.tsv"]
     );
+}
+
+#[test]
+fn a_file_and_folder_clash_inside_one_pbo_skips_the_later_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(
+        &src.join("addons/a.pbo"),
+        "p",
+        &[("a", b"file"), ("a\\b", b"deep")],
+    );
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(names(&warnings), ["extract-path-clash"]);
+    assert!(target.join("p/a").is_file());
 }

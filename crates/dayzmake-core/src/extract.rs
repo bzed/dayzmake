@@ -216,10 +216,14 @@ fn check_target(
                     "Invalid target folder \"{shown}\": cannot resolve \"..\" after a folder that does not exist."
                 ));
             };
-            if source
-                .canonicalize()
-                .map_or(true, |source| resolved.starts_with(source))
-            {
+            // `find_pbos` has just listed the source, so this fails only if it vanishes in between
+            let Ok(source) = source.canonicalize() else {
+                return Err(error!(
+                    "Cannot resolve the source folder \"{}\".",
+                    source.display()
+                ));
+            };
+            if resolved.starts_with(source) {
                 return Err(error!(
                     "Target folder \"{shown}\" is inside the source; refusing to replace it."
                 ));
@@ -319,17 +323,20 @@ struct Run<'a> {
 
 impl Run<'_> {
     /// The file already written that a new file at `relative` (lowercase `key`) cannot coexist with: one at
-    /// a parent folder's path, or one below `relative` as a folder. Its path and the index of its PBO.
-    fn clash(&self, relative: &Path, key: &str) -> Option<(PathBuf, usize)> {
+    /// a parent folder's path, or one below `relative` as a folder. Its path, the index of its PBO and
+    /// whether it is the file at a parent folder (the new entry needs a folder there).
+    fn clash(&self, relative: &Path, key: &str) -> Option<(PathBuf, usize, bool)> {
         for parent in relative.ancestors().skip(1) {
             let parent = parent.to_string_lossy().to_lowercase();
             if let Some((path, owner)) = self.owners.get(&parent) {
-                return Some((path.clone(), *owner));
+                return Some((path.clone(), *owner, true));
             }
         }
         let below = format!("{key}{}", std::path::MAIN_SEPARATOR);
         let (found, (path, owner)) = self.owners.range(below.clone()..).next()?;
-        found.starts_with(&below).then(|| (path.clone(), *owner))
+        found
+            .starts_with(&below)
+            .then(|| (path.clone(), *owner, false))
     }
 
     /// Warns and returns `true` if the file at `relative` clashes with one written earlier, see [`Run::clash`].
@@ -340,18 +347,30 @@ impl Run<'_> {
         key: &str,
         warnings: &mut dyn WarningSink,
     ) -> bool {
-        let Some((other, owner)) = self.clash(relative, key) else {
+        let Some((other, owner, other_is_file)) = self.clash(relative, key) else {
             return false;
         };
         let pbo_name = |i: usize| self.names.get(i).map_or("?", String::as_str);
+        // shown with `/` on every platform; the keys stay native paths
+        let shown = |p: &Path| {
+            let parts: Vec<_> = p
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect();
+            printable(&parts.join("/"))
+        };
+        // the clashing path is the folder the new entry needs when it is below a file, else the entry itself
+        let (path, kind, other_kind) = if other_is_file {
+            (shown(&other), "folder", "file")
+        } else {
+            (shown(relative), "file", "folder")
+        };
         warnings.warn(Warning::new(
             Some("extract-path-clash"),
             format!(
-                "Skipping \"{}\" of {}: it is a file where {} has a folder, or a folder where it has a file (\"{}\"); keeping the first.",
-                printable(&relative.to_string_lossy()),
+                "Skipping \"{path}\" from {}: it is a {kind}, but {} has a {other_kind} there.",
                 printable(pbo_name(index)),
                 printable(pbo_name(owner)),
-                printable(&other.to_string_lossy()),
             ),
         ));
         true

@@ -401,7 +401,7 @@ Behaviour:
   with symbolic links resolved. A new `<targetfolder>` with a `..` after a folder that does not exist
   (`elsewhere/missing/../x`) cannot be resolved and is refused with the error `Invalid target folder "<path>": cannot resolve ".." after a folder that does not exist.`
 - Everything that goes wrong with a PBO is an error that leaves the old tree alone: a PBO or entry that cannot be
-  read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names
+  read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names,
   a path clash across entries and a `.bin` that cannot be derapified are skipped, with a warning.
 - `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
   <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
