@@ -20,4 +20,6 @@
 
 //! DayZ-specific steps that sit on top of the Recast port (spec 5).
 
+pub(crate) mod areas;
+pub(crate) mod filters;
 pub(crate) mod slope;

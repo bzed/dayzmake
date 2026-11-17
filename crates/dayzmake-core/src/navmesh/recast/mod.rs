@@ -20,5 +20,7 @@
 
 //! The Recast half of the navmesh builder: the heightfield and its rasteriser (spec 5.3, 10.1).
 
+pub(crate) mod compact;
+pub(crate) mod filter;
 pub(crate) mod heightfield;
 pub(crate) mod rasterize;
