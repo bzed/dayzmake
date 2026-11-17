@@ -50,6 +50,37 @@ versionAr [] = {3,5, 0, 0};
     );
 }
 
+/// A `//` comment ends at the end of the input as well as at a line end; so does an unterminated `/*`
+/// (`CfgConvert` accepts both, #103).
+#[test]
+fn comment_at_the_end_of_the_input_is_stripped() {
+    for (input, expected) in [
+        ("x = 1\n// c", "x = 1"),
+        ("x = 1;\n// c", "x = 1;"),
+        ("x = 1;\n/* c */", "x = 1;"),
+        ("x = 1;\n// c\r", "x = 1;"),
+        ("x = 1; // c", "x = 1;"),
+        ("// c", ""),
+    ] {
+        let (output, _) =
+            preprocess(input.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap();
+        assert_eq!(output.trim(), expected, "{input:?}");
+    }
+}
+
+/// An unterminated `/*` at the end of the input is accepted, as in `CfgConvert`: the rest is a comment.
+#[test]
+fn unterminated_block_comment_at_the_end_is_accepted() {
+    let (output, _) = preprocess(
+        "x = 1;\n/* c".to_string(),
+        None,
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(output.trim(), "x = 1;");
+}
+
 #[test]
 fn test_preprocess_ifdef() {
     let input = String::from(

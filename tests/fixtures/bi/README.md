@@ -26,9 +26,13 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   expected files document CfgConvert; dayzmake keeps every name, so only the values are compared.
   Fix round 1 (same setup): `last_mid` (`x = 1.5`, `y = "s"`, `z = 2` without `;`, then `w = 3;`), `last_eval`
   (`x = __EVAL(1+1)` without `;` gives `x = 2;`), `last_endif` and `last_define` (`x = 1` before a final
-  `#endif` / `#define Y 1` without line end) are all accepted and typed. `x = 1` followed by a final `// c`
-  without line end is accepted by CfgConvert too, but dayzmake's preprocessor does not strip a comment at the very
-  end of a file (existing, separate bug), so it has no fixture.
+  `#endif` / `#define Y 1` without line end) are all accepted and typed.
+- `cfgconvert/last_comment*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
+  None has a final newline. `last_comment` is `x = 1\n// c`, `last_comment_semi` is `x = 1;\n// c`, `last_comment_block`
+  is `x = 1;\n/* c */`, `last_comment_open` is `x = 1;\n/* c` (unterminated): all four are accepted and give `x = 1;`.
+  Lone CR, not committed: `x = 1\r// c` and `x = 1\r#define Y 1` and `x = 1;\r#define Y 1` are rejected (no output);
+  `x = 1;\r// c`, `x = 1\r\n// c` and `x = 1\r\n#define Y 1` give `x = 1;`; `x = 1\ry = 2;` gives `x = "1y = 2";`
+  (CfgConvert does not treat a lone CR as a line end; dayzmake's preprocessor does, and is lenient there).
 - `cfgconvert/float_ovf*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
   `a = 1e999; b = -1e39; c = 1e-999; d = 3.4e38;` gives f32 bits `7f800000`, `ff800000`, `00000000`, `7f7fc99e`
   (inf, -inf, 0, 3.4e38); `float_ovf2` adds `-1e999` (`ff800000`), `1e39` and `3.5e38` and `3.4028236e38` (all `7f800000`),

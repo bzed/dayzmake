@@ -1273,14 +1273,14 @@ impl Config {
         }
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
-        // The last source line is an entry line unless it is empty, a directive or a comment: only
-        // then is the line end the preprocessor adds not one of the source.
+        // The last source line (a lone CR ends a line too) is an entry line unless it is empty or a
+        // directive: only then is the line end the preprocessor adds not one of the source. A comment
+        // line is stripped to an empty line, so it needs no case of its own.
         let last_line_is_content = buffer
-            .rsplit('\n')
+            .rsplit(['\r', '\n'])
             .next()
             .map(str::trim)
-            .is_some_and(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with("//"))
-            && !buffer.ends_with('\r');
+            .is_some_and(|l| !l.is_empty() && !l.starts_with('#'));
 
         let (preprocessed, info) = preprocess_in(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;

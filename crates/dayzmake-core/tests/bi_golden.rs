@@ -117,6 +117,18 @@ fn golden_last_endif() {
 fn golden_last_define() {
     golden("last_define");
 }
+/// A `//` comment, or an unterminated `/*`, ends at the end of the file (#103).
+#[test]
+fn golden_last_comment() {
+    for name in [
+        "last_comment",
+        "last_comment_semi",
+        "last_comment_block",
+        "last_comment_open",
+    ] {
+        golden(name);
+    }
+}
 #[test]
 fn golden_last_eval() {
     golden("last_eval");

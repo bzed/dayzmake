@@ -1037,6 +1037,19 @@ fn last_entry_without_semicolon_keeps_its_type() {
     );
 }
 
+/// A final `//` comment, or an unterminated `/*`, without a line end after it (#103); and a file
+/// whose last line is a directive, with any line-end style (a lone CR ends a line for the preprocessor).
+#[test]
+fn comment_or_directive_on_the_last_line_without_line_end() {
+    assert_eq!(text_of("x = 1\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n/* c */"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n/* c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r#define Y 1"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r// c"), "x = 1;\n");
+}
+
 /// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
 #[test]
 fn last_entry_without_semicolon_integer_overflow_is_an_error() {

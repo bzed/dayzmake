@@ -99,11 +99,13 @@ peg::parser! {
 
         rule concat_token() = "##"
 
-        rule sl_comment() -> u32 = "//" (!newline() [_])* &newline() {
+        /// A `//` comment ends at a line end or at the end of the input (without one `CfgConvert` accepts it too).
+        rule sl_comment() -> u32 = "//" (!newline() [_])* &(newline() / ![_]) {
             0
         }
 
-        rule ml_comment() -> u32 = [' ' | '\t']* "/*" content:$((!"*/" (newline() / [_]))*) "*/" {
+        /// An unterminated `/*` at the end of the input runs to the end, as in `CfgConvert`.
+        rule ml_comment() -> u32 = [' ' | '\t']* "/*" content:$((!"*/" (newline() / [_]))*) ("*/" / ![_]) {
             u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX)
         }
 

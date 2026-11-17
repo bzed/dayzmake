@@ -32,6 +32,7 @@ is maintained here.
 ### Unreleased
 
 - Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
+- The preprocessor strips a `//` comment at the very end of the input, with no line end after it, and accepts an unterminated `/*` at the end (the rest is a comment), as CfgConvert does; before, `x = 1;` followed by `// c` without a final newline was a syntax error. A file whose last line ends with a lone CR (`\r`) is split there like the preprocessor does (#103).
 - A config float literal that overflows f32 (`1e999`, `-1e39`) is rapified as an infinity, no longer an error, as CfgConvert does; a literal that underflows is 0. `derapify` writes an infinity as `1e999` / `-1e999`, so derapify then rapify keeps the bits (#102).
 - Config errors raised while parsing a value (`Invalid integer`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
