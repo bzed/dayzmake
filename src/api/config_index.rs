@@ -862,7 +862,9 @@ fn load_order(
             .filter(|(i, info)| info.is_some() && done.get(*i) == Some(&false))
             .map(|(i, _)| i)
             .collect();
-        let shown: Vec<String> = stuck
+        // Only the configs that really are in a cycle are named; the ones that merely depend on it are not.
+        let in_cycle = cycle_members(&stuck, &dependents);
+        let shown: Vec<String> = in_cycle
             .iter()
             .take(5)
             .filter_map(|i| names.get(*i))
@@ -871,10 +873,10 @@ fn load_order(
         warnings.warn(Warning::new(
             Some("api-config-order"),
             format!(
-                "requiredAddons form a cycle between {} configs ({}{}); they load in path order",
-                stuck.len(),
+                "requiredAddons form a cycle between {} configs ({}{}); they and the configs that depend on them load last, in source and path order",
+                in_cycle.len(),
                 shown.join(", "),
-                if stuck.len() > shown.len() {
+                if in_cycle.len() > shown.len() {
                     ", ..."
                 } else {
                     ""
@@ -884,6 +886,78 @@ fn load_order(
         order.extend(stuck);
     }
     order
+}
+
+/// The members of `nodes` that lie on a cycle of `edges` (`edges[a]` lists the nodes that follow `a`): the
+/// nodes of strongly connected components of more than one node (a node alone is no cycle: a config does not
+/// wait for itself). Tarjan's algorithm without recursion, in index order.
+fn cycle_members(nodes: &[usize], edges: &[Vec<usize>]) -> Vec<usize> {
+    let in_set: BTreeSet<usize> = nodes.iter().copied().collect();
+    let mut index: HashMap<usize, usize> = HashMap::new();
+    let mut low: HashMap<usize, usize> = HashMap::new();
+    let mut on_stack: BTreeSet<usize> = BTreeSet::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next = 0usize;
+    let mut out: BTreeSet<usize> = BTreeSet::new();
+    for &root in nodes {
+        if index.contains_key(&root) {
+            continue;
+        }
+        // (node, position of the next edge to look at)
+        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+        index.insert(root, next);
+        low.insert(root, next);
+        next += 1;
+        stack.push(root);
+        on_stack.insert(root);
+        while let Some(&(v, at)) = work.last() {
+            let succ = edges
+                .get(v)
+                .and_then(|e| e.get(at))
+                .copied()
+                .filter(|w| in_set.contains(w));
+            let has_edge = edges.get(v).is_some_and(|e| at < e.len());
+            if let Some(top) = work.last_mut() {
+                top.1 += 1;
+            }
+            if !has_edge {
+                work.pop();
+                let lv = low.get(&v).copied().unwrap_or(0);
+                if Some(lv) == index.get(&v).copied() {
+                    let mut component = Vec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack.remove(&w);
+                        component.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if component.len() > 1 {
+                        out.extend(component);
+                    }
+                }
+                if let Some(&(parent, _)) = work.last() {
+                    let lp = low.get(&parent).copied().unwrap_or(0);
+                    low.insert(parent, lp.min(lv));
+                }
+                continue;
+            }
+            let Some(w) = succ else { continue };
+            if !index.contains_key(&w) {
+                index.insert(w, next);
+                low.insert(w, next);
+                next += 1;
+                stack.push(w);
+                on_stack.insert(w);
+                work.push((w, 0));
+            } else if on_stack.contains(&w) {
+                let lv = low.get(&v).copied().unwrap_or(0);
+                let iw = index.get(&w).copied().unwrap_or(0);
+                low.insert(v, lv.min(iw));
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// Builds the config source from its PBOs, given as (file, name relative to the source, `/`-separated), sorted
@@ -992,30 +1066,45 @@ pub fn merge_sources(
             flat.push((source.name.clone(), part.patches, Some(part.layer)));
         }
     }
+    merge_flat(flat, build, warnings, ConfigLayer::merge)
+}
+
+/// The body of [`merge_sources`] with the layer merge as a parameter, so that a test can make it hit the limit
+/// without a layer of millions of classes. `flat` is (source name, patches, layer) per PBO.
+fn merge_flat(
+    mut flat: Vec<(String, Patches, Option<ConfigLayer>)>,
+    build: &str,
+    warnings: &mut dyn WarningSink,
+    mut merge: impl FnMut(&mut ConfigLayer, ConfigLayer, &mut dyn WarningSink) -> bool,
+) -> ConfigLayer {
     let infos: Vec<Option<&Patches>> = flat.iter().map(|(_, p, _)| Some(p)).collect();
     let names: Vec<String> = flat
         .iter()
-        .map(|(_, _, l)| {
-            l.as_ref()
+        .map(|(source, _, l)| {
+            let pbo = l
+                .as_ref()
                 .and_then(|l| l.pbos.first())
-                .map_or_else(String::new, |p| p.pbo.clone())
+                .map_or("", |p| p.pbo.as_str());
+            format!("[{source}] {pbo}")
         })
         .collect();
     let order = load_order(&infos, &names, warnings);
     let mut merged = ConfigLayer::new("merged", build);
     for i in order {
-        let Some((source, _, layer)) = flat.get_mut(i) else {
+        let Some((_, _, layer)) = flat.get_mut(i) else {
             continue;
         };
         let Some(layer) = layer.take() else { continue };
-        if !merged.merge(layer, warnings) {
+        if !merge(&mut merged, layer, warnings) {
+            // every later layer would hit the same limit: one warning, naming where the merge stopped
             warnings.warn(Warning::new(
                 Some("api-config-limit"),
                 format!(
-                    "the merged config is too large; the rest of {} is skipped",
-                    printable(source)
+                    "the merged config is too large; it stops at {} and the PBOs after it are skipped",
+                    printable(names.get(i).map_or("", String::as_str))
                 ),
             ));
+            break;
         }
     }
     merged
@@ -1128,5 +1217,114 @@ mod tests {
         let read = read_configs(&path, &filter(), &mut warnings).unwrap();
         assert!(read[0].1.is_ok());
         assert_eq!(warnings.warnings(), []);
+    }
+
+    /// A PBO file with only the given `config.cpp`.
+    fn config_pbo(dir: &Path, file: &str, config: &str) -> (PathBuf, String) {
+        let mut pbo = PBO::new();
+        pbo.insert_entry("config.cpp", config.as_bytes().to_vec())
+            .unwrap();
+        let path = dir.join(file);
+        let mut bytes = Vec::new();
+        pbo.write(&mut bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        (path, file.to_string())
+    }
+
+    fn patches(provides: &str, requires: &[&str]) -> Patches {
+        Patches {
+            provides: vec![provides.to_string()],
+            requires: requires.iter().map(|r| (*r).to_string()).collect(),
+        }
+    }
+
+    fn part(source: &str, pbo: &str, patches: Patches) -> (String, Patches, Option<ConfigLayer>) {
+        let mut layer = ConfigLayer::new(source, "b");
+        layer.pbo_index(PboRef {
+            source: source.to_string(),
+            pbo: pbo.to_string(),
+        });
+        (source.to_string(), patches, Some(layer))
+    }
+
+    /// The warning names the PBOs of the cycle with their source, and not the PBOs that merely require one.
+    #[test]
+    fn cycle_warning_counts_only_the_cycle() {
+        let flat = vec![
+            part("m", "a.pbo", patches("a", &["b"])),
+            part("m", "b.pbo", patches("b", &["a"])),
+            part("m", "c.pbo", patches("c", &["a"])),
+        ];
+        let mut warnings = Warnings::new();
+        let _ = merge_flat(flat, "b", &mut warnings, ConfigLayer::merge);
+        let found: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-order"))
+            .collect();
+        assert_eq!(found.len(), 1);
+        let message = &found[0].message;
+        assert!(message.contains("between 2 configs"), "{message}");
+        assert!(
+            message.contains("[m] a.pbo") && message.contains("[m] b.pbo"),
+            "{message}"
+        );
+        assert!(!message.contains("c.pbo"), "{message}");
+    }
+
+    /// Once the merge hits its limit the rest is skipped with one warning that names where it stopped.
+    #[test]
+    fn merge_limit_warns_once_and_names_the_pbo() {
+        let flat = vec![
+            part("one", "a.pbo", patches("a", &[])),
+            part("two", "b.pbo", patches("b", &[])),
+            part("two", "c.pbo", patches("c", &[])),
+            part("two", "d.pbo", patches("d", &[])),
+        ];
+        let mut warnings = Warnings::new();
+        let mut calls = 0;
+        let _ = merge_flat(flat, "b", &mut warnings, |_, _, _| {
+            calls += 1;
+            calls < 2
+        });
+        assert_eq!(calls, 2, "the merge stops at the first failure");
+        let found: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-limit"))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("[two] b.pbo"), "{found:?}");
+    }
+
+    /// A mod that happens to be called `vanilla` is not the game: its base class change is warned about.
+    #[test]
+    fn a_source_named_vanilla_is_not_filtered_like_the_game() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = config_pbo(
+            dir.path(),
+            "base.pbo",
+            "class CfgPatches { class P1 { requiredAddons[] = {}; }; };\nclass CfgVehicles { class Base {}; class X: Base {}; };",
+        );
+        let named = config_pbo(
+            dir.path(),
+            "named.pbo",
+            "class CfgPatches { class P2 { requiredAddons[] = {\"P1\"}; }; };\nclass CfgVehicles { class X {}; };",
+        );
+        let mut warnings = Warnings::new();
+        let sources = vec![
+            build_source("base", "b", false, &[base], &mut warnings).unwrap(),
+            build_source("vanilla", "b", false, &[named], &mut warnings).unwrap(),
+        ];
+        assert!(!sources[1].is_vanilla);
+        let _ = merge_sources(sources, "b", &mut warnings);
+        assert!(
+            warnings
+                .warnings()
+                .iter()
+                .any(|w| w.name == Some("api-config-base-changed")),
+            "{:?}",
+            warnings.warnings()
+        );
     }
 }
