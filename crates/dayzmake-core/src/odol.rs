@@ -148,6 +148,8 @@ struct Rd<'a, R: Read + Seek> {
     len: u64,
     /// Decompressed bytes still allowed for this file.
     budget: u64,
+    /// The whole budget of the file, named in the error.
+    limit: u64,
 }
 
 impl<R: Read + Seek> Rd<'_, R> {
@@ -234,7 +236,7 @@ impl<R: Read + Seek> Rd<'_, R> {
             .checked_mul(size)
             .filter(|t| *t <= MAX_ARRAY_BYTES)
             .ok_or_else(|| error!("array of {count} elements is too large"))?;
-        self.budget = spend(self.budget, total as u64, MAX_TOTAL_ARRAY_BYTES)?;
+        self.budget = spend(self.budget, total as u64, self.limit)?;
         if total < COMPRESSION_THRESHOLD {
             self.need(total as u64)?;
             let mut buf = vec![0; total];
@@ -275,6 +277,11 @@ impl Odol {
     /// Fails for a file that is not ODOL, for a version other than 56, for truncated or corrupt data
     /// and for sizes above the reader's limits. An error in a LOD names the LOD and its file offset.
     pub fn read<R: Read + Seek>(input: &mut R) -> Result<Odol, Error> {
+        Self::read_with_limit(input, MAX_TOTAL_ARRAY_BYTES)
+    }
+
+    /// [`Odol::read`] with the total of decompressed array bytes limited to `limit` (a test makes it small).
+    fn read_with_limit<R: Read + Seek>(input: &mut R, limit: u64) -> Result<Odol, Error> {
         let len = input.seek(SeekFrom::End(0))?;
         input.seek(SeekFrom::Start(0))?;
         // the header part is read through a buffer; each LOD is read into memory in one piece
@@ -282,7 +289,8 @@ impl Odol {
         let mut rd = Rd {
             r: &mut buffered,
             len,
-            budget: MAX_TOTAL_ARRAY_BYTES,
+            budget: limit,
+            limit,
         };
 
         let mut magic = [0; 4];
@@ -339,7 +347,7 @@ impl Odol {
                 resolutions: &resolutions,
             },
             len,
-            budget,
+            (budget, limit),
         )?;
         Ok(model)
     }
@@ -357,7 +365,7 @@ fn read_lods<R: Read + Seek>(
     input: &mut R,
     table: &LodTable<'_>,
     len: u64,
-    mut budget: u64,
+    (mut budget, limit): (u64, u64),
 ) -> Result<Vec<OdolLod>, Error> {
     let (starts, ends, resolutions) = (table.starts, table.ends, table.resolutions);
     let lod_count = starts.len();
@@ -411,6 +419,7 @@ fn read_lods<R: Read + Seek>(
             r: &mut cursor,
             len: size,
             budget,
+            limit,
         };
         let resolution = resolutions.get(index).copied().unwrap_or(0.0);
         let lod = read_lod(&mut lod_rd, resolution).prepend_error(&context)?;
@@ -640,9 +649,15 @@ fn read_material<R: Read + Seek>(rd: &mut Rd<'_, R>) -> Result<OdolMaterial, Err
     Ok(OdolMaterial { name, textures })
 }
 
+/// The synthetic model of the integration tests, for a test of the private limit.
+#[cfg(test)]
+#[path = "../tests/support/odol_builder.rs"]
+mod odol_builder;
+
 #[cfg(test)]
 mod tests {
-    use super::spend;
+    use super::{Odol, odol_builder, spend};
+    use std::io::Cursor;
 
     fn spend_all(limit: u64, arrays: &[u64]) -> Result<u64, std::io::Error> {
         let mut budget = limit;
@@ -663,5 +678,19 @@ mod tests {
         let err = spend_all(100, &[40, 40, 21]).unwrap_err();
         assert!(err.to_string().contains("more than 100 bytes"), "{err}");
         assert!(spend_all(100, &[101]).is_err());
+    }
+
+    /// The array budget is one for the whole file: the arrays of the LODs add up, so two LODs whose arrays
+    /// together, but not each alone, pass the limit are refused.
+    #[test]
+    fn the_array_budget_carries_over_across_lods() {
+        // The arrays of the synthetic model cost 15 bytes in LOD 0 and 2400 bytes in LOD 1.
+        let bytes = odol_builder::build(odol_builder::Knobs::default());
+        let reads = |limit: u64| Odol::read_with_limit(&mut Cursor::new(&bytes), limit);
+        assert!(reads(2415).is_ok());
+        // 2414 holds each LOD alone, but not LOD 1 after LOD 0
+        let err = reads(2414).unwrap_err().to_string();
+        assert!(err.contains("LOD 1"), "{err}");
+        assert!(err.contains("more than 2414 bytes"), "{err}");
     }
 }
