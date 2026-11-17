@@ -37,6 +37,7 @@ is maintained here.
 - `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
 - `api config` sorts the config PBOs of the game and of all selected mods together by `requiredAddons`, as the engine does (a game addon that requires a mod addon loads after it); ties go to the source (game, then the mods in `-m` order) and then to the path. `-m all` includes mods that have only a config. The `api-config-base-changed` warning shows the class path as written (`CfgVehicles/Car_Base`), the game is recognised by a flag and no longer by the name `vanilla`, and an infinite float is shown as `1e999` / `-1e999` as derapify writes it (a string in `--json`) (part of #98).
 - `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
+- The `extract-path-clash` warning names the skipped entry, says whether it is a file or a folder and what the other PBO has at that path, with `/` separators on every platform; an extract source that cannot be resolved is an error of its own (part of #104).
 - `api grep` prints at most the first 512 bytes of a matching line (counted before escaping), cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it, and also `target` without `cat` (error `target is only used with cat`; it did nothing there) (part of #98, #104).
 - `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
 - A config value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95). An integer literal that overflows at a line end is handled as before a `;` (see the next bullets).
@@ -486,8 +487,9 @@ dayzmake api update                           # rebuild the cache now
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts. `api config` also counts a mod that has only a config. The
-  first run indexes each mod once, which can take a while; later runs use the cache. A mod contributes the
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`
+  also counts a mod that has only a config). The first run indexes each mod once, which can take a while; later runs
+  use the cache. A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.
 - **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as
