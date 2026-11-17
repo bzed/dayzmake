@@ -15,7 +15,7 @@ use crate::warning::{Warning, WarningSink};
 peg::parser! {
     /// PEG grammar for the preprocessor: directives, macros, comments and tokens. `deep` is set when
     /// macro argument parentheses nest deeper than [`MAX_NESTING_DEPTH`]; the caller turns that into an error.
-    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>) for str {
+    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>, file_end: bool) for str {
         rule newline() = "\r\n" / "\n"
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
@@ -104,15 +104,25 @@ peg::parser! {
             0
         }
 
-        /// An unterminated `/*` at the end of the input runs to the end, as in `CfgConvert`.
-        rule ml_comment() -> u32 = [' ' | '\t']* "/*" content:$((!"*/" (newline() / [_]))*) ("*/" / ![_]) {
+        rule ml_comment() -> u32 = [' ' | '\t']* "/*" content:$((!"*/" (newline() / [_]))*) "*/" {
             u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX)
+        }
+
+        /// An unterminated `/*` runs to the end of the file, as in `CfgConvert`. Only the parse of a whole
+        /// file (`file_end`) allows it, not the re-tokenised substrings of macro arguments.
+        rule open_comment() -> u32 = [' ' | '\t']* "/*" content:$([_]*) ![_] {?
+            if file_end {
+                Ok(u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX))
+            } else {
+                Err("a terminated comment")
+            }
         }
 
         rule comment_token() -> u32 = sl_comment() / ml_comment()
 
         rule token() -> Token =
             c:comment_token() { Token::CommentToken(c) } /
+            c:open_comment() { Token::OpenCommentToken(c) } /
             sn:string_token() { Token::NewlineToken(sn.0, sn.1) } /
             concat_token() { Token::ConcatToken } /
             m:macro_token() { Token::MacroToken(m) } /
@@ -192,6 +202,8 @@ pub(crate) enum Token {
     MacroToken(Macro),
     /// Comment token containing a number of newlines
     CommentToken(u32),
+    /// Unterminated `/*` comment (to the end of the file) containing a number of newlines
+    OpenCommentToken(u32),
     /// Token for the concatenation operator (`##`)
     ConcatToken,
 }
@@ -479,7 +491,7 @@ fn token_bytes(token: &Token) -> usize {
     match token {
         Token::RegularToken(s) | Token::NewlineToken(s, _) => s.len().max(1),
         Token::MacroToken(m) => m.original.len().max(1),
-        Token::CommentToken(_) | Token::ConcatToken => 1,
+        Token::CommentToken(_) | Token::OpenCommentToken(_) | Token::ConcatToken => 1,
     }
 }
 
@@ -504,7 +516,7 @@ fn identity(path: &Path, memory: bool) -> PathBuf {
 
 fn parse_macro(input: &str) -> Result<Macro, Error> {
     let without_original = parse_checked(
-        |deep| preprocess_grammar::macro_proper(input, deep),
+        |deep| preprocess_grammar::macro_proper(input, deep, false),
         |e| error!("Failed to parse macro invocation \"{input}\": {e}"),
     )?;
 
@@ -532,6 +544,7 @@ impl Clone for Token {
             Token::NewlineToken(s, n) => Token::NewlineToken(s.clone(), *n),
             Token::MacroToken(m) => Token::MacroToken(m.clone()),
             Token::CommentToken(n) => Token::CommentToken(*n),
+            Token::OpenCommentToken(n) => Token::OpenCommentToken(*n),
             Token::ConcatToken => Token::ConcatToken,
         }
     }
@@ -578,7 +591,7 @@ impl Definition {
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
                 let mut tokens = parse_checked(
-                    |deep| preprocess_grammar::tokens(arg, deep),
+                    |deep| preprocess_grammar::tokens(arg, deep, false),
                     |e| error!("Failed to parse macro argument: {e}"),
                 )?;
                 let stack: Vec<Definition> = Vec::new();
@@ -621,7 +634,7 @@ impl Macro {
 
         let (_, without_name) = self.original.split_at(self.name.len());
         let mut arg_tokens = parse_checked(
-            |deep| preprocess_grammar::tokens(without_name, deep),
+            |deep| preprocess_grammar::tokens(without_name, deep, false),
             |e| error!("Failed to parse macro arguments: {e}"),
         )?;
 
@@ -661,7 +674,7 @@ impl Macro {
                             .unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
                         let mut rest_tokens = parse_checked(
-                            |deep| preprocess_grammar::tokens(rest, deep),
+                            |deep| preprocess_grammar::tokens(rest, deep, false),
                             |e| error!("Failed to parse macro arguments: {e}"),
                         )?;
                         rest_tokens = Macro::resolve_all(
@@ -790,7 +803,7 @@ impl Token {
                 Token::MacroToken(m) => {
                     output += &m.original;
                 }
-                Token::CommentToken(n) => {
+                Token::CommentToken(n) | Token::OpenCommentToken(n) => {
                     newlines += n;
                 }
                 Token::ConcatToken => {}
@@ -808,7 +821,7 @@ fn source_newlines(tokens: &[Token]) -> (u32, u32) {
     let (mut inline, mut continuations) = (0u32, 0u32);
     for token in tokens {
         match token {
-            Token::NewlineToken(_, n) | Token::CommentToken(n) => {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) | Token::OpenCommentToken(n) => {
                 inline = inline.saturating_add(*n);
             }
             Token::MacroToken(m) => {
@@ -1219,7 +1232,7 @@ fn preprocess_rec(
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
     let deep = Cell::new(false);
-    let parsed = preprocess_grammar::file(&input, &deep);
+    let parsed = preprocess_grammar::file(&input, &deep, true);
     if deep.get() {
         return Err(nesting_error());
     }
@@ -1384,6 +1397,24 @@ fn preprocess_rec(
                         // A disabled line is never expanded (#61): it can neither error nor cost time.
                         original_lineno += skipped_newlines(&tokens);
                         break 'line;
+                    }
+                    // Found after the parse, so a backtracked path never warns.
+                    if let Some(at) = tokens
+                        .iter()
+                        .position(|t| matches!(t, Token::OpenCommentToken(_)))
+                    {
+                        let mut warning =
+                            Warning::new(
+                                Some("unterminated-comment"),
+                                "A /* comment is never closed; the rest of the file is ignored.",
+                            )
+                            .at_line(original_lineno.saturating_add(
+                                skipped_newlines(tokens.get(..at).unwrap_or_default()),
+                            ));
+                        if let Some(origin) = origin {
+                            warning = warning.in_file(origin.display().to_string());
+                        }
+                        warnings.warn(warning);
                     }
                     let stack: Vec<Definition> = Vec::new();
                     let mut mismatches: Vec<String> = Vec::new();

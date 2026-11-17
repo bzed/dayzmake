@@ -30,6 +30,11 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
 - `cfgconvert/last_comment*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
   None has a final newline. `last_comment` is `x = 1\n// c`, `last_comment_semi` is `x = 1;\n// c`, `last_comment_block`
   is `x = 1;\n/* c */`, `last_comment_open` is `x = 1;\n/* c` (unterminated): all four are accepted and give `x = 1;`.
+  Unterminated `/*` with text after it (same setup, no output on stderr, nothing in the log): `x = 1;\n/* c\ny = 2;`
+  and `x = 1;\n/* c\ny = 2;\nz = 3;\n` give `x = 1;`; `x = 1;\n/* c\n#include "nope.hpp"\nz = 3;\n` gives `x = 1;`
+  (the missing include is never looked up); `a = 1;\n/* open\nb = 2;` in `inc.hpp`, included from a file that goes on
+  with `c = 3;`, gives `a = 1; c = 3;` (the comment ends with the include). So CfgConvert is silent; dayzmake does
+  the same and warns `unterminated-comment`.
   Lone CR, not committed: `x = 1\r// c` and `x = 1\r#define Y 1` and `x = 1;\r#define Y 1` are rejected (no output);
   `x = 1;\r// c`, `x = 1\r\n// c` and `x = 1\r\n#define Y 1` give `x = 1;`; `x = 1\ry = 2;` gives `x = "1y = 2";`
   (CfgConvert does not treat a lone CR as a line end; dayzmake's preprocessor does, and is lenient there).

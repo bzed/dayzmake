@@ -139,7 +139,8 @@ Behaviour:
   directives leave blank lines behind.
 - `__EVAL` is not evaluated here; it is evaluated when the config is parsed by `rapify`.
 - The `include-case` warning is raised when an include only matches ignoring case, and `macro-arg-count` when
-  a macro is called with the wrong number of arguments.
+  a macro is called with the wrong number of arguments. A `//` comment may end at the end of the file without a line
+  end, and an unterminated `/*` runs to the end of the file, as in CfgConvert, with the warning `unterminated-comment`.
 
 Example:
 

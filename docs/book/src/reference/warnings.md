@@ -321,3 +321,12 @@ A file in the source folder is a FIFO, a device or a socket. It is skipped; dayz
 In file data/pipe: warning: Skipping a file that is not a regular file (FIFO, device or socket). [unsupported-file]
 ```
 
+## unterminated-comment
+
+Raised by: `rapify`, `preprocess`, `build`.
+
+A `/*` comment is never closed. Like CfgConvert, which says nothing about it, dayzmake takes the rest of the file as the comment, so every line after it is ignored, also an `#include` (which is then not even looked up). In an included file the comment ends with that file. The warning names the file and the line of the `/*`; it is not raised for a comment inside a string or inside a disabled `#ifdef` branch.
+
+```text
+In file open.cpp:2: warning: A /* comment is never closed; the rest of the file is ignored. [unterminated-comment]
+```
