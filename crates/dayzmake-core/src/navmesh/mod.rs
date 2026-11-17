@@ -5,5 +5,7 @@
 //! parameters and one geometry record per tile. Every reader treats its input as hostile and returns
 //! errors instead of panicking.
 
+pub mod capture;
+pub mod client;
 pub(crate) mod num;
 pub mod wire;

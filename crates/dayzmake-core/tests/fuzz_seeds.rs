@@ -7,6 +7,8 @@ use std::path::Path;
 
 use dayzmake_core::config::Config;
 #[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
+#[cfg(feature = "navmesh")]
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::P3D;
@@ -142,14 +144,34 @@ fn odol_read_seeds() -> io::Result<()> {
 #[cfg(feature = "navmesh")]
 #[test]
 fn navmesh_wire_seeds() -> io::Result<()> {
-    for data in seeds("navmesh_wire")? {
-        // Same as the fuzz target: what parses must encode and parse again to the same bytes.
-        if let Ok(world) = WorldParams::parse(&data) {
+    for seed in seeds("navmesh_wire")? {
+        // Same as the fuzz target: the first byte selects the reader.
+        let Some((&selector, data)) = seed.split_first() else {
+            continue;
+        };
+        if selector & 1 == 1 {
+            if let Ok(capture) = Capture::read(&mut &data[..]) {
+                let mut out = Vec::new();
+                let mut w = CaptureWriter::new(&mut out, capture.params())?;
+                for t in capture.tiles() {
+                    w.add(t)?;
+                }
+                let again = Capture::read(&mut &out[..])?;
+                assert_eq!(again.params().encode(), capture.params().encode());
+                assert_eq!(again.tiles().len(), capture.tiles().len());
+                for (a, b) in again.tiles().iter().zip(capture.tiles()) {
+                    assert_eq!(a.encode(), b.encode());
+                }
+            }
+            continue;
+        }
+        // What parses must encode and parse again to the same bytes.
+        if let Ok(world) = WorldParams::parse(data) {
             let bytes = world.encode();
             assert_eq!(WorldParams::parse(&bytes)?.encode(), bytes);
         }
-        let _ = WorldParams::parse_message(&data);
-        if let Ok(tile) = TileInput::parse(&data) {
+        let _ = WorldParams::parse_message(data);
+        if let Ok(tile) = TileInput::parse(data) {
             let bytes = tile.encode();
             let again = TileInput::parse(&bytes)?;
             assert_eq!(again.encode(), bytes);
