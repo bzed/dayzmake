@@ -28,6 +28,13 @@ use std::io;
 /// `RC_SPAN_MAX_HEIGHT`: spans store 13-bit heights.
 pub const SPAN_MAX_HEIGHT: u16 = 8191;
 
+/// Emulates the 13-bit `rcSpan` bitfield: upstream stores `smin`/`smax` into 13-bit fields, so a
+/// value above [`SPAN_MAX_HEIGHT`] wraps (8192 becomes 0).
+#[must_use]
+pub fn store13(v: u16) -> u16 {
+    v & SPAN_MAX_HEIGHT
+}
+
 /// The largest number of columns a heightfield may have (hostile size limit).
 const MAX_COLUMNS: usize = 1 << 24;
 
@@ -150,7 +157,7 @@ impl Heightfield {
     /// `addSpan`: insert a span, merging it with every span it overlaps. The merged area is
     /// `max(new, old)` when the merged `smax` is within `flag_merge_threshold` of the old span's
     /// `smax`; otherwise the new area is kept. The new span has `sub_area` 0 (DayZ). Out of range
-    /// columns are ignored; heights above [`SPAN_MAX_HEIGHT`] are clamped.
+    /// columns are ignored; heights are stored in 13 bits like `rcSpan` (see [`store13`]).
     pub fn add_span(
         &mut self,
         x: i32,
@@ -163,7 +170,7 @@ impl Heightfield {
         let Some(column) = self.column_mut(x, z) else {
             return;
         };
-        let mut new = Span::new(smin.min(SPAN_MAX_HEIGHT), smax.min(SPAN_MAX_HEIGHT), area);
+        let mut new = Span::new(store13(smin), store13(smax), area);
         let mut i = 0;
         while let Some(&cur) = column.get(i) {
             if cur.smin > new.smax {

@@ -22,10 +22,11 @@
 //! the part rasteriser (spec 5.3).
 
 #![expect(
-    clippy::many_single_char_names,
     clippy::similar_names,
     reason = "geometry code keeps Recast's variable names"
 )]
+
+use std::collections::BTreeMap;
 
 use super::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span};
 use crate::navmesh::num::{ceil_i32, floor_i32, i32_to_f32, trunc_i32};
@@ -35,7 +36,8 @@ use crate::navmesh::num::{ceil_i32, floor_i32, i32_to_f32, trunc_i32};
 pub enum RasterMode {
     /// Mode 0: stock `addSpan`.
     Add,
-    /// Mode 1, doors: paint the spans below the piece.
+    /// Mode 1, doors: paint from the start span (the last span with `smin <=` the piece's, or the
+    /// first) upward until `smax <= s.smax`.
     PaintBelow,
     /// Mode 2, trees: paint the ground around the trunk; never adds.
     Tree,
@@ -441,40 +443,24 @@ pub fn rasterize_triangle(
 /// `dzRasterizePart`: rasterise the triangles `tris` (three vertices each, rasteriser order) as one
 /// footprint. The union of vertical extents per cell is collected first ("the older way" clipping:
 /// pieces with a vertex before the min x or z edge are skipped), then the mode's cell action runs
-/// once per cell with that extent, row by row. A repeat only ends its cell.
+/// once per cell with that extent, row by row. A repeat only ends its cell. Trailing vertices
+/// (when the count is not a multiple of 3) are ignored.
 pub fn rasterize_part(hf: &mut Heightfield, tris: &[[f32; 3]], p: &RasterParams) {
     let g = Grid::of(hf);
-    let (Ok(w), Ok(h)) = (usize::try_from(g.w), usize::try_from(g.h)) else {
-        return;
-    };
-    let Some(n) = w.checked_mul(h) else {
-        return;
-    };
-    let mut extents: Vec<Option<(u16, u16)>> = vec![None; n];
+    // Only the cells the part touches are recorded, ordered z outer, x inner.
+    let mut extents: BTreeMap<(i32, i32), (u16, u16)> = BTreeMap::new();
     for &tri in tris.as_chunks::<3>().0 {
+        // The result only says whether the callback stopped early; this callback never does.
         clip_triangle(&g, tri, true, &mut |x, z, lo, hi| {
-            let idx = usize::try_from(x)
-                .ok()
-                .zip(usize::try_from(z).ok())
-                .and_then(|(x, z)| z.checked_mul(w)?.checked_add(x));
-            if let Some(slot) = idx.and_then(|i| extents.get_mut(i)) {
-                *slot = Some(match *slot {
-                    Some((l, u)) => (l.min(lo), u.max(hi)),
-                    None => (lo, hi),
-                });
-            }
+            extents
+                .entry((z, x))
+                .and_modify(|e| *e = (e.0.min(lo), e.1.max(hi)))
+                .or_insert((lo, hi));
             true
         });
     }
-    for z in 0..g.h {
-        for x in 0..g.w {
-            let idx = usize::try_from(z)
-                .ok()
-                .zip(usize::try_from(x).ok())
-                .and_then(|(z, x)| z.checked_mul(w)?.checked_add(x));
-            if let Some(Some((lo, hi))) = idx.and_then(|i| extents.get(i)).copied() {
-                apply_cell(hf, x, z, lo, hi, p);
-            }
-        }
+    for ((z, x), (lo, hi)) in extents {
+        // A repeat only ends this cell; nothing else to do for it.
+        apply_cell(hf, x, z, lo, hi, p);
     }
 }

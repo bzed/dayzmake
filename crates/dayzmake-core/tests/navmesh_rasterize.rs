@@ -327,10 +327,24 @@ fn part_applies_the_union_of_its_triangles_once() {
 
 #[test]
 fn heights_clamp_to_8191() {
-    let mut hf = Heightfield::new(2, 2, [0.0; 3], [2.0, 2000.0, 2.0], 1.0, 0.1).unwrap();
-    let t = [[0.2, 1500.0, 0.2], [0.8, 1500.0, 0.2], [0.2, 1500.0, 0.8]];
+    // A flat piece at exactly 8191: lo = ceil = 8191, so clamp(8191, 8192, 8191) is 8192 as in C
+    // (the minimum wins); the 13-bit store wraps it to 0.
+    let mut hf = Heightfield::new(2, 2, [0.0; 3], [2.0, 20000.0, 2.0], 1.0, 1.0).unwrap();
+    let t = [[0.2, 8191.0, 0.2], [0.8, 8191.0, 0.2], [0.2, 8191.0, 0.8]];
     raster(&mut hf, &t, &params(RasterMode::Add, 1));
-    assert_eq!(hf.column(0, 0), &[span(8191, 8191, 1)]);
+    assert_eq!(hf.column(0, 0), &[span(8191, 0, 1)]);
+
+    // The ordinary clamp: lo below 8191, ceil above it gives hi == 8191.
+    let mut hf = Heightfield::new(2, 2, [0.0; 3], [2.0, 2000.0, 2.0], 1.0, 0.1).unwrap();
+    raster(
+        &mut hf,
+        &wall(0.0, 800.5, 1500.0),
+        &params(RasterMode::Add, 1),
+    );
+    let col = hf.column(0, 0);
+    assert_eq!(col.len(), 1);
+    assert_eq!(col[0].smax, 8191);
+    assert!((8004..=8006).contains(&col[0].smin));
 
     // A piece wholly above the heightfield is skipped.
     let mut hf = Heightfield::new(2, 2, [0.0; 3], [2.0, 10.0, 2.0], 1.0, 0.1).unwrap();
@@ -368,4 +382,82 @@ fn rsqrt_is_the_hardware_approximation() {
         "RSQRTSS, not an exact sqrt"
     );
     assert!(((approx - exact) / exact).abs() < 1.5 * 2.0f32.powi(-12) * 1.01);
+}
+
+#[test]
+fn paint_below_starts_at_the_last_span_not_above_the_piece() {
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    hf.add_span(0, 0, 10, 15, 2, 1);
+    hf.add_span(0, 0, 20, 25, 3, 1);
+    raster(
+        &mut hf,
+        &wall(0.0, 12.0, 30.0),
+        &params(RasterMode::PaintBelow, 20),
+    );
+    let areas: Vec<u8> = hf.column(0, 0).iter().map(|s| s.area).collect();
+    assert_eq!(areas, [1, 20, 20]);
+}
+
+#[test]
+fn tree_hit_when_trunk_starts_within_walkable_height_above_ground() {
+    let mut p = params(RasterMode::Tree, 10);
+    p.walkable_climb = 5;
+    p.walkable_height = 15;
+    // Ground top 5, trunk from 12: 12 < 5 + 15, hit.
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    raster(&mut hf, &wall(0.0, 12.0, 30.0), &p);
+    assert_eq!(hf.column(0, 0)[0].area, 10);
+    // With a walkable height of 5: 12 < 10 fails, no hit.
+    p.walkable_height = 5;
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    raster(&mut hf, &wall(0.0, 12.0, 30.0), &p);
+    assert_eq!(hf.column(0, 0)[0].area, 1);
+}
+
+#[test]
+fn paint_or_add_stops_at_smax_plus_one() {
+    let mut p = params(RasterMode::PaintOrAdd, 14);
+    p.sub_area = 4;
+    // Piece [3, 6]: 6 <= 5 + 1 is a stop, so it is added (merged), never painted.
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    raster(&mut hf, &wall(0.0, 3.0, 6.0), &p);
+    assert_eq!(hf.column(0, 0), &[span(0, 6, 14)]);
+    // Piece [3, 7]: painted with the sub area, nothing added.
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    raster(&mut hf, &wall(0.0, 3.0, 7.0), &p);
+    assert_eq!(hf.column(0, 0).len(), 1);
+    assert_eq!(hf.column(0, 0)[0].sub_area, 4);
+}
+
+#[test]
+fn water_depth_boundary_is_inclusive() {
+    let mut p = params(RasterMode::Water, 9);
+    p.water_depth = 5;
+    // Span smin 0: piece smin 5 gives 0 + 5 <= 5, upgraded; piece smin 4 does not.
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 2, 1, 1);
+    hf.add_span(1, 0, 0, 2, 1, 1);
+    raster(&mut hf, &flat(0.0, 5.0), &p);
+    raster(&mut hf, &flat(1.0, 4.0), &p);
+    assert_eq!(hf.column(0, 0)[0].area, 9);
+    assert_eq!(hf.column(1, 0)[0].area, 1);
+}
+
+#[test]
+fn parts_far_apart_in_a_large_grid() {
+    let mut hf = Heightfield::new(1024, 1024, [0.0; 3], [1024.0, 100.0, 1024.0], 1.0, 1.0).unwrap();
+    let p = params(RasterMode::Add, 12);
+    let part_a = [[900.2, 3.0, 5.5], [900.8, 3.0, 5.5], [900.5, 4.0, 5.5]];
+    let part_b = [[2.2, 6.0, 800.5], [2.8, 6.0, 800.5], [2.5, 7.0, 800.5]];
+    rasterize_part(&mut hf, &part_b, &p);
+    rasterize_part(&mut hf, &part_a, &p);
+    assert_eq!(hf.column(900, 5), &[span(3, 4, 12)]);
+    assert_eq!(hf.column(2, 800), &[span(6, 7, 12)]);
+    let total: usize = hf.columns().iter().map(Vec::len).sum();
+    assert_eq!(total, 2);
 }
