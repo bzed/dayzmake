@@ -243,8 +243,8 @@ pub struct IncludeFolders {
 /// `origin` of the preprocessed input is the name of the including entry, and an include is resolved
 /// relative to the folder of that entry, or, in the engine's `\prefix\path` form, when it points into
 /// `prefix`. Absolute paths and drive letters are errors, as are empty components and control characters
-/// (see [`crate::pbo::safe_relative_path`]). A `..` component is resolved inside the PBO; one that would leave
-/// the PBO's root is an error. Names compare ignoring case. The files
+/// (see [`crate::pbo::safe_relative_path`]). In the relative form a `..` component is resolved inside the PBO and one that would leave
+/// the PBO's root is an error; in the `\prefix\path` form `..` is always an error. Names compare ignoring case. The files
 /// an `#include` pulls in count against a total of 64 MiB per preprocess call.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -283,6 +283,14 @@ impl MemoryIncludes {
                 .or_insert(reason);
         }
         self
+    }
+
+    /// The content of the entry `name` (ignoring case and separator), if it was read.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&[u8]> {
+        self.files
+            .get(&name.replace('\\', "/").to_lowercase())
+            .map(|(_, content)| content.as_slice())
     }
 
     /// The file `include_path` names when included from the entry `origin` (an entry name, or `None` for
@@ -343,10 +351,17 @@ impl MemoryIncludes {
             return Ok((name.as_str(), content.as_slice()));
         }
         if let Some(reason) = self.unreadable.get(&key) {
-            return Err(error!(
-                "Include \"{}\" cannot be read: {reason}",
-                printable(include_path)
-            ));
+            return Err(match origin {
+                Some(o) => error!(
+                    "Include \"{}\" (from \"{}:{line}\") cannot be read: {reason}",
+                    printable(include_path),
+                    printable(&o.display().to_string())
+                ),
+                None => error!(
+                    "Include \"{}\" (line {line}) cannot be read: {reason}",
+                    printable(include_path)
+                ),
+            });
         }
         Err(include_not_found(include_path, origin, line))
     }

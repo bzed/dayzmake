@@ -744,13 +744,7 @@ fn a_config_bin_pbo_reads_no_includables() {
     )
     .expect("config parses");
     let bin = config.to_cursor().expect("rapify").into_inner();
-    let m = damaged_mod(
-        &w,
-        "config.bin",
-        "",
-        &[("readme.txt", b"long text here, longer than the cut")],
-    );
-    // replace the placeholder config.bin by the rapified one
+    let m = w.home.join("@Dmg").to_string_lossy().into_owned();
     let mut bytes = support::raw_pbo(
         &[
             ("config.bin", &bin),

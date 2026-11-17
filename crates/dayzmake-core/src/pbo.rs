@@ -988,8 +988,8 @@ impl PBO {
     ///
     /// A selected entry whose data is truncated or cannot be decompressed is an error of its own
     /// ([`SelectedEntry::data`]). The decompressed sizes of the selected entries are added up in file
-    /// order; an entry that would take the total past `max_bytes` is not read (and neither is any
-    /// later one that does not fit), and reports [`SelectedEntry::is_over_limit`]. A malformed header
+    /// order; the first entry that would take the total past `max_bytes` is not read, and neither is any
+    /// selected entry after it (a smaller later one included); each reports [`SelectedEntry::is_over_limit`]. A malformed header
     /// block is still an error.
     ///
     /// # Errors
@@ -1017,6 +1017,7 @@ impl PBO {
         let mut offset = reader.stream_position()?;
         let mut entries = Vec::new();
         let mut total: u64 = 0;
+        let mut exhausted = false;
         for h in &block.headers {
             let size = u64::from(h.data_size);
             let end = offset
@@ -1047,11 +1048,23 @@ impl PBO {
                     continue;
                 }
                 if let Some(max) = limit {
-                    let new_total = total.saturating_add(unpacked);
-                    if new_total > max {
+                    if exhausted {
                         entries.push(failed(
                             error!(
-                                "PBO entry \"{}\" is left unread (the limit of {max} bytes is reached).",
+                                "PBO entry \"{}\" is left unread (the byte limit is reached).",
+                                printable(&h.filename)
+                            ),
+                            true,
+                        ));
+                        offset = end;
+                        continue;
+                    }
+                    let new_total = total.saturating_add(unpacked);
+                    if new_total > max {
+                        exhausted = true;
+                        entries.push(failed(
+                            error!(
+                                "PBO entry \"{}\" is left unread (the byte limit is reached).",
                                 printable(&h.filename)
                             ),
                             true,

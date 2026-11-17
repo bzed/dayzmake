@@ -33,7 +33,7 @@ use dayzmake_core::config::{
 };
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
-use dayzmake_core::pbo::{EntryFilter, PBO};
+use dayzmake_core::pbo::{EntryFilter, PBO, SelectedEntry};
 use dayzmake_core::preprocess::{IncludeFolders, MemoryIncludes};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
@@ -612,6 +612,10 @@ fn patches_of(config: &Config) -> Patches {
 /// A config entry of a PBO and what reading it gave.
 type ReadConfig = (String, Result<Config, Error>);
 
+/// A chosen config: entry name, whether it is a `config.bin`, and its bytes (none for a text config, whose bytes
+/// live in the include map).
+type ChosenConfig = (String, bool, Result<Option<Vec<u8>>, Error>);
+
 /// Whether a PBO entry can be the target of an `#include` of a config (a header or text file).
 fn is_includable(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -716,18 +720,44 @@ fn read_configs_capped(
             *slot = (true, i);
         }
     }
-    let folders = if chosen.values().any(|(is_bin, _)| !is_bin) {
-        let prefix = selection
-            .header_extension("prefix")
-            .unwrap_or("")
-            .to_string();
-        // the text configs themselves can be included too
-        let files: Vec<(String, Vec<u8>)> = selection
-            .entries()
-            .iter()
-            .filter(|e| is_includable(e.name()))
-            .filter_map(|e| Some((e.name().to_string(), e.data().ok()?.to_vec())))
-            .collect();
+    let prefix = selection
+        .header_extension("prefix")
+        .unwrap_or("")
+        .to_string();
+    let mut slots: Vec<Option<SelectedEntry>> =
+        selection.into_entries().into_iter().map(Some).collect();
+    let has_text = chosen.values().any(|(is_bin, _)| !is_bin);
+    // what each chosen config gives: its bytes (a `config.bin`), or nothing for a text config, whose bytes were
+    // moved into the include map together with the other text entries
+    let mut todo: Vec<ChosenConfig> = Vec::new();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for (_, (is_bin, i)) in chosen {
+        let Some(entry) = slots.get_mut(i).and_then(Option::take) else {
+            continue;
+        };
+        let name = entry.name().to_string();
+        let data = if is_bin || !has_text {
+            entry.into_data().map(Some)
+        } else {
+            entry.into_data().map(|bytes| {
+                files.push((name.clone(), bytes));
+                None
+            })
+        };
+        todo.push((name, is_bin, data));
+    }
+    if has_text {
+        // a config.cpp that lost to a config.bin of its folder can still be included
+        for entry in slots.into_iter().flatten() {
+            let name = entry.name().to_string();
+            if is_includable(&name)
+                && let Ok(bytes) = entry.into_data()
+            {
+                files.push((name, bytes));
+            }
+        }
+    }
+    let folders = if has_text {
         read_includes(
             path,
             &mut file,
@@ -741,16 +771,15 @@ fn read_configs_capped(
         IncludeFolders::new(Vec::new())
     };
     let mut out = Vec::new();
-    for (_, (is_bin, i)) in chosen {
-        let Some(entry) = selection.entries().get(i) else {
-            continue;
-        };
-        let name = entry.name().to_string();
+    for (name, is_bin, data) in todo {
         let kind = if is_bin { "config.bin" } else { "config.cpp" };
-        let parsed = entry
-            .data()
+        let parsed = data
             .map_err(|e| error!("cannot read {kind}: {e}"))
-            .and_then(|bytes| {
+            .and_then(|own| {
+                let bytes = own
+                    .as_deref()
+                    .or_else(|| folders.memory.as_ref().and_then(|m| m.get(&name)))
+                    .ok_or_else(|| error!("cannot read {kind}: the entry is missing"))?;
                 if is_rapified(bytes) {
                     Config::read_rapified(&mut Cursor::new(bytes))
                 } else {

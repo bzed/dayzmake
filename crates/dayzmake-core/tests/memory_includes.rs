@@ -93,8 +93,6 @@ fn dotdot_inside_the_pbo_resolves_for_both_separators() {
 
 #[test]
 fn dotdot_that_leaves_the_pbo_root_is_rejected() {
-    let dir = tempdir().expect("tempdir");
-    fs::write(dir.path().join("secret.hpp"), "token = 1;\n").expect("write");
     let list = [("secret.hpp", "inside = 1;\n"), ("a\\config.cpp", "")];
     for (origin, path) in [
         ("config.cpp", "..\\secret.hpp"),

@@ -332,6 +332,19 @@ fn tolerant_selection_stops_reading_at_the_byte_limit() {
     assert_eq!(entries[0].data().unwrap(), &[b'a'; 10]);
     assert!(entries[1].is_over_limit() && entries[1].data().is_err());
     assert!(entries[2].is_over_limit());
+    // a later entry that would fit is not read either once the limit was reached
+    let bytes = support::raw_pbo(
+        &[
+            ("a.txt", &[b'a'; 10]),
+            ("b.txt", &[b'b'; 10]),
+            ("c.txt", b"c"),
+        ],
+        &[],
+    );
+    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 12).unwrap();
+    assert!(sel.entries()[0].data().is_ok());
+    assert!(sel.entries()[1].is_over_limit());
+    assert!(sel.entries()[2].is_over_limit() && sel.entries()[2].data().is_err());
 }
 
 #[cfg(feature = "sign")]
