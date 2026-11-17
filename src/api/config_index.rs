@@ -582,6 +582,9 @@ fn apply_class(
             ConfigEntry::IntEntry(i) => {
                 layer.set_prop(scope, name, Value::from(*i), false)?;
             }
+            ConfigEntry::Int64Entry(i) => {
+                layer.set_prop(scope, name, Value::from(*i), false)?;
+            }
             _ => {}
         }
     }

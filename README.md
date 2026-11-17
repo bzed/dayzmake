@@ -31,17 +31,23 @@ is maintained here.
 
 ### Unreleased
 
+- Parsing a config nested to the depth limit (128 levels) fits a 1 MiB stack again on Windows debug builds: the recursive grammar rules for classes and arrays have smaller frames (a debug build needs about 410 KiB for the deepest class nesting, it needed 920 KiB). The behaviour and the limits are unchanged (#108).
 - `api config`: the warning `api-config-limit` of a merge is raised once and names the PBO where the merge stopped; `api-config-order` names only the PBOs of the cycle, each as `[<source>] <pbo>`, and, like `api-config-base-changed` across PBOs, is raised on every query.
 - `api config` reads the includable text entries of a PBO only when it has a text `config.cpp`, skips a truncated or undecodable one with the new warning `api-config-include-unreadable` (the configs of the PBO still load, and an include of it names the read error), reads at most 64 MiB of them per PBO (new warning `api-config-includes-capped`), and resolves `..` inside the PBO: `#include "..\macros.hpp"` from `sub\config.cpp` finds `macros.hpp`; a path that leaves the PBO's root is still refused (#99).
 - `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
 - `api config` sorts the config PBOs of the game and of all selected mods together by `requiredAddons`, as the engine does (a game addon that requires a mod addon loads after it); ties go to the source (game, then the mods in `-m` order) and then to the path. `-m all` includes mods that have only a config. The `api-config-base-changed` warning shows the class path as written (`CfgVehicles/Car_Base`), the game is recognised by a flag and no longer by the name `vanilla`, and an infinite float is shown as `1e999` / `-1e999` as derapify writes it (a string in `--json`) (part of #98).
 - `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
-- `api grep` prints at most the first 512 bytes of a matching line (counted before escaping), cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
+- The `extract-path-clash` warning names the skipped entry, says whether it is a file or a folder and what the other PBO has at that path, with `/` separators on every platform; an extract source that cannot be resolved is an error of its own (part of #104).
+- `api grep` prints at most the first 512 bytes of a matching line (counted before escaping), cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it, and also `target` without `cat` (error `target is only used with cat`; it did nothing there) (part of #98, #104).
 - `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
-- A config value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95). An integer literal that overflows at a line end is an error, as it is before a `;`; before this change it became a string with a warning.
+- A config value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95). An integer literal that overflows at a line end is handled as before a `;` (see the next bullets).
 - The preprocessor strips a `//` comment at the very end of the input, with no line end after it, as CfgConvert does; before, `x = 1;` followed by `// c` without a final newline was a syntax error. An unterminated `/*` runs to the end of the file, also as in CfgConvert (silently there), and raises the new warning `unterminated-comment` with file and line; an included file's comment ends with that file. When the last line of a config is picked out to decide whether its entry may end at the end of the file, a lone CR now counts as a line break; CfgConvert rejects `x = 1\r#define Y 1` and `x = 1\r// c`, dayzmake accepts them (#103).
 - A config float literal that overflows f32 (`1e999`, `-1e39`) is rapified as an infinity, no longer an error, as CfgConvert does; a literal that underflows is 0. `derapify` writes an infinity as `1e999` / `-1e999`, so derapify then rapify keeps the bits (#102).
-- Config errors raised while parsing a value (`Invalid integer`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
+- A decimal integer literal that does not fit 64 bits (`99999999999999999999`) is a float, as in CfgConvert (`x = 1e20`), at a line end and before a `;`; in an array every decimal literal that does not fit 32 bits is a float (`{3000000000}` is `3000000000.0`). It was an error. A decimal literal that fits 64 bits but not 32 is a 64-bit integer entry (`x = 2147483648`, entry subtype 6), as CfgConvert writes it; `derapify` and `api config` read it (they rejected subtype 6, `Unrecognized variable entry subtype: 6`). Followed by text it stays an unquoted string. Two other inputs were checked against CfgConvert and need no change: `x = 1 // c` and `x = 2 \` + a comment line, both without a final newline, are syntax errors in both; an included file whose last line has no line end is accepted by both (CfgConvert glues its own `#line` marker to the value, dayzmake does not) (part of #104).
+- Config enum values are computed like CfgConvert, in `f32` (#107): a literal is rounded to `f32` and a value outside `i32` is `-2147483648` (`A = 2147483647`, `2147483648`, `99999999999999999999` and `-2147483649` all give it), hex keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`) and `0X` works, and an implicit value is the last explicit value plus its distance, added in `f32` (`A = 16777217, B` gives `16777216` twice; `A = 16777216, B, C` gives `16777216`, `16777216`, `16777218`). Such values were an error. `__EVAL` of large numbers keeps its exact floats; CfgConvert's imprecise low bits (`__EVAL(2^31)` is `0x4effffe4` there) are not copied.
+- A hex config literal does what CfgConvert does: without a sign it keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`; it was an error), `0X` works like `0x`, and with a sign it is a float (`-0x10` is `-16.0`, it was the integer `-16`) (#106).
+- A config syntax error no longer brings the `unquoted-string` warning that the failed parse raised on the error's own line (`x = 1 // c` was tried as an unquoted string first); warnings from earlier lines are kept (part of #104).
+- Config errors raised while parsing a value (a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
@@ -285,13 +291,21 @@ On Linux or macOS, in the folder with the downloaded files (the Linux archive is
 ```
 gpg --import dayzmake-release-key.asc
 gpg --fingerprint 662441B36A5785AD18FB8667DF753D99D064EB7E
-gpg --verify SHA256SUMS.asc SHA256SUMS
+s=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null)
+[ "$(grep -c '^\[GNUPG:\] NEWSIG' <<<"$s")" = 1 ] &&
+  grep -q '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ' <<<"$s" &&
+  grep -q '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ' <<<"$s" &&
+  ! grep -Eq '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ' <<<"$s" &&
+  echo 'signature OK'
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-`gpg --verify` must say `Good signature from "dayzmake release signing key (https://github.com/bzed/dayzmake)"`;
-the warning that the key is not certified with a trusted signature is expected as long as you have not
-signed it yourself, the fingerprint printed next to it is what counts. `sha256sum -c --ignore-missing` checks
+The check must print `signature OK`. Do not rely on the `Good signature` text or the exit status of a plain
+`gpg --verify`: gpg prints that text, and exits with 0, for a signature of a key that has expired since. Only the
+`GOODSIG` status line means that the signature is good and its key is neither expired nor revoked, and `VALIDSIG`
+names the key that made it. The check also demands that the file holds exactly one signature and that no
+`EXPSIG`, `EXPKEYSIG`, `REVKEYSIG`, `BADSIG` or `ERRSIG` line appears, so a second, bad signature cannot hide behind a good one. The warning that the key is not certified with a trusted signature is expected as long
+as you have not signed it yourself, so the check ignores it; the fingerprint is what counts. `sha256sum -c --ignore-missing` checks
 the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
 `SHA512SUMS` works the same way with `sha512sum`.
 
@@ -300,13 +314,17 @@ hash of your download with its line in `SHA256SUMS`:
 
 ```
 gpg --import dayzmake-release-key.asc
-gpg --verify SHA256SUMS.asc SHA256SUMS
+$s = @(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null)
+(@($s | Select-String -Pattern '^\[GNUPG:\] NEWSIG').Count -eq 1) -and
+  [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ') -and
+  [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ') -and
+  -not ($s | Select-String -Quiet -Pattern '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ')
 $file = 'dayzmake-v3.0.2-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
 
-The last line must print `True`.
+The signature check and the last line must each print `True`.
 
 <!-- ANCHOR_END: verifying -->
 
@@ -481,8 +499,9 @@ dayzmake api update                           # rebuild the cache now
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`: or a config) (the first
-  run indexes each mod once, which can take a while; later runs use the cache). A mod contributes the
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`
+  also counts a mod that has only a config). The first run indexes each mod once, which can take a while; later runs
+  use the cache. A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.
 - **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as

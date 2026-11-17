@@ -951,13 +951,9 @@ fn a_file_and_folder_clash_across_pbos_skips_the_later_entry() {
     extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
     assert_eq!(names(&warnings), ["extract-path-clash"]);
     let text = &warnings.warnings()[0].message;
-    assert!(
-        text.contains("addons/a.pbo") && text.contains("addons/b.pbo"),
-        "{text}"
-    );
-    assert!(
-        text.contains("p/x/y.txt") || text.contains("p\\x\\y.txt"),
-        "{text}"
+    assert_eq!(
+        text,
+        "Skipping \"p/x/y.txt\" from addons/b.pbo: it needs \"p/x\" as a folder, but addons/a.pbo has a file there."
     );
     assert_eq!(files_below(&target), ["p/x", "p/z.txt", "pbo-map.tsv"]);
     assert_eq!(fs::read(target.join("p/x")).unwrap(), b"file");
@@ -969,7 +965,55 @@ fn a_file_and_folder_clash_across_pbos_skips_the_later_entry() {
     extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
     assert_eq!(names(&warnings), ["extract-path-clash"]);
     assert_eq!(
+        warnings.warnings()[0].message,
+        "Skipping \"p/x\" from addons/b.pbo: it is a file, but addons/a.pbo has a folder there."
+    );
+    assert_eq!(
         files_below(&target),
         ["p/x/y.txt", "p/z.txt", "pbo-map.tsv"]
+    );
+}
+
+#[test]
+fn a_file_and_folder_clash_inside_one_pbo_skips_the_later_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(
+        &src.join("addons/a.pbo"),
+        "p",
+        &[("a", b"file"), ("a\\b", b"deep")],
+    );
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(names(&warnings), ["extract-path-clash"]);
+    assert_eq!(
+        warnings.warnings()[0].message,
+        "Skipping \"p/a/b\" from addons/a.pbo: it needs \"p/a\" as a folder, but addons/a.pbo has a file there."
+    );
+    assert!(target.join("p/a").is_file());
+}
+
+#[test]
+fn two_entries_below_one_file_give_two_warnings_with_their_own_paths() {
+    let (tmp, src) = clash_source(&[("x", b"file")], &[("x\\y", b"1"), ("x\\z", b"2")]);
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(
+        names(&warnings),
+        ["extract-path-clash", "extract-path-clash"]
+    );
+    let texts: Vec<_> = warnings
+        .warnings()
+        .iter()
+        .map(|w| w.message.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Skipping \"p/x/y\" from addons/b.pbo: it needs \"p/x\" as a folder, but addons/a.pbo has a file there.",
+            "Skipping \"p/x/z\" from addons/b.pbo: it needs \"p/x\" as a folder, but addons/a.pbo has a file there.",
+        ]
     );
 }

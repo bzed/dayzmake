@@ -43,6 +43,12 @@ An `enum { A, B = 5, C };` block is accepted at any class level. It is no class 
 in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
 one, as in C. A name that occurs twice is accepted without a warning, like CfgConvert; the last value counts.
 
+Values are computed in `f32`, as CfgConvert does. A literal is rounded to `f32` and a value outside `i32` is
+`-2147483648` (so are `2147483647`, `2147483648`, `99999999999999999999` and `-2147483649`); hex keeps its low 32
+bits at any length (`0x1FFFFFFFFF` is `-1`) and `0X` works. An implicit value is the last explicit value plus its
+distance, added in `f32`: `A = 16777217, B, C` gives `16777216`, `16777216`, `16777218`. `__EVAL` of large numbers
+keeps its exact floats; CfgConvert's imprecise low bits are not copied.
+
 Behaviour:
 
 - Reads `<source>`, runs the preprocessor (`#include`, `#define`, `#ifdef`, `__EVAL`, `__EXEC`, macros), parses
@@ -51,11 +57,13 @@ Behaviour:
   the directive. Absolute includes (starting with `\`) are searched in the `-i` folders by path suffix and
   `$PBOPREFIX$`. A missing include is an error naming the file and line.
 - A source that is already rapified is copied unchanged with the `prerapified-file` warning.
-- Syntax errors name the line and the token that was expected. Values that are not quoted are accepted with the
+- Syntax errors name the line and the token that was expected. Warnings the failed parse raised on the error's own line are dropped, those of earlier lines are kept. Values that are not quoted are accepted with the
   `unquoted-string` warning and an entry without a value with `empty-value`.
 - A value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
-  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is an error, as with `;`. An entry on the last line of a file
+  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is handled as with `;` (next bullet). An entry on the last line of a file
   that has no line end after it is a syntax error, because CfgConvert rejects it too.
+- A decimal integer is stored by size, as in CfgConvert: an `i32` is a 32-bit integer, one that fits 64 but not 32 bits (`2147483648`) is a 64-bit integer entry (entry subtype 6; `derapify` and `api config` read it), one that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`). Arrays have no 64-bit element type: there a decimal that does not fit 32 bits (`3000000000`) is a float. Followed by text the value stays an unquoted string.
+- A hex literal without a sign keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`); `0X` works like `0x`. With a sign it is a float (`-0x10` is `-16.0`).
 - A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
   (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
   the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.
@@ -98,14 +106,13 @@ error: Target file "config.bin" already exists. Use --force to overwrite.
 A syntax error:
 
 ```text
-$ dayzmake rapify bad.cpp        # contains:  class A { x = 1
-In file bad.cpp:1: warning: String value "1" is not quoted properly. [unquoted-string]
-error: In line bad.cpp:2:
+$ dayzmake rapify bad.cpp        # contains:  class A { x = 1   (no final newline)
+error: In line bad.cpp:1:
 
-  
-  ^
+  class A { x = 1
+                 ^
 
-Unexpected token "\n", expected: one of ";", "__EXEC", "class", "delete", "}", ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']
+Unexpected token "\n", expected: one of ".", ";", ['0'..='9'], ['e' | 'E'], [_]
 ```
 
 See also: [derapify](#dayzmake-derapify), [preprocess](#dayzmake-preprocess), [Config files and the

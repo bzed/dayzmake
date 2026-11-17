@@ -44,6 +44,38 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   `-1e-999` (`80000000`, `-0.0`), `3.4028235e38` (`7f7fffff`) and an array `{1e999, -1e999, 1e-999}`. No error, empty log.
   `x = 1e999x;` stays the string `"1e999x"`. CfgConvert's own decode shows `inf`; the expected files hold dayzmake's
   form `1e999` / `-1e999`.
+- `cfgconvert/int_ovf*.cpp` and `define_open_comment.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup
+  (Proton 10.0, xvfb-run, work folder linked as `P:`, `Bin/CfgConvert` copied to `P:\tool`). `x = 99999999999999999999\ny = 1;\n`
+  (`int_ovf`) gives `x = 1e20;` (a float, not a string and not an error); `int_ovf2` adds `-99999999999999999999`
+  (`-1e20`), `w = 99999999999999999999.5;`, and an array `{99999999999999999999, 3000000000, -3000000000, 2147483647}` that gives
+  `{1e20, 3000000000.0, -3000000000.0, 2147483647}`. `#define X a /* b\ny = 2;\n` (`define_open_comment`) gives an empty
+  config, no error. Not committed: `x = 1 // c` and `y = 1;\nx = 2 \\\n// c` (no final newline) are rejected (no output file);
+  `m.cpp` = `#include "inc.hpp"\nz = 3;\n` with `inc.hpp` = `a = 1;\nb = 2` (no final newline) is accepted and gives
+  `a = 1; b = "2#line 1 ""P:\in\m.cpp"""; z = 3;` (CfgConvert glues its `#line` marker to the last value; dayzmake gives `b = 2;`). Re-checked 2026-11-17 with the include on line 3 (`y = 1;\nw = 2;\n#include "inc.hpp"\nz = 3;\n`): the marker is `#line 3`, so `#line <line of the include>` is right and `#line 1` above is correct, not an off-by-one.
+- `cfgconvert/int64*.cpp`, `hex_*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
+  Entries (`int64`: `a = 2147483647; b = 2147483648; c = -2147483649; d = 9223372036854775807; e = 9223372036854775808; f = 0xFFFFFFFF;
+  g = 0x100000000; h = 0x1FFFFFFFFF; j = -2147483648; k = -9223372036854775808; l = -9223372036854775809; m = 0x7FFFFFFF; n = 0x80000000`):
+  `a`, `j`, `m` subtype 2 (int32); `b`, `c`, `d`, `k` subtype 6 (8-byte little-endian i64); `e`, `l` subtype 1 (f32, 2^63 and -2^63);
+  `f` -1, `g` 0, `h` -1, `n` -2147483648, all subtype 2 (hex keeps its low 32 bits). `int64_arr` (`arr[]` of the same values): there is
+  no int64 element type; a decimal outside i32 is an element of type 1 (float: 2^31, -2^31, 2^63), a hex literal is type 2 with the low 32 bits.
+  `hex_long` (`p = 0x1FFFFFFFFFFFFFFFF;`) is -1, `hex_zeros` (`0x0000000000000000000001`) is 1, `hex_long_arr` the same in an array.
+  `hex_wide`: `-0x10` and `-0x1FFFFFFFFF` are subtype 1 floats (-16.0, -2^37), `0X10` is 16, `+2147483648` is subtype 6, `+5` is 5, `0x8000000000000000` is 0,
+  `0xFFFFFFFFFFFFFFFF` is -1. `hex_sign`: `+0x10` is the float 16.0, `-0x0` the float -0.0, `-0X10` -16.0, `00012` the int 12 (decimal), `-0` the int 0.
+  `hex_sign_arr`: the same rules in an array (`-0x10`, `+0x10` floats, `0X10` int, `+2147483648` float, `-0` int 0). `x = 0x;` is the string `"0x"`.
+  `hex_round*` (`x = -0x8000008000000001;`, `-0x1000001000000001;`, `-0x10000010000000001;`): f32 bits `df000000`, `dd800000`, `df800000`, so CfgConvert
+  rounds twice (to f64, then to f32); the single rounding would be `df000001`, `dd800001`, `df800001`. dayzmake does the same.
+  `__EVAL` of large numbers (not committed, dayzmake differs on purpose, #107): `x = __EVAL(2147483648); y = __EVAL(2^31); z = __EVAL(2^40);` gives
+  three floats (type 1) with imprecise values, `0x4effffe4`, `0x4effffe4`, `0x5307ffe7`; dayzmake keeps the exact floats and does not copy the low bits.
+- `cfgconvert/enum_f32_*.cpp`, `enum_hex_wide.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run), for #107. The expected
+  files are CfgConvert's table (its order is not source order, so `golden_enum_f32` compares the values sorted by name). Enum values go through f32:
+  `A = 2147483647`, `2147483648`, `4294967296`, `99999999999999999999`, `-2147483649` each followed by `B` give -2147483648 twice (`enum_f32_wide`);
+  `A = 16777217, B` gives 16777216 twice, `C = 2147483520, D` 2147483520 twice, `E = 2147483584, F` -2147483648 twice (`enum_f32_round`); `enum { A = 0x1FFFFFFFFF, B = 0X10 }`
+  gives -1 and 16, `a = A` staying the string `"A"` (`enum_hex_wide`); `enum_f32_hex`: `0x7FFFFFFF, B` gives -2147483648 twice (the wrapped hex goes through f32 too),
+  `0xFFFFFFFF, D` gives -1, 0, `0x01000001, F` 16777216 twice, `-0x1000001, H` -16777216, -16777215; `enum_f32_neg`: `-16777217, B` gives -16777216, -16777215,
+  `-2147483648, D` -2147483648 twice, `E = 16777216, F, G` 16777216, 16777216, 16777218 (the implicit value is the last explicit one plus the distance, added in f32,
+  not the previous value plus 1), `H = -2147483520, I, J` -2147483520 three times; `enum_f32_count`: `A = 16777216, B1..B6, C = 5, D, E` gives 16777216, 16777216,
+  16777218, 16777220, 16777220, 16777220, 16777222, then 5, 6, 7; `enum_f32_sat`: `A = 2147483648` followed by `B001..B200` gives -2147483648 up to `B064`, -2147483520
+  from `B065` to `B191`, -2147483392 from `B192` (the base is the converted i32, `-2147483648`, plus the distance in f32). dayzmake does the same.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`

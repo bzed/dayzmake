@@ -719,6 +719,7 @@ impl PBO {
     }
 
     /// Adds an entry, or replaces the data of the entry with the same name.
+    /// Replacing an existing entry also replaces its stored name bytes with the new name's.
     ///
     /// # Errors
     ///

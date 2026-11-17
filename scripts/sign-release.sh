@@ -13,9 +13,28 @@
 # there before the script ran) and the detached ASCII signatures SHA256SUMS.asc and SHA512SUMS.asc. It fails, and
 # leaves nothing behind in <dist-dir>, when a secret is missing, the key is expired or the passphrase is wrong. It uses a
 # private GNUPGHOME that is removed on exit, and passes the passphrase on a file descriptor, never on a command line.
-# At the end both signatures are verified in a second, fresh GNUPGHOME that holds only the published public key,
-# and the script fails when the signing key is not that key.
+# At the end both signatures are verified in a second, fresh GNUPGHOME that holds only the published public key
+# (GOODSIG and VALIDSIG of that key's fingerprint, see verify_signature), and the script fails when the signing key is
+# not that key.
 set -euo pipefail
+
+# verify_signature <gnupghome> <fingerprint> <signature> <file>: succeeds only when gpg reports exactly one signature
+# (one NEWSIG), a GOODSIG of the key id of <fingerprint> and a VALIDSIG of <fingerprint>, and none of EXPSIG, EXPKEYSIG,
+# REVKEYSIG, BADSIG or ERRSIG. The exit status and the "Good signature" text of gpg are not enough: gpg prints both, and
+# exits 0, for a key that has expired since; only GOODSIG means a good signature of a key that is neither expired nor
+# revoked. A file may hold several signatures, so every status line must belong to the one signature that is accepted.
+# gpg's own messages go to stderr.
+verify_signature() {
+    local status
+    status=$(gpg --homedir "$1" --batch --status-fd 1 --verify "$3" "$4") || return 1
+    [ "$(grep -c '^\[GNUPG:\] NEWSIG' <<<"$status")" -eq 1 ] &&
+        grep -q "^\[GNUPG:\] GOODSIG ${2: -16} " <<<"$status" &&
+        grep -q "^\[GNUPG:\] VALIDSIG $2 " <<<"$status" &&
+        ! grep -Eq '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ' <<<"$status"
+}
+
+# sourced (by scripts/test-sign-release.sh): only the functions are wanted
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 
 die() {
     echo "sign-release: $*" >&2
@@ -97,8 +116,8 @@ published=$(gpg --batch --with-colons --show-keys "$public_key" 2>"$gpg_err" | a
     die "the signing key ($fingerprint) is not the published key ($published in $public_key)"
 verify_all() {
     gpg --homedir "$verify_home" --batch --quiet --import "$public_key" &&
-        gpg --homedir "$verify_home" --batch --quiet --verify "$stage/SHA256SUMS.asc" "$stage/SHA256SUMS" &&
-        gpg --homedir "$verify_home" --batch --quiet --verify "$stage/SHA512SUMS.asc" "$stage/SHA512SUMS"
+        verify_signature "$verify_home" "$published" "$stage/SHA256SUMS.asc" "$stage/SHA256SUMS" &&
+        verify_signature "$verify_home" "$published" "$stage/SHA512SUMS.asc" "$stage/SHA512SUMS"
 }
 gpg_step "verifying the signatures with the published public key" verify_all
 

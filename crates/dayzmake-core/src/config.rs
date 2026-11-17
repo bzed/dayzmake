@@ -117,27 +117,68 @@ peg::parser! {
                 .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
         }
 
-        rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
+        /// The literal of an enum value: a sign, decimal digits or `0x` / `0X` hex of any length.
+        rule integer_text() -> &'input str = $((['-' | '+'])? (("0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+))
+
+        /// A literal `CfgConvert` stores as an integer: unsigned hex (any length, `0x` or `0X`) or a decimal.
+        rule int_literal() -> (usize, &'input str) = p:position!() t:$(("0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ((['-' | '+'])? ['0'..='9']+)) { (p, t) }
+
+        /// A signed hex literal (`-0x10`), which `CfgConvert` stores as a float.
+        rule signed_hex_text() -> &'input str = $(['-' | '+'] "0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+)
 
         /// An integer followed by the end of an entry; the terminator is checked first, like for floats
         /// (`99999999999x` stays an unquoted string).
-        rule integer_entry() -> i32 = i:integer_text() &entry_end() v:integer_value(i) { v }
+        rule integer_entry() -> i32 = i:int_literal() &entry_end() v:int_value(i) { v }
 
         /// An integer followed by the end of an array element.
-        rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
+        rule integer_element() -> i32 = i:int_literal() &(whitespace()? [',' | '}']) v:int_value(i) { v }
 
-        rule integer_value(at: (usize, &str)) -> i32 = {?
+        /// A signed hex literal followed by the end of an entry.
+        rule signed_hex_entry() -> f32 = t:signed_hex_text() &entry_end() { signed_hex_float(t) }
+
+        /// A signed hex literal followed by the end of an array element.
+        rule signed_hex_element() -> f32 = t:signed_hex_text() &(whitespace()? [',' | '}']) { signed_hex_float(t) }
+
+        /// A decimal literal that does not fit `i64`, which `CfgConvert` stores as a float (`1e20`); one that
+        /// fits is left to `int64_entry` and `integer_entry`.
+        rule huge_integer_text() -> (usize, &'input str) = quiet!{ p:position!() t:$((['-' | '+'])? ['0'..='9']+) {?
+            if t.parse::<i64>().is_err() { Ok((p, t)) } else { Err("an integer that fits 64 bits") }
+        } }
+
+        /// A decimal literal that fits `i64` but not `i32`, which `CfgConvert` stores as a 64-bit integer in an entry.
+        rule int64_text() -> i64 = quiet!{ t:$((['-' | '+'])? ['0'..='9']+) {?
+            match (t.parse::<i64>(), t.parse::<i32>()) {
+                (Ok(v), Err(_)) => Ok(v),
+                _ => Err("an integer between 32 and 64 bits"),
+            }
+        } }
+
+        /// A decimal literal that does not fit `i32`, in an array, where `CfgConvert` stores it as a float.
+        rule wide_integer_text() -> (usize, &'input str) = quiet!{ p:position!() t:$((['-' | '+'])? ['0'..='9']+) {?
+            if t.parse::<i32>().is_err() { Ok((p, t)) } else { Err("an integer that fits 32 bits") }
+        } }
+
+        rule huge_integer_entry() -> f32 = i:huge_integer_text() &entry_end() v:float_value(i) { v }
+
+        rule int64_entry() -> i64 = i:int64_text() &entry_end() { i }
+
+        rule wide_integer_element() -> f32 = i:wide_integer_text() &(whitespace()? [',' | '}']) v:float_value(i) { v }
+
+        /// An integer literal of an entry or array element: hex keeps its low 32 bits, as in `CfgConvert`.
+        /// A decimal one is always an `i32` here: wider ones are taken first by `huge_integer_entry` and
+        /// `int64_entry` (entries) or `wide_integer_element` (arrays).
+        rule int_value(at: (usize, &str)) -> i32 = {?
             let (pos, i) = at;
-            if i.contains("0x") {
-                i32::from_str_radix(&i.replace("0x", ""), 16)
-                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
-            } else {
-                i.parse::<i32>()
-                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
+            match hex_digits(i) {
+                Some(digits) => Ok(hex_wrapped(digits)),
+                // the error cannot fire (see above); it stays as a guard against a grammar change
+                None => i.parse::<i32>()
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" }),
             }
         }
 
-        rule integer() -> i32 = i:integer_text() v:integer_value(i) { v }
+        /// The value of an enum literal, as `CfgConvert` computes it: an `f32` (see `enum_literal_value`).
+        rule enum_number() -> f32 = t:integer_text() { enum_literal_value(t) }
 
         rule doublequoted_string() -> String = "\"" s:$(("\"\"" / !['"'] [_])*) "\"" {
             s.to_string().replace("\"\"", "\"")
@@ -192,13 +233,22 @@ peg::parser! {
 
         rule string() -> String = doublequoted_string() / singlequoted_string()
 
-        rule array_element(d: usize) -> ConfigArrayElement =
+        /// An element that is not an array. Kept out of `array_element`, whose frame is on the recursive
+        /// path of nested arrays and must stay small (see `plain_entry`).
+        rule scalar_element(d: usize) -> ConfigArrayElement =
             f:float_element() { ConfigArrayElement::FloatElement(f) } /
+            f:wide_integer_element() { ConfigArrayElement::FloatElement(f) } /
+            f:signed_hex_element() { ConfigArrayElement::FloatElement(f) } /
             i:integer_element() { ConfigArrayElement::IntElement(i) } /
-            a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
             v:eval_value(d) &(whitespace()? [',' | '}']) { v.into() } /
             s:unquoted_string_array() &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) }
+
+        /// An array is tried first: the other elements cannot start with `{` except an unquoted string,
+        /// which comes last.
+        rule array_element(d: usize) -> ConfigArrayElement =
+            a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
+            scalar_element(d)
 
         rule array_elements(d: usize) -> Vec<ConfigArrayElement> = array_element(d) ** (whitespace()? "," whitespace()?)
 
@@ -211,6 +261,9 @@ peg::parser! {
 
         rule var(d: usize) -> ConfigEntry =
             f:float_entry() { ConfigEntry::FloatEntry(f) } /
+            f:signed_hex_entry() { ConfigEntry::FloatEntry(f) } /
+            f:huge_integer_entry() { ConfigEntry::FloatEntry(f) } /
+            i:int64_entry() { ConfigEntry::Int64Entry(i) } /
             i:integer_entry() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
             v:eval_value(d) { v.into() }
@@ -238,19 +291,21 @@ peg::parser! {
             }))
         }
 
-        rule enum_value() -> (String, Option<i32>) = n:name() v:(whitespace()? "=" whitespace()? i:integer() { i })? { (n, v) }
+        rule enum_value() -> (String, Option<f32>) = n:name() v:(whitespace()? "=" whitespace()? i:enum_number() { i })? { (n, v) }
 
-        /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase.
+        /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase. The
+        /// values are computed in `f32` like `CfgConvert` does (`enum_literal_value`, `enum_f32_to_i32`).
         rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {?
-            let mut next: Option<i32> = Some(0);
+            let mut base = 0.0_f32;
+            // the first implicit value is 0, so the distance starts one below
+            let mut distance = -1.0_f32;
             let mut out = Vec::new();
             for (n, v) in v {
-                let value = match v {
-                    Some(value) => value,
-                    None => next.ok_or("an enum value that fits in 32 bits")?,
-                };
-                next = value.checked_add(1);
-                out.push((n.to_ascii_lowercase(), value));
+                match v {
+                    Some(explicit) => { base = enum_i32_to_f32(enum_f32_to_i32(explicit)); distance = 0.0; }
+                    None => distance += 1.0,
+                }
+                out.push((n.to_ascii_lowercase(), enum_f32_to_i32(base + distance)));
             }
             Ok(out)
         }
@@ -262,19 +317,26 @@ peg::parser! {
         rule var_item(d: usize) -> Item =
             e:var_entry(d) (whitespace()? (";" / &"}") / [' ' | '\t']* &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
-        rule entry(d: usize) -> Item =
+        /// The entries that are not classes. Kept out of `entry_or_exec`, whose frame is on the recursive path
+        /// (class, entries, entry_or_exec, class) and must stay small: a debug build gives every alternative of a
+        /// rule its own stack slots, and a 1 MiB stack (Windows) has to hold the deepest nesting (#108).
+        rule plain_entry(d: usize) -> Item =
             e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
-            e:class(d) whitespace()? (";" / &"}") { e } /
             e:(array_item(d) / var_item(d)) { e } /
             e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
-        rule entry_or_exec(d: usize) -> Item = exec_entry(d) { Item::Nothing } / entry(d)
+        /// A class is tried first, directly in `entry_or_exec`: `class` and `delete` cannot start an `enum`
+        /// block or `__EXEC`, so the order of the alternatives does not matter.
+        rule entry_or_exec(d: usize) -> Box<Item> =
+            e:class(d) whitespace()? (";" / &"}") { e } /
+            exec_entry(d) { Box::new(Item::Nothing) } /
+            e:plain_entry(d) { Box::new(e) }
 
         rule entries(d: usize) -> (Vec<(String, ConfigEntry)>, Vec<(String, i32)>) = v:(entry_or_exec(d) ** (whitespace()?)) {
             let mut entries = Vec::new();
             let mut enums = Vec::new();
             for item in v {
-                match item {
+                match *item {
                     Item::Entry(n, e, en) => { entries.push((n, e)); enums.extend(en); }
                     Item::Enums(en) => enums.extend(en),
                     Item::Nothing => {}
@@ -291,35 +353,35 @@ peg::parser! {
             n
         }
 
-        rule regular_class(d: usize) -> Item = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
+        rule regular_class(d: usize) -> Box<Item> = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
             let parent = p.unwrap_or_default();
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent,
                 is_external: false,
                 is_deletion: false,
                 entries: Some(e.0)
-            }), e.1)
+            }), e.1))
         }
 
-        rule external_class() -> Item = "class" whitespace()+ n:name() {
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+        rule external_class() -> Box<Item> = "class" whitespace()+ n:name() {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: true,
                 is_deletion: false,
                 entries: None
-            }), Vec::new())
+            }), Vec::new()))
         }
 
-        rule deleted_class() -> Item = "delete" whitespace()+ n:name() {
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+        rule deleted_class() -> Box<Item> = "delete" whitespace()+ n:name() {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: false,
                 is_deletion: true,
                 entries: None
-            }), Vec::new())
+            }), Vec::new()))
         }
 
-        rule class(d: usize) -> Item = regular_class(d) / external_class() / deleted_class()
+        rule class(d: usize) -> Box<Item> = regular_class(d) / external_class() / deleted_class()
 
         /// Parses a complete config: a sequence of entries until end of input.
         pub rule config() -> Config = whitespace()? e:entries(0) whitespace()? ![_] {
@@ -334,6 +396,82 @@ peg::parser! {
             }
         }
     }
+}
+
+/// The hex digits of an unsigned `0x` / `0X` literal.
+fn hex_digits(text: &str) -> Option<&str> {
+    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+}
+
+/// The low 32 bits of a hex literal of any length, as `CfgConvert` stores it (`0x1FFFFFFFFF` is `-1`).
+fn hex_wrapped(digits: &str) -> i32 {
+    let bits = digits
+        .chars()
+        .filter_map(|c| c.to_digit(16))
+        .fold(0_u32, |acc, d| {
+            // 4 bits per digit: the high bits fall off, which is the wrap-around wanted here
+            acc.wrapping_shl(4) | d
+        });
+    bits.cast_signed()
+}
+
+/// The `f32` an enum literal stands for in `CfgConvert`: unsigned hex keeps its low 32 bits, a signed hex
+/// literal is a float, a decimal is rounded to `f32` (`16777217` is `16777216`).
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the rounding of an i32 to f32 is what CfgConvert does"
+)]
+fn enum_literal_value(text: &str) -> f32 {
+    let unsigned = text.strip_prefix(['-', '+']).unwrap_or(text);
+    match (hex_digits(unsigned), unsigned.len() < text.len()) {
+        (Some(digits), false) => hex_wrapped(digits) as f32,
+        (Some(_), true) => signed_hex_float(text),
+        // the grammar only passes digits, so this parses; NaN converts to i32::MIN if it ever did not
+        (None, _) => text.parse::<f32>().unwrap_or(f32::NAN),
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "an i32 that came from an f32 is exact; the cast is only the type change back"
+)]
+fn enum_i32_to_f32(value: i32) -> f32 {
+    value as f32
+}
+
+/// An enum value from its `f32`, as `CfgConvert` converts it: a value outside `i32` (and NaN) is `i32::MIN`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value is in the i32 range, checked right here"
+)]
+fn enum_f32_to_i32(value: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value as i32
+    } else {
+        i32::MIN
+    }
+}
+
+/// The value of a signed hex literal (`-0x10`), which `CfgConvert` stores as a float. The magnitude is rounded
+/// to an f64 digit by digit and then to an f32, the double rounding `CfgConvert` shows: `-0x8000008000000001`,
+/// `-0x1000001000000001` and `-0x10000010000000001` give `0xDF000000`, `0xDD800000` and `0xDF800000` there
+/// (golden `hex_round*`, 2026-11-17), not the singly rounded `0xDF000001` and so on.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the f64 magnitude is rounded to the nearest f32, overflow is an infinity"
+)]
+fn signed_hex_float(text: &str) -> f32 {
+    let (negative, rest) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let magnitude = hex_digits(rest)
+        .unwrap_or_default()
+        .chars()
+        .filter_map(|c| c.to_digit(16))
+        .fold(0.0_f64, |acc, d| acc * 16.0 + f64::from(d));
+    let value = magnitude as f32;
+    if negative { -value } else { value }
 }
 
 /// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
@@ -441,6 +579,8 @@ pub enum ConfigEntry {
     FloatEntry(f32),
     /// Int entry
     IntEntry(i32),
+    /// 64-bit int entry (entry subtype 6): `CfgConvert` writes a decimal literal that fits `i64` but not `i32` this way
+    Int64Entry(i64),
     /// Array entry
     ArrayEntry(ConfigArray),
     /// Class entry
@@ -673,6 +813,7 @@ impl ConfigEntry {
             ConfigEntry::StringEntry(s) => s.len() + 3,
             ConfigEntry::FloatEntry(_f) => 6,
             ConfigEntry::IntEntry(_i) => 6,
+            ConfigEntry::Int64Entry(_i) => 10,
             ConfigEntry::ArrayEntry(a) => {
                 let len = 1
                     + compressed_int_len_of(a.elements.len())
@@ -796,6 +937,9 @@ impl ConfigClass {
                     ConfigEntry::IntEntry(i) => {
                         output.write_all(format!("{key} = {i};\n").as_bytes())?;
                     }
+                    ConfigEntry::Int64Entry(i) => {
+                        output.write_all(format!("{key} = {i};\n").as_bytes())?;
+                    }
                     ConfigEntry::ArrayEntry(a) => {
                         if a.is_expansion {
                             output.write_all(format!("{key}[] += ").as_bytes())?;
@@ -875,6 +1019,12 @@ impl ConfigClass {
                             output.write_cstring(name)?;
                             output.write_i32::<LittleEndian>(*i)?;
                             written += name.len() + 7;
+                        }
+                        ConfigEntry::Int64Entry(i) => {
+                            output.write_all(&[1, 6])?;
+                            output.write_cstring(name)?;
+                            output.write_i64::<LittleEndian>(*i)?;
+                            written += name.len() + 11;
                         }
                         ConfigEntry::ArrayEntry(a) => {
                             output.write_all(if a.is_expansion { &[5] } else { &[2] })?;
@@ -1018,6 +1168,11 @@ impl ConfigClass {
                     entries.push((
                         name,
                         ConfigEntry::IntEntry(input.read_i32::<LittleEndian>()?),
+                    ));
+                } else if subtype == 6 {
+                    entries.push((
+                        name,
+                        ConfigEntry::Int64Entry(input.read_i64::<LittleEndian>()?),
                     ));
                 } else {
                     return Err(error!("Unrecognized variable entry subtype: {}.", subtype));
@@ -1288,9 +1443,22 @@ impl Config {
 
         let mut ctx = EvalCtx::default();
         let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
+        // The line the parse failed on starts at `failed_line_start`. Warnings raised from there on are by
+        // the attempts that failed (`x = 1 // c` is tried as an unquoted string first), not about the
+        // input, so they are dropped; the ones from earlier lines are real and stay. One search for the
+        // line start, so the filter is linear in the number of warnings.
+        let failed_at = match (&ctx.error, &parsed) {
+            (Some((pos, _)), _) => Some(*pos),
+            (None, Err(pe)) => Some(pe.location.offset),
+            (None, Ok(_)) => None,
+        };
+        if let Some(at) = failed_at {
+            let before = preprocessed.get(..at).unwrap_or(&preprocessed);
+            let failed_line_start = before.rfind('\n').map_or(0, |i| i + 1);
+            found.0.retain(|w| w.0 < failed_line_start);
+        }
         let result = match ctx.error.take() {
-            // the warnings were raised by the fallback rules tried after the failed __EVAL/__EXEC
-            Some((pos, e)) => return Err(located_error(&info, &preprocessed, pos, &e)),
+            Some((pos, e)) => Err(located_error(&info, &preprocessed, pos, &e)),
             _ => ConfigParseErrorExt::format_error(parsed, &info, &preprocessed),
         };
 

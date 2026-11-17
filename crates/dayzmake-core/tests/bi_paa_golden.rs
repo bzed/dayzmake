@@ -83,6 +83,26 @@ fn bi_file(name: &str) -> (Vec<u8>, usize) {
     (bytes, pos)
 }
 
+/// The mipmap size: 3 bytes, little-endian, after the width and height.
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn mipmap_size(bytes: &[u8], hdr: usize) -> usize {
+    let [a, b, c] = bytes[hdr + 4..hdr + 7].try_into().unwrap();
+    let size = usize::from(a) | usize::from(b) << 8 | usize::from(c) << 16;
+    assert!(4 < size && size < 0x100_0000, "mipmap size {size}");
+    assert!(
+        hdr + 7 + size <= bytes.len(),
+        "mipmap size {size} past the file"
+    );
+    size
+}
+
+/// A size as 3 bytes, little-endian.
+fn u24_le(size: usize) -> [u8; 3] {
+    assert!(size < 0x100_0000);
+    let b = size.to_le_bytes();
+    [b[0], b[1], b[2]]
+}
+
 #[expect(clippy::unwrap_used, reason = "test helper")]
 fn read_error(bytes: Vec<u8>) -> String {
     Paa::read(&mut Cursor::new(bytes)).unwrap_err().to_string()
@@ -92,11 +112,11 @@ fn read_error(bytes: Vec<u8>) -> String {
 fn sixteen_bit_mipmap_without_checksum_is_an_error() {
     for name in FORMATS_16 {
         let (bytes, hdr) = bi_file(name);
-        let size = usize::from(bytes[hdr + 4]);
+        let size = mipmap_size(&bytes, hdr);
         let end = hdr + 7 + size;
         let mut cut = bytes[..hdr + 4].to_vec();
-        cut.push(u8::try_from(size - 4).unwrap());
-        cut.extend_from_slice(&bytes[hdr + 5..end - 4]);
+        cut.extend_from_slice(&u24_le(size - 4));
+        cut.extend_from_slice(&bytes[hdr + 7..end - 4]);
         cut.extend_from_slice(&bytes[end..]);
         let message = read_error(cut);
         assert!(
@@ -123,7 +143,7 @@ fn sixteen_bit_mipmap_with_lzo_bit_is_an_error() {
 fn sixteen_bit_mipmap_cut_in_the_data_is_an_error() {
     for name in FORMATS_16 {
         let (bytes, hdr) = bi_file(name);
-        let size = usize::from(bytes[hdr + 4]);
+        let size = mipmap_size(&bytes, hdr);
         let message = read_error(bytes[..hdr + 7 + size / 2].to_vec());
         assert!(
             message.contains("Truncated PAA mipmap."),

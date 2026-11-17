@@ -190,7 +190,7 @@ Files and lines that declare a class or enum; with cat the full source files, wi
 | `refresh` | boolean | no | Rebuild the cached index first. |
 | `target` | string | no | With cat: write the files to this file instead of returning them (cannot be combined with context or lines). |
 
-Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file (`target` together with `context` or `lines` is an error).
+Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file (`target` together with `context` or `lines`, or without `cat`, is an error).
 
 ### api_grep
 

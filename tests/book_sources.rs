@@ -488,25 +488,54 @@ fn every_warning_is_documented() {
     );
 }
 
+/// Targets of Markdown links in `lines` that are not absolute. Lines inside a fenced code block are code, not Markdown.
+fn relative_link_targets(lines: &[&str]) -> Vec<String> {
+    let mut bad = Vec::new();
+    let mut in_fence = false;
+    for line in lines {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        for part in line.split("](").skip(1) {
+            let Some((target, _)) = part.split_once(')') else {
+                continue;
+            };
+            let ok = ["http://", "https://", "mailto:", "#"]
+                .iter()
+                .any(|p| target.starts_with(p));
+            if !ok {
+                bad.push(target.to_string());
+            }
+        }
+    }
+    bad
+}
+
+#[test]
+fn relative_link_check_skips_fenced_code() {
+    let lines = [
+        "[abs](https://example.org) [rel](docs/a.md)",
+        "```",
+        "[bool]($s | Select-String -Quiet)",
+        "```",
+        "after [rel2](b.md)",
+    ];
+    assert_eq!(relative_link_targets(&lines), ["docs/a.md", "b.md"]);
+}
+
 #[test]
 fn included_readme_links_are_absolute() {
     let text = readme_text();
     let readme: Vec<&str> = text.lines().collect();
     let mut bad = Vec::new();
     for (start, end) in included_readme_ranges(&readme) {
-        for line in readme.iter().take(end).skip(start) {
-            for part in line.split("](").skip(1) {
-                let Some((target, _)) = part.split_once(')') else {
-                    continue;
-                };
-                let ok = ["http://", "https://", "mailto:", "#"]
-                    .iter()
-                    .any(|p| target.starts_with(p));
-                if !ok {
-                    bad.push(target.to_string());
-                }
-            }
-        }
+        bad.extend(relative_link_targets(
+            readme.get(start..end).unwrap_or_default(),
+        ));
     }
     assert!(
         bad.is_empty(),

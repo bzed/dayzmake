@@ -1,0 +1,7 @@
+p = -0x10;
+q = -0x1FFFFFFFFF;
+r = 0X10;
+s = +2147483648;
+t = +5;
+u = 0x8000000000000000;
+v = 0xFFFFFFFFFFFFFFFF;

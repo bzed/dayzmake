@@ -167,3 +167,83 @@ fn enum_duplicate_resolves_like_cfgconvert() {
         }
     }
 }
+
+/// An integer literal that does not fit `i64` is a float in `CfgConvert` (`1e20`), at a line end, before
+/// `;` and in an array; in an array a literal that does not fit `i32` is a float too (2026-11-17).
+#[test]
+fn golden_int_ovf() {
+    golden("int_ovf");
+    golden("int_ovf2");
+}
+/// `#define X a /* b` with the comment never closed: the rest of the file is the comment, the config is empty.
+#[test]
+fn golden_define_open_comment() {
+    golden("define_open_comment");
+}
+
+/// 64-bit integer entries (subtype 6) and the values around the `i32` and `i64` limits, as `CfgConvert`
+/// writes them (2026-11-17); arrays have no 64-bit element type, so those become floats.
+#[test]
+fn golden_int64() {
+    golden("int64");
+    golden("int64_arr");
+}
+
+/// Enum values go through f32 like in `CfgConvert` (#107, 2026-11-17): a literal is rounded to f32, a value outside
+/// i32 is `i32::MIN`, and an implicit value is the explicit one before it plus the distance, added in f32. The
+/// table order differs (`CfgConvert`'s is not source order), so the values are compared sorted by name.
+#[test]
+fn golden_enum_f32() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/cfgconvert");
+    for name in [
+        "enum_f32_wide",
+        "enum_f32_round",
+        "enum_f32_hex",
+        "enum_f32_neg",
+        "enum_f32_count",
+        "enum_f32_sat",
+        "enum_hex_wide",
+    ] {
+        let sorted = |config: &Config| {
+            let mut values = config.enum_values().to_vec();
+            values.sort();
+            values
+        };
+        let bi = std::fs::read(dir.join(format!("{name}.bin"))).unwrap();
+        let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+        // CfgConvert's table order is the one of the `.expected.cpp`: no sorting here.
+        let expected = std::fs::read_to_string(dir.join(format!("{name}.expected.cpp"))).unwrap();
+        assert_eq!(
+            bi.to_string().unwrap(),
+            expected,
+            "{name} (CfgConvert .bin)"
+        );
+        let src = std::fs::read_to_string(dir.join(format!("{name}.cpp"))).unwrap();
+        let ours = Config::from_string(src, None, &Vec::new(), &mut Warnings::new()).unwrap();
+        assert_eq!(sorted(&ours), sorted(&bi), "{name}");
+        // and once through our own writer
+        let mut written = Cursor::new(Vec::new());
+        ours.write_rapified(&mut written).unwrap();
+        written.set_position(0);
+        let reread = Config::read_rapified(&mut written).unwrap();
+        assert_eq!(sorted(&reread), sorted(&bi), "{name} (round trip)");
+    }
+}
+
+/// Hex literals over 32 bits keep the low 32 bits; signed ones are floats (2026-11-17).
+#[test]
+fn golden_hex_wide() {
+    for name in [
+        "hex_wide",
+        "hex_sign",
+        "hex_sign_arr",
+        "hex_long",
+        "hex_long_arr",
+        "hex_zeros",
+        "hex_round",
+        "hex_round2",
+        "hex_round3",
+    ] {
+        golden(name);
+    }
+}

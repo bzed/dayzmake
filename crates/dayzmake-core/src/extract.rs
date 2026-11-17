@@ -187,9 +187,16 @@ fn check_target(
                 (Ok(outer), Ok(inner)) => inner.starts_with(outer),
                 _ => true,
             };
-            let inside = match (&outer, source.canonicalize()) {
-                (Ok(outer), Ok(source)) => outer.starts_with(source),
-                _ => true,
+            // `find_pbos` has just listed the source, so this fails only if it vanishes in between
+            let Ok(resolved_source) = source.canonicalize() else {
+                return Err(error!(
+                    "Cannot resolve the source folder \"{}\".",
+                    printable(&source.display().to_string())
+                ));
+            };
+            let inside = match &outer {
+                Ok(outer) => outer.starts_with(resolved_source),
+                Err(_) => true,
             };
             if inside {
                 return Err(error!(
@@ -216,10 +223,14 @@ fn check_target(
                     "Invalid target folder \"{shown}\": cannot resolve \"..\" after a folder that does not exist."
                 ));
             };
-            if source
-                .canonicalize()
-                .map_or(true, |source| resolved.starts_with(source))
-            {
+            // `find_pbos` has just listed the source, so this fails only if it vanishes in between
+            let Ok(source) = source.canonicalize() else {
+                return Err(error!(
+                    "Cannot resolve the source folder \"{}\".",
+                    printable(&source.display().to_string())
+                ));
+            };
+            if resolved.starts_with(source) {
                 return Err(error!(
                     "Target folder \"{shown}\" is inside the source; refusing to replace it."
                 ));
@@ -319,17 +330,20 @@ struct Run<'a> {
 
 impl Run<'_> {
     /// The file already written that a new file at `relative` (lowercase `key`) cannot coexist with: one at
-    /// a parent folder's path, or one below `relative` as a folder. Its path and the index of its PBO.
-    fn clash(&self, relative: &Path, key: &str) -> Option<(PathBuf, usize)> {
+    /// a parent folder's path, or one below `relative` as a folder. Its path, the index of its PBO and
+    /// whether it is the file at a parent folder (the new entry needs a folder there).
+    fn clash(&self, relative: &Path, key: &str) -> Option<(PathBuf, usize, bool)> {
         for parent in relative.ancestors().skip(1) {
             let parent = parent.to_string_lossy().to_lowercase();
             if let Some((path, owner)) = self.owners.get(&parent) {
-                return Some((path.clone(), *owner));
+                return Some((path.clone(), *owner, true));
             }
         }
         let below = format!("{key}{}", std::path::MAIN_SEPARATOR);
         let (found, (path, owner)) = self.owners.range(below.clone()..).next()?;
-        found.starts_with(&below).then(|| (path.clone(), *owner))
+        found
+            .starts_with(&below)
+            .then(|| (path.clone(), *owner, false))
     }
 
     /// Warns and returns `true` if the file at `relative` clashes with one written earlier, see [`Run::clash`].
@@ -340,20 +354,33 @@ impl Run<'_> {
         key: &str,
         warnings: &mut dyn WarningSink,
     ) -> bool {
-        let Some((other, owner)) = self.clash(relative, key) else {
+        let Some((other, owner, other_is_file)) = self.clash(relative, key) else {
             return false;
         };
         let pbo_name = |i: usize| self.names.get(i).map_or("?", String::as_str);
-        warnings.warn(Warning::new(
-            Some("extract-path-clash"),
+        // shown with `/` on every platform; the keys stay native paths
+        let shown = |p: &Path| {
+            let parts: Vec<_> = p
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect();
+            printable(&parts.join("/"))
+        };
+        let (pbo, other_pbo) = (printable(pbo_name(index)), printable(pbo_name(owner)));
+        // the existing file is at a parent folder of the new entry, or the new entry is a file where it has a folder
+        let message = if other_is_file {
             format!(
-                "Skipping \"{}\" of {}: it is a file where {} has a folder, or a folder where it has a file (\"{}\"); keeping the first.",
-                printable(&relative.to_string_lossy()),
-                printable(pbo_name(index)),
-                printable(pbo_name(owner)),
-                printable(&other.to_string_lossy()),
-            ),
-        ));
+                "Skipping \"{}\" from {pbo}: it needs \"{}\" as a folder, but {other_pbo} has a file there.",
+                shown(relative),
+                shown(&other),
+            )
+        } else {
+            format!(
+                "Skipping \"{}\" from {pbo}: it is a file, but {other_pbo} has a folder there.",
+                shown(relative),
+            )
+        };
+        warnings.warn(Warning::new(Some("extract-path-clash"), message));
         true
     }
 

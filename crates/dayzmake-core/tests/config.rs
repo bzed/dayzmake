@@ -89,16 +89,21 @@ fn garbage_is_an_error_not_a_panic() {
     assert!(Config::read_rapified(&mut garbage).is_err());
 }
 
-/// Integer literals that do not fit an i32 are an error, not a panic.
+/// A wide hex enum value keeps its low 32 bits, an out of range decimal is `i32::MIN` (`CfgConvert`, #107); neither
+/// is an error or a panic.
 #[test]
-fn integer_overflow_is_an_error() {
-    let result = Config::from_string(
-        String::from("x = 0x1FFFFFFFF;\n"),
-        None,
-        &Vec::new(),
-        &mut Warnings::new(),
+fn wide_enum_values_are_not_an_error() {
+    let c =
+        parse("enum { X = 0x1FFFFFFFF, Y = 0X10, Z = 99999999999999999999, W = -2147483649 };\n");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("x".to_string(), -1),
+            ("y".to_string(), 16),
+            ("z".to_string(), i32::MIN),
+            ("w".to_string(), i32::MIN)
+        ]
     );
-    assert!(result.is_err());
 }
 
 /// The 16 byte header of a rapified config; the root body follows.
@@ -652,20 +657,31 @@ fn enum_table_ends_at_the_first_name_that_is_no_identifier() {
     assert_eq!(c.to_string().unwrap(), "");
 }
 
+/// `CfgConvert` computes enum values in f32: `i32::MAX` is 2^31 there, which converts to `i32::MIN`, and so does
+/// the implicit value after it (golden `enum_f32_wide`).
 #[test]
-fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
-    let c = parse("enum { A = 2147483647 };");
-    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
-    let c = parse("enum { A = 0x7FFFFFFF };");
-    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
-    assert!(
-        Config::from_string(
-            "enum { A = 2147483647, B };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+fn enum_values_pass_through_f32() {
+    let c = parse("enum { A = 2147483647, B, C = 0x7FFFFFFF, D };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("a".to_string(), i32::MIN),
+            ("b".to_string(), i32::MIN),
+            ("c".to_string(), i32::MIN),
+            ("d".to_string(), i32::MIN)
+        ]
+    );
+    // the implicit value is the explicit one plus the distance, added in f32: 16777216 + 2 is exact
+    let c = parse("enum { A = 16777217, B, C, D = 5, E };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("a".to_string(), 16_777_216),
+            ("b".to_string(), 16_777_216),
+            ("c".to_string(), 16_777_218),
+            ("d".to_string(), 5),
+            ("e".to_string(), 6)
+        ]
     );
 }
 
@@ -868,24 +884,15 @@ fn overflowing_integer_followed_by_text_stays_a_string() {
 }
 
 #[test]
-fn an_overflowing_integer_alone_is_still_an_error() {
-    assert!(
-        Config::from_string(
-            "class A { a = 99999999999; };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+fn an_integer_beyond_32_bits_alone_is_a_64_bit_entry_or_an_array_float() {
+    assert_eq!(
+        text_of("class A { a = 99999999999; };"),
+        "class A {\n    a = 99999999999;\n};\n"
     );
-    assert!(
-        Config::from_string(
-            "class A { a[] = {99999999999}; };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+    // in an array `CfgConvert` makes it a float (`overflowing_integer_literal_is_a_float_like_cfgconvert`)
+    assert_eq!(
+        text_of("class A { a[] = {99999999999}; };"),
+        "class A {\n    a[] = {100000000000.0};\n};\n"
     );
 }
 
@@ -954,15 +961,11 @@ fn read_err(src: &str, path: &str) -> String {
 fn grammar_action_errors_carry_file_and_line() {
     let cases = [
         (
-            "class A {\n  y = 1;\n  x = 99999999999999999999;\n};",
+            "class A {\n  y = 1;\n  x = __EVAL(1/0);\n};",
             "3",
-            "Invalid integer",
+            "division by zero",
         ),
-        (
-            "class A {\n  x = 99999999999999999999;\n};",
-            "2",
-            "Invalid integer",
-        ),
+        ("class A {\n  x = __EVAL(1/0);\n};", "2", "division by zero"),
         (
             "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
             "4",
@@ -970,9 +973,9 @@ fn grammar_action_errors_carry_file_and_line() {
         ),
         // CRLF line ends count the same
         (
-            "class A {\r\n  y = 1;\r\n  x = 99999999999999999999;\r\n};",
+            "class A {\r\n  y = 1;\r\n  x = __EVAL(1/0);\r\n};",
             "3",
-            "Invalid integer",
+            "division by zero",
         ),
     ];
     for (src, line, what) in cases {
@@ -1050,16 +1053,11 @@ fn comment_or_directive_on_the_last_line_without_line_end() {
     assert_eq!(text_of("x = 1\r// c"), "x = 1;\n");
 }
 
-/// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
+/// A last entry without `;` keeps its integer type at the line end, LF and CRLF: 2147483648 is a 64-bit integer.
 #[test]
-fn last_entry_without_semicolon_integer_overflow_is_an_error() {
-    for src in [
-        "y = 1;\nx = 99999999999999999999\n",
-        "y = 1;\r\nx = 99999999999999999999\r\n",
-    ] {
-        let err = read_err(src, "cfg.cpp");
-        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
-        assert!(err.contains("Invalid integer"), "{err:?}");
+fn last_entry_without_semicolon_is_a_64_bit_integer() {
+    for src in ["y = 1;\nx = 2147483648\n", "y = 1;\r\nx = 2147483648\r\n"] {
+        assert_eq!(text_of(src), "y = 1;\nx = 2147483648;\n", "{src:?}");
     }
 }
 
@@ -1123,4 +1121,318 @@ fn last_entry_before_a_continued_define_or_open_comment_keeps_its_type() {
     }
     assert_eq!(text_of("x = 1\n#define A \\\n 2"), "x = 1;\n");
     assert_eq!(text_of("x = 1\n/* c\ny = 2;"), "x = 1;\n");
+}
+
+/// An integer literal that does not fit `i64` is a float in `CfgConvert` (`golden_int_ovf`), at a line end
+/// and before `;`; in an array so is one that does not fit `i32`. One followed by text stays a string.
+#[test]
+fn overflowing_integer_literal_is_a_float_like_cfgconvert() {
+    assert_eq!(
+        text_of("x = 99999999999999999999\ny = 1;\n"),
+        "x = 1e20;\ny = 1;\n"
+    );
+    assert_eq!(text_of("x = 99999999999999999999;"), "x = 1e20;\n");
+    assert_eq!(text_of("x = -99999999999999999999;"), "x = -1e20;\n");
+    assert_eq!(
+        text_of("x[] = {99999999999999999999, 3000000000, 2147483647};"),
+        "x[] = {1e20, 3000000000.0, 2147483647};\n"
+    );
+    assert_eq!(
+        text_of("x = 99999999999999999999x;"),
+        "x = \"99999999999999999999x\";\n"
+    );
+}
+
+/// `x = 1 // c` and `x = 2 \` plus a comment line, both without a final newline: `CfgConvert` rejects them
+/// (2026-11-17), so does dayzmake, naming the line.
+#[test]
+fn entry_followed_by_a_comment_at_the_end_of_the_file_is_an_error() {
+    let err = read_err("x = 1 // c", "cfg.cpp");
+    assert!(err.starts_with("In line cfg.cpp:1:\n\n  "), "{err:?}");
+    let err = read_err("y = 1;\nx = 2 \\\n// c", "cfg.cpp");
+    assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
+}
+
+/// The last line of an included file without a line end is not an unterminated entry: `CfgConvert` accepts
+/// `a = 1;\nb = 2` from an include followed by `z = 3;` (it glues its own `#line` marker to the value, so
+/// its `b` is the string `2#line ...`, which dayzmake does not copy). This pins the lenient result.
+#[test]
+fn include_without_final_newline_is_accepted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("inc.hpp"), "a = 1;\nb = 2").unwrap();
+    let main = dir.path().join("m.cpp");
+    std::fs::write(&main, "#include \"inc.hpp\"\nz = 3;\n").unwrap();
+    let config = Config::read(
+        &mut std::fs::File::open(&main).unwrap(),
+        Some(main),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(config.to_string().unwrap(), "a = 1;\nb = 2;\nz = 3;\n");
+}
+
+fn unquoted_lines(src: &str) -> (bool, Vec<u32>) {
+    let mut warnings = Warnings::new();
+    let ok = Config::from_string(
+        src.to_string(),
+        Some(std::path::PathBuf::from("cfg.cpp")),
+        &[],
+        &mut warnings,
+    )
+    .is_ok();
+    let lines = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.name == Some("unquoted-string"))
+        .filter_map(|w| w.line)
+        .collect();
+    (ok, lines)
+}
+
+/// A parse error does not bring the `unquoted-string` warning of the failed attempt on its own line
+/// (`x = 1 // c` was tried as an unquoted string first), but keeps the real ones from earlier lines.
+#[test]
+fn parse_error_drops_stray_warnings_of_its_own_line_only() {
+    assert_eq!(unquoted_lines("x = 1 // c"), (false, vec![]));
+    assert_eq!(unquoted_lines("y = 1;\nx = 2 \\\n// c"), (false, vec![]));
+    assert_eq!(
+        unquoted_lines("a = abc;\nb = 2;\nc = 1 // c"),
+        (false, vec![1])
+    );
+    assert_eq!(
+        unquoted_lines("a = abc;\nb = 2;\nc = ;;\n"),
+        (false, vec![1])
+    );
+    // without an error every warning stays
+    assert_eq!(unquoted_lines("a = abc;\nb = def;\n"), (true, vec![1, 2]));
+}
+
+/// The warning filter of a failed parse is linear: many warning lines before one error finish at once
+/// (it was quadratic, 20,000 lines took 47 s).
+#[test]
+fn parse_error_after_many_warnings_is_fast() {
+    let mut src = "a = b;\n".repeat(20_000);
+    src.push_str("c = ;;\n");
+    let start = std::time::Instant::now();
+    let (ok, lines) = unquoted_lines(&src);
+    assert!(!ok);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(lines.len() <= 20_000);
+}
+
+/// An error in an included file drops the warning of its own line and keeps the real one of the parent's
+/// earlier line; and the reverse: a warning in the include stays when the error is in the parent.
+#[test]
+fn parse_error_and_warnings_across_an_include() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let run = |parent: &str, inc: &str| {
+        std::fs::write(dir.path().join("inc.hpp"), inc).unwrap();
+        let main = dir.path().join("m.cpp");
+        std::fs::write(&main, parent).unwrap();
+        let mut warnings = Warnings::new();
+        let ok = Config::read(
+            &mut std::fs::File::open(&main).unwrap(),
+            Some(main),
+            &[],
+            &mut warnings,
+        )
+        .is_ok();
+        let msgs: Vec<String> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("unquoted-string"))
+            .map(|w| w.message.clone())
+            .collect();
+        (ok, msgs)
+    };
+    // error in the include, real warning (abc) in the parent before it
+    let (ok, msgs) = run("a = abc;\n#include \"inc.hpp\"\n", "x = 1 // c\ny = ;;\n");
+    assert!(!ok);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("abc"), "{msgs:?}");
+    // real warning in the include, error in the parent after it
+    let (ok, msgs) = run("#include \"inc.hpp\"\nc = ;;\n", "a = def;\n");
+    assert!(!ok);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("def"), "{msgs:?}");
+}
+
+/// The entry subtype byte of the first entry of a rapified config with a single top-level entry named
+/// `x`: header (16 bytes), parent `\0`, count, entry type, subtype.
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn first_subtype(config: &Config) -> u8 {
+    config.to_cursor().unwrap().into_inner()[16 + 1 + 1 + 1]
+}
+
+/// A decimal literal that fits `i64` but not `i32` is a 64-bit integer entry (subtype 6), as in `CfgConvert`
+/// (`golden_int64`); one that fits `i32` stays subtype 2, one beyond `i64` is a float (subtype 1).
+#[test]
+fn decimal_entries_pick_the_subtype_like_cfgconvert() {
+    for (lit, subtype) in [
+        ("2147483647", 2),
+        ("-2147483648", 2),
+        ("2147483648", 6),
+        ("-2147483649", 6),
+        ("+2147483648", 6),
+        ("9223372036854775807", 6),
+        ("-9223372036854775808", 6),
+        ("9223372036854775808", 1),
+        ("-9223372036854775809", 1),
+    ] {
+        let config = parse(&format!("x = {lit};"));
+        assert_eq!(first_subtype(&config), subtype, "{lit}");
+        // the same at a line end
+        let config = parse(&format!("x = {lit}\n"));
+        assert_eq!(first_subtype(&config), subtype, "{lit} at a line end");
+    }
+    let config = parse("x = 2147483648; y = -9223372036854775808;");
+    let ConfigEntry::Int64Entry(x) = entry_top(&config, "x") else {
+        panic!("not an Int64Entry");
+    };
+    assert_eq!(*x, 2_147_483_648);
+    assert!(matches!(
+        entry_top(&config, "y"),
+        ConfigEntry::Int64Entry(i64::MIN)
+    ));
+    assert_eq!(
+        config.to_string().unwrap(),
+        "x = 2147483648;\ny = -9223372036854775808;\n"
+    );
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn entry_top<'a>(config: &'a Config, name: &str) -> &'a ConfigEntry {
+    config.root().get(name).unwrap()
+}
+
+/// Derapify writes a literal that reads back to the same subtype: text, rapify, derapify, rapify is
+/// bit for bit the same.
+#[test]
+fn int64_entries_round_trip_bit_for_bit() {
+    let first = parse("a = 2147483648; b = -2147483649; c = 9223372036854775807; d = 1;\n");
+    let bytes = first.to_cursor().unwrap().into_inner().into_vec();
+    let decoded = Config::read_rapified(&mut Cursor::new(bytes.clone())).unwrap();
+    assert!(matches!(
+        entry_top(&decoded, "a"),
+        ConfigEntry::Int64Entry(2_147_483_648)
+    ));
+    let again = parse(&decoded.to_string().unwrap());
+    assert_eq!(again.to_cursor().unwrap().into_inner().into_vec(), bytes);
+}
+
+/// A hex literal without a sign keeps its low 32 bits (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`), at any
+/// length and with `0X`; with a sign it is a float. All as `CfgConvert` writes it (`golden_hex_*`).
+#[test]
+fn hex_literals_follow_cfgconvert() {
+    assert_eq!(
+        text_of(
+            "a = 0xFFFFFFFF; b = 0x100000000; c = 0x1FFFFFFFFF; d = 0x1FFFFFFFFFFFFFFFF; e = 0X10; f = 0x0000000000000000000001;"
+        ),
+        "a = -1;\nb = 0;\nc = -1;\nd = -1;\ne = 16;\nf = 1;\n"
+    );
+    assert_eq!(
+        text_of("a = -0x10; b = +0x10; c = -0X10; d = -0x0;"),
+        "a = -16.0;\nb = 16.0;\nc = -16.0;\nd = -0.0;\n"
+    );
+    assert_eq!(
+        text_of("x[] = {0x1FFFFFFFFF, 0X10, -0x10, +0x10, 0x100000000};"),
+        "x[] = {-1, 16, -16.0, 16.0, 0};\n"
+    );
+    assert_eq!(text_of("a = 0x;"), "a = \"0x\";\n");
+}
+
+/// Reading entry subtype 6, and rejecting a cut-short one with an error.
+#[test]
+fn rapified_int64_entry_is_read_and_a_short_one_is_an_error() {
+    let bytes = parse("x = 4294967296;")
+        .to_cursor()
+        .unwrap()
+        .into_inner()
+        .into_vec();
+    let decoded = Config::read_rapified(&mut Cursor::new(bytes.clone())).unwrap();
+    assert!(matches!(
+        entry_top(&decoded, "x"),
+        ConfigEntry::Int64Entry(4_294_967_296)
+    ));
+    // name `x\0` then 8 value bytes: cut after 7 of them
+    let end = 16 + 1 + 1 + 1 + 1 + 2 + 7;
+    let err = Config::read_rapified(&mut Cursor::new(&bytes[..end])).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
+}
+
+/// The committed fuzz seed with subtype 6 reads, and its cut-short copy is an error, not a panic.
+#[test]
+fn int64_fuzz_seeds() {
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/config_rapified");
+    let whole = std::fs::read(dir.join("int64-entries.bin")).unwrap();
+    let config = Config::read_rapified(&mut Cursor::new(whole)).unwrap();
+    assert!(matches!(
+        entry_top(&config, "d"),
+        ConfigEntry::Int64Entry(i64::MAX)
+    ));
+    let cut = std::fs::read(dir.join("int64-truncated.bin")).unwrap();
+    let err = Config::read_rapified(&mut Cursor::new(cut)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
+}
+
+/// A writer that fails once `left` bytes are written.
+struct FailAfter {
+    left: usize,
+}
+
+impl std::io::Write for FailAfter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.left == 0 {
+            return Err(std::io::Error::other("disk full"));
+        }
+        let n = buf.len().min(self.left);
+        self.left -= n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// An output that fails at any byte is an error, never a panic or a silent short write.
+#[test]
+fn write_reports_an_output_failure_at_every_position() {
+    let src = "\
+class A;
+class B: A {};
+class C: A {
+    s = \"a\"\"b\";
+    i = 5;
+    big = 5000000000;
+    f = 1.5;
+    a[] = {1, 2.5, \"x\", {3}};
+    a[] += {4};
+    class D { x = 1; };
+};
+delete E;
+enum { X = 1, Y };
+";
+    let config =
+        Config::from_string(src.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap();
+    let mut text = Vec::new();
+    config.write(&mut text).unwrap();
+    let mut rapified = Vec::new();
+    config.write_rapified(&mut rapified).unwrap();
+    for (len, rapify) in [(text.len(), false), (rapified.len(), true)] {
+        for left in 0..len {
+            let mut out = FailAfter { left };
+            let result = if rapify {
+                config.write_rapified(&mut out)
+            } else {
+                config.write(&mut out)
+            };
+            assert!(result.is_err(), "rapify={rapify} left={left}");
+        }
+    }
 }

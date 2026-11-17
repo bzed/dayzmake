@@ -1195,3 +1195,19 @@ fn non_finite_floats_are_shown_as_derapify_writes_them() {
     assert_eq!(prop(&v, "down")["value"], "-1e999");
     assert_eq!(prop(&v, "ok")["value"], 0.5);
 }
+
+/// A 64-bit integer entry (subtype 6, which `CfgConvert` writes for `2147483648`) shows as a JSON number.
+#[test]
+fn a_64_bit_integer_property_is_a_json_number() {
+    let w = World::new();
+    write(
+        &w.game.join("Addons/big.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class Big { big = 2147483648; small = 1; }; };",
+            true,
+        ),
+    );
+    let v = json(&w, "CfgVehicles/Big", &[]);
+    assert_eq!(prop(&v, "big")["value"], 2_147_483_648_i64, "{v}");
+    assert_eq!(prop(&v, "small")["value"], 1, "{v}");
+}
