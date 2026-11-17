@@ -75,17 +75,85 @@ fn absolute_and_drive_includes_are_rejected_without_reading() {
 }
 
 #[test]
-fn dotdot_include_is_rejected() {
+fn dotdot_inside_the_pbo_resolves_for_both_separators() {
+    let list = [("macros.hpp", "m = 1;\n"), ("a\\b\\config.cpp", "")];
+    for path in [
+        "..\\..\\macros.hpp",
+        "../../macros.hpp",
+        "..\\../macros.hpp",
+        "..\\c\\..\\..\\macros.hpp",
+        "..\\..\\MACROS.HPP",
+    ] {
+        let input = format!("#include \"{path}\"\n");
+        let out =
+            run("x", &list, "a\\b\\config.cpp", &input).unwrap_or_else(|e| panic!("{path}: {e}"));
+        assert_eq!(out.trim(), "m = 1;", "{path}");
+    }
+}
+
+#[test]
+fn dotdot_that_leaves_the_pbo_root_is_rejected() {
     let dir = tempdir().expect("tempdir");
     fs::write(dir.path().join("secret.hpp"), "token = 1;\n").expect("write");
-    let err = run(
-        "x",
-        &[("a\\config.cpp", "")],
-        "a\\config.cpp",
-        "#include \"..\\secret.hpp\"\n",
-    )
-    .expect_err("rejected");
-    assert!(err.contains("not allowed"), "{err}");
+    let list = [("secret.hpp", "inside = 1;\n"), ("a\\config.cpp", "")];
+    for (origin, path) in [
+        ("config.cpp", "..\\secret.hpp"),
+        ("a\\config.cpp", "..\\..\\secret.hpp"),
+        ("a\\config.cpp", "sub\\..\\..\\..\\secret.hpp"),
+        ("a\\config.cpp", "../..\\secret.hpp"),
+        ("a\\config.cpp", "..\\..\\..\\..\\etc\\passwd"),
+    ] {
+        let input = format!("#include \"{path}\"\n");
+        let err = run("x", &list, origin, &input).expect_err(path);
+        assert!(err.contains("not allowed"), "{path}: {err}");
+    }
+}
+
+#[test]
+fn an_empty_component_and_a_leading_slash_are_rejected() {
+    let list = [
+        ("a.hpp", "a = 1;\n"),
+        ("sub\\a.hpp", "a = 2;\n"),
+        ("sub\\config.cpp", ""),
+    ];
+    for path in [
+        "sub\\\\a.hpp",
+        "sub//a.hpp",
+        "..\\\\a.hpp",
+        "/a.hpp",
+        "sub\\",
+    ] {
+        let input = format!("#include \"{path}\"\n");
+        let err = run("x", &list, "sub\\config.cpp", &input).expect_err(path);
+        assert!(err.contains("not allowed"), "{path}: {err}");
+    }
+}
+
+#[test]
+fn an_include_of_an_unreadable_entry_names_the_reason() {
+    let folders = IncludeFolders::new(Vec::new()).with_memory(
+        MemoryIncludes::new("x", files(&[("b.hpp", "b = 1;\n")])).with_unreadable(vec![(
+            "Sub\\a.hpp".to_string(),
+            "it is truncated".to_string(),
+        )]),
+    );
+    let go = |input: &str| {
+        preprocess_in(
+            input.to_string(),
+            Some(PathBuf::from("sub\\config.cpp")),
+            &folders,
+            &mut Warnings::new(),
+        )
+        .map_err(|e| e.to_string())
+    };
+    let err = go("#include \"a.hpp\"\n").expect_err("unreadable");
+    assert!(
+        err.contains("cannot be read") && err.contains("it is truncated"),
+        "{err}"
+    );
+    assert!(!err.contains("not found"), "{err}");
+    let err = go("#include \"c.hpp\"\n").expect_err("missing");
+    assert!(err.contains("not found"), "{err}");
 }
 
 #[test]

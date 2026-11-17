@@ -671,6 +671,141 @@ fn includes_come_from_the_pbo_only() {
     assert!(out.contains("found = 7"), "{out}{err}");
 }
 
+/// A mod PBO with `config_name` (text), then `extra` entries, the last of which loses its final bytes.
+fn damaged_mod(w: &World, config_name: &str, text: &str, extra: &[(&str, &[u8])]) -> String {
+    let dir = w.home.join("@Dmg");
+    let mut entries: Vec<(&str, &[u8])> = vec![(config_name, text.as_bytes())];
+    entries.extend_from_slice(extra);
+    let mut bytes = support::raw_pbo(&entries, &[("prefix", "dmg")]);
+    bytes.truncate(bytes.len() - 26);
+    write(&dir.join("addons/d.pbo"), &bytes);
+    dir.to_string_lossy().into_owned()
+}
+
+const PATCHES: &str = "class CfgPatches { class D_Patch { requiredAddons[] = {}; }; };\n";
+
+/// A damaged includable does not drop the PBO's configs (#99): it is skipped with a warning.
+#[test]
+fn a_damaged_includable_is_skipped_with_a_warning() {
+    let w = World::new();
+    let text = format!("{PATCHES}class Fine {{ v = 1; }};\n");
+    let m = damaged_mod(
+        &w,
+        "config.cpp",
+        &text,
+        &[(
+            "zz_readme.txt",
+            b"some long readme text, longer than the cut",
+        )],
+    );
+    let (code, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("v = 1"), "{out}{err}");
+    assert!(err.contains("api-config-include-unreadable"), "{err}");
+    assert!(
+        err.contains("zz_readme.txt") && err.contains("truncated"),
+        "{err}"
+    );
+}
+
+/// An include of a damaged entry reports the read error, not "not found".
+#[test]
+fn an_include_of_a_damaged_entry_names_the_read_error() {
+    let w = World::new();
+    let text = format!(
+        "{PATCHES}class Fine {{ v = 1; }};\nclass Leaked {{\n#include \"zz_readme.txt\"\n}};\n"
+    );
+    let m = damaged_mod(
+        &w,
+        "config.cpp",
+        &text,
+        &[(
+            "zz_readme.txt",
+            b"v = 2;\n and more text, longer than the cut",
+        )],
+    );
+    let (_, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert!(
+        err.contains("cannot be read") && err.contains("truncated"),
+        "{out}{err}"
+    );
+    assert!(!err.contains("not found"), "{err}");
+}
+
+/// A PBO with only a `config.bin` reads no includables: a truncated one does not matter, and raises no warning.
+#[test]
+fn a_config_bin_pbo_reads_no_includables() {
+    let w = World::new();
+    let config = Config::from_string(
+        format!("{PATCHES}class Fine {{ v = 1; }};\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .expect("config parses");
+    let bin = config.to_cursor().expect("rapify").into_inner();
+    let m = damaged_mod(
+        &w,
+        "config.bin",
+        "",
+        &[("readme.txt", b"long text here, longer than the cut")],
+    );
+    // replace the placeholder config.bin by the rapified one
+    let mut bytes = support::raw_pbo(
+        &[
+            ("config.bin", &bin),
+            ("readme.txt", b"long text here, longer than the cut"),
+        ],
+        &[("prefix", "dmg")],
+    );
+    bytes.truncate(bytes.len() - 26);
+    write(&PathBuf::from(&m).join("addons/d.pbo"), &bytes);
+    let (code, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("v = 1"), "{out}{err}");
+    assert!(!err.contains("api-config-include-unreadable"), "{err}");
+}
+
+fn dotdot_mod(w: &World, config_name: &str, include: &str, extra: &[(&str, &[u8])]) -> String {
+    let dir = w.home.join("@Dots");
+    let text = format!("{PATCHES}class Leaked {{\n#include \"{include}\"\n}};\n");
+    let mut entries: Vec<(&str, &[u8])> = vec![(config_name, text.as_bytes())];
+    entries.extend_from_slice(extra);
+    write(
+        &dir.join("addons/d.pbo"),
+        &support::raw_pbo(&entries, &[("prefix", "dots")]),
+    );
+    dir.to_string_lossy().into_owned()
+}
+
+/// `..` that stays inside the PBO resolves (#99); one that leaves the root is refused.
+#[test]
+fn dotdot_inside_the_pbo_resolves_and_outside_is_refused() {
+    let w = World::new();
+    let macros: &[(&str, &[u8])] = &[("macros.hpp", b"found = 7;\n")];
+    for include in [
+        "..\\macros.hpp",
+        "../macros.hpp",
+        "..\\sub\\..\\macros.hpp",
+        "inner\\..\\../macros.hpp",
+    ] {
+        let m = dotdot_mod(&w, "sub\\config.cpp", include, macros);
+        let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+        assert!(out.contains("found = 7"), "{include}: {out}{err}");
+    }
+    for include in [
+        "..\\..\\macros.hpp",
+        "sub\\..\\..\\..\\macros.hpp",
+        "../..\\macros.hpp",
+        "a\\\\b.hpp",
+    ] {
+        let m = dotdot_mod(&w, "sub\\config.cpp", include, macros);
+        let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+        assert!(!out.contains("found = 7"), "{include}: {out}{err}");
+        assert!(err.contains("api-bad-config"), "{include}: {out}{err}");
+    }
+}
+
 /// A game folder (a `World`'s) gets one more config PBO that requires `B_Patch`.
 fn add_addon(w: &World, file: &str, patch: &str, body: &str) {
     write(

@@ -620,21 +620,92 @@ fn is_includable(name: &str) -> bool {
         .any(|e| lower.rsplit_once('.').is_some_and(|(_, x)| x == *e))
 }
 
+/// The include source of a PBO with a text config: the text configs in `files` and the other includable
+/// entries, read tolerantly (a damaged one and the ones past `cap` bytes in all are skipped with a warning).
+fn read_includes(
+    path: &Path,
+    file: &mut File,
+    filter: &EntryFilter,
+    prefix: &str,
+    mut files: Vec<(String, Vec<u8>)>,
+    cap: u64,
+    warnings: &mut dyn WarningSink,
+) -> Result<IncludeFolders, Error> {
+    let used: u64 = files.iter().map(|(_, d)| d.len() as u64).sum();
+    let rest = PBO::read_entries_tolerant(
+        file,
+        |n| is_includable(n) && !filter.matches(n),
+        cap.saturating_sub(used),
+    )
+    .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+    let mut unreadable: Vec<(String, String)> = Vec::new();
+    let mut capped = false;
+    for entry in rest.into_entries() {
+        let name = entry.name().to_string();
+        let over = entry.is_over_limit();
+        match entry.into_data() {
+            Ok(data) => files.push((name, data)),
+            Err(e) if over => {
+                capped = true;
+                unreadable.push((name, e.to_string()));
+            }
+            Err(e) => {
+                warnings.warn(
+                    Warning::new(
+                        Some("api-config-include-unreadable"),
+                        format!(
+                            "cannot read the includable {}: {e}; it is skipped",
+                            printable(&name)
+                        ),
+                    )
+                    .in_file(path.display().to_string()),
+                );
+                unreadable.push((name, e.to_string()));
+            }
+        }
+    }
+    if capped {
+        warnings.warn(
+            Warning::new(
+                Some("api-config-includes-capped"),
+                format!("the includable files of this PBO are more than {cap} bytes; the rest is skipped"),
+            )
+            .in_file(path.display().to_string()),
+        );
+    }
+    Ok(IncludeFolders::new(Vec::new())
+        .with_memory(MemoryIncludes::new(prefix, files).with_unreadable(unreadable)))
+}
+
+/// Most bytes of includable entries read from one PBO; the rest are skipped with a warning.
+const MAX_INCLUDE_BYTES: u64 = 64 << 20;
+
 /// The configs of a PBO: `config.bin` (rapified) or `config.cpp` (text) of the top level and of every folder
 /// below it, `config.bin` winning where a folder has both. The top level comes first, then the folders in path
-/// order. A config that cannot be read is an `Err` in its place.
-fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Error> {
-    let mut file =
-        File::open(path).map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
-    // the configs, and the text files they may include: includes are resolved among the entries of this PBO only
-    let selection = PBO::read_entries(&mut file, |n| filter.matches(n) || is_includable(n))
-        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+/// order. A config that cannot be read is an `Err` in its place. The text files the configs may include are
+/// read only when a text config is chosen, and a damaged one is skipped with a warning.
+fn read_configs(
+    path: &Path,
+    filter: &EntryFilter,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<ReadConfig>, Error> {
+    read_configs_capped(path, filter, MAX_INCLUDE_BYTES, warnings)
+}
+
+/// [`read_configs`] with the byte cap of the includable entries as a parameter.
+fn read_configs_capped(
+    path: &Path,
+    filter: &EntryFilter,
+    include_cap: u64,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<ReadConfig>, Error> {
+    let shown = printable(&path.display().to_string());
+    let mut file = File::open(path).map_err(|e| error!("{shown}: {e}"))?;
+    let selection =
+        PBO::read_entries(&mut file, |n| filter.matches(n)).map_err(|e| error!("{shown}: {e}"))?;
     // folder (lowercase, `/`-separated, with a trailing `/`) -> (is config.bin, entry index)
     let mut chosen: BTreeMap<String, (bool, usize)> = BTreeMap::new();
     for (i, entry) in selection.entries().iter().enumerate() {
-        if !filter.matches(entry.name()) {
-            continue;
-        }
         let name = entry.name().replace('\\', "/").to_lowercase();
         let (folder, file_name) = name
             .rsplit_once('/')
@@ -645,16 +716,30 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
             *slot = (true, i);
         }
     }
-    let includes = MemoryIncludes::new(
-        selection.header_extension("prefix").unwrap_or(""),
-        selection
+    let folders = if chosen.values().any(|(is_bin, _)| !is_bin) {
+        let prefix = selection
+            .header_extension("prefix")
+            .unwrap_or("")
+            .to_string();
+        // the text configs themselves can be included too
+        let files: Vec<(String, Vec<u8>)> = selection
             .entries()
             .iter()
             .filter(|e| is_includable(e.name()))
             .filter_map(|e| Some((e.name().to_string(), e.data().ok()?.to_vec())))
-            .collect(),
-    );
-    let folders = IncludeFolders::new(Vec::new()).with_memory(includes);
+            .collect();
+        read_includes(
+            path,
+            &mut file,
+            filter,
+            &prefix,
+            files,
+            include_cap,
+            warnings,
+        )?
+    } else {
+        IncludeFolders::new(Vec::new())
+    };
     let mut out = Vec::new();
     for (_, (is_bin, i)) in chosen {
         let Some(entry) = selection.entries().get(i) else {
@@ -800,7 +885,7 @@ pub fn build_source(
     };
     let mut parts: Vec<ConfigPart> = Vec::new();
     'pbos: for (path, rel) in pbos {
-        let configs = match read_configs(path, &filter) {
+        let configs = match read_configs(path, &filter, warnings) {
             Ok(configs) if configs.is_empty() => continue,
             Ok(configs) => configs,
             Err(e) => {
@@ -949,4 +1034,70 @@ pub fn vanilla_config_pbos(game: &Path) -> Result<Vec<(PathBuf, String)>, Error>
             .then(a.1.cmp(&b.1))
     });
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PBO file with `config.cpp` including `a.txt` and `b.txt` (60 bytes each).
+    fn capped_pbo(dir: &Path) -> (PathBuf, u64) {
+        let config = "class CfgPatches { class P { requiredAddons[] = {}; }; };\nclass X {\n#include \"a.txt\"\n#include \"b.txt\"\n};\n";
+        let mut pbo = PBO::new();
+        pbo.insert_entry("config.cpp", config.as_bytes().to_vec())
+            .unwrap();
+        pbo.insert_entry("a.txt", format!("a = 1; {}\n", " ".repeat(50)).into_bytes())
+            .unwrap();
+        pbo.insert_entry("b.txt", format!("b = 2; {}\n", " ".repeat(50)).into_bytes())
+            .unwrap();
+        let path = dir.join("c.pbo");
+        let mut bytes = Vec::new();
+        pbo.write(&mut bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        (path, config.len() as u64)
+    }
+
+    fn filter() -> EntryFilter {
+        EntryFilter::new(
+            ["config.bin", "config.cpp"].map(str::to_string).to_vec(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn includables_past_the_cap_are_skipped_with_one_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, config_len) = capped_pbo(dir.path());
+        let mut warnings = Warnings::new();
+        let read = read_configs_capped(&path, &filter(), config_len + 70, &mut warnings).unwrap();
+        let names: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .map(|w| w.message.clone())
+            .collect();
+        assert_eq!(read.len(), 1);
+        // b.txt does not fit: its include fails with the cap as the reason, and a.txt was read
+        let err = read[0].1.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("b.txt") && err.contains("cannot be read"),
+            "{err}"
+        );
+        assert!(!err.contains("a.txt"), "{err}");
+        let capped = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-includes-capped"))
+            .count();
+        assert_eq!(capped, 1, "{names:?}");
+    }
+
+    #[test]
+    fn includables_within_the_cap_are_all_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = capped_pbo(dir.path());
+        let mut warnings = Warnings::new();
+        let read = read_configs(&path, &filter(), &mut warnings).unwrap();
+        assert!(read[0].1.is_ok());
+        assert_eq!(warnings.warnings(), []);
+    }
 }

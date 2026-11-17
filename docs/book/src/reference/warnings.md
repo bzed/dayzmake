@@ -15,7 +15,7 @@ Each section lists the commands that can raise the warning, what triggers it and
 
 Raised by: `api`, `mcp`.
 
-A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` component or a file that is not in the PBO makes the config unreadable, and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
+A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` that would leave the PBO's root or a file that is not in the PBO makes the config unreadable (`..` inside the PBO is resolved against the folder of the including entry), and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
 
 ```text
 In file …/badmod/addons/entry.pbo: warning: cannot read config.bin: failed to fill whole buffer [api-bad-config]
@@ -69,6 +69,26 @@ A class is defined again with another base class, or with none. The engine takes
 
 ```text
 In file …/mod/addons/rebase.pbo: warning: class CfgVehicles/Hatch changes its base class: Base -> (none) [api-config-base-changed]
+```
+
+## api-config-include-unreadable
+
+Raised by: `api config`, `mcp`.
+
+A text `config.cpp` is indexed, and a text entry of the same PBO that it could include (`.hpp`, `.h`, `.inc`, `.txt`, `.cfg` and so on) is truncated or cannot be decompressed. The entry is skipped and the configs of the PBO still load. A config that includes the entry fails with the same reason (`api-bad-config`), not with "not found". PBOs with only a `config.bin` read no such entries.
+
+```text
+In file …/mod/addons/entry.pbo: warning: cannot read the includable zz_readme.txt: PBO entry "zz_readme.txt" is truncated (its data ends past the end of the file).; it is skipped [api-config-include-unreadable]
+```
+
+## api-config-includes-capped
+
+Raised by: `api config`, `mcp`.
+
+The includable text entries of one PBO add up to more than 64 MiB. The entries past that total are not read, once per PBO; a config that includes one of them fails with `api-bad-config`.
+
+```text
+In file …/mod/addons/huge.pbo: warning: the includable files of this PBO are more than 67108864 bytes; the rest is skipped [api-config-includes-capped]   (the message format; no synthetic file in this manual triggers it)
 ```
 
 ## api-config-limit

@@ -293,6 +293,47 @@ fn selection_gives_requested_entries() {
     );
 }
 
+#[test]
+fn tolerant_selection_keeps_the_good_entries_next_to_a_truncated_one() {
+    let mut bytes = support::raw_pbo(
+        &[
+            ("a.txt", b"aaaa"),
+            ("b.txt", b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ],
+        &[],
+    );
+    bytes.truncate(bytes.len() - 30);
+    assert!(PBO::read_entries(&mut Cursor::new(&bytes), |_| true).is_err());
+    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 1 << 20).unwrap();
+    let entries = sel.into_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].data().unwrap(), b"aaaa");
+    let err = entries[1].data().unwrap_err().to_string();
+    assert!(err.contains("truncated"), "{err}");
+    assert!(!entries[1].is_over_limit());
+    assert_eq!(
+        entries.into_iter().next().unwrap().into_data().unwrap(),
+        b"aaaa"
+    );
+}
+
+#[test]
+fn tolerant_selection_stops_reading_at_the_byte_limit() {
+    let bytes = support::raw_pbo(
+        &[
+            ("a.txt", &[b'a'; 10]),
+            ("b.txt", &[b'b'; 10]),
+            ("c.txt", &[b'c'; 10]),
+        ],
+        &[],
+    );
+    let sel = PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, 15).unwrap();
+    let entries = sel.entries();
+    assert_eq!(entries[0].data().unwrap(), &[b'a'; 10]);
+    assert!(entries[1].is_over_limit() && entries[1].data().is_err());
+    assert!(entries[2].is_over_limit());
+}
+
 #[cfg(feature = "sign")]
 #[test]
 fn a_modified_read_pbo_signs_as_what_is_written() {

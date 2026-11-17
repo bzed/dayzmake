@@ -242,8 +242,9 @@ pub struct IncludeFolders {
 ///
 /// `origin` of the preprocessed input is the name of the including entry, and an include is resolved
 /// relative to the folder of that entry, or, in the engine's `\prefix\path` form, when it points into
-/// `prefix`. Absolute paths, drive letters and `..` components are errors, as are empty components and
-/// control characters (see [`crate::pbo::safe_relative_path`]). Names compare ignoring case. The files
+/// `prefix`. Absolute paths and drive letters are errors, as are empty components and control characters
+/// (see [`crate::pbo::safe_relative_path`]). A `..` component is resolved inside the PBO; one that would leave
+/// the PBO's root is an error. Names compare ignoring case. The files
 /// an `#include` pulls in count against a total of 64 MiB per preprocess call.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -251,6 +252,8 @@ pub struct MemoryIncludes {
     prefix: String,
     /// lowercase `/`-separated name -> (name as given, content)
     files: std::collections::BTreeMap<String, (String, Vec<u8>)>,
+    /// lowercase `/`-separated name -> why the entry is not available
+    unreadable: std::collections::BTreeMap<String, String>,
 }
 
 impl MemoryIncludes {
@@ -266,7 +269,20 @@ impl MemoryIncludes {
         MemoryIncludes {
             prefix: prefix.replace('\\', "/").trim_matches('/').to_lowercase(),
             files: map,
+            unreadable: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Adds entries (name, reason) that exist in the archive but could not be read. An `#include` of one of
+    /// them fails with the reason instead of "not found". A name that is also a readable file stays readable.
+    #[must_use]
+    pub fn with_unreadable(mut self, entries: Vec<(String, String)>) -> Self {
+        for (name, reason) in entries {
+            self.unreadable
+                .entry(name.replace('\\', "/").to_lowercase())
+                .or_insert(reason);
+        }
+        self
     }
 
     /// The file `include_path` names when included from the entry `origin` (an entry name, or `None` for
@@ -299,24 +315,40 @@ impl MemoryIncludes {
             }
             below.to_string()
         } else {
-            if include_path.starts_with('/')
-                || crate::pbo::safe_relative_path(include_path).is_none()
-            {
-                return Err(bad("absolute, drive, `..` or invalid path"));
-            }
-            let rel = include_path.replace('\\', "/").to_lowercase();
             let folder = origin
                 .map(|o| o.to_string_lossy().replace('\\', "/").to_lowercase())
                 .and_then(|o| o.rsplit_once('/').map(|(f, _)| f.to_string()));
-            match folder {
-                Some(f) => format!("{f}/{rel}"),
-                None => rel,
+            let mut parts: Vec<String> = folder
+                .iter()
+                .flat_map(|f| f.split('/'))
+                .map(str::to_string)
+                .collect();
+            if include_path.starts_with('/') {
+                return Err(bad("absolute, drive or invalid path"));
             }
+            for component in include_path.replace('\\', "/").to_lowercase().split('/') {
+                if component == ".." {
+                    if parts.pop().is_none() {
+                        return Err(bad("`..` leaves the PBO"));
+                    }
+                } else if crate::pbo::safe_relative_path(component).is_some() {
+                    parts.push(component.to_string());
+                } else {
+                    return Err(bad("absolute, drive or invalid path"));
+                }
+            }
+            parts.join("/")
         };
-        self.files
-            .get(&key)
-            .map(|(name, content)| (name.as_str(), content.as_slice()))
-            .ok_or_else(|| include_not_found(include_path, origin, line))
+        if let Some((name, content)) = self.files.get(&key) {
+            return Ok((name.as_str(), content.as_slice()));
+        }
+        if let Some(reason) = self.unreadable.get(&key) {
+            return Err(error!(
+                "Include \"{}\" cannot be read: {reason}",
+                printable(include_path)
+            ));
+        }
+        Err(include_not_found(include_path, origin, line))
     }
 }
 

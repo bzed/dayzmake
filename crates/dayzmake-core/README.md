@@ -32,6 +32,8 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- New `PBO::read_entries_tolerant` (a truncated or undecodable selected entry is an error of its own, and the selection is bounded by a byte limit), `SelectedEntry::into_data`, `SelectedEntry::is_over_limit` and `PboSelection::into_entries`; `read_entries` is unchanged (#99).
+- New `MemoryIncludes::with_unreadable`: an include of an entry that could not be read fails with the reason instead of "not found". `MemoryIncludes` resolves `..` inside the PBO, against the folder of the including entry; a path that leaves the PBO's root is still an error (#99).
 - `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
 - `extract`: a new target inside the source is refused without `force` too, before anything is created; a file/folder clash across entries skips the later entry with the warning `extract-path-clash` instead of failing (part of #98).
 - `Config::read`/`from_string`: any config entry may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
