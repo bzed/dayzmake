@@ -212,6 +212,22 @@ fn recv_timeout_is_a_network_error() {
 }
 
 #[test]
+fn recv_timeout_covers_the_whole_message() {
+    // Every single read returns within the timeout; the message as a whole does not.
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Trickle));
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut p = policy();
+    p.recv_timeout = Duration::from_millis(50);
+    p.attempts = 1;
+    let mut client = Client::connect(&host, &p).expect("connect");
+    let started = std::time::Instant::now();
+    let e = client.tile(0, 0, &world()).expect_err("times out");
+    assert!(matches!(e, FetchError::Network(_)), "{e}");
+    assert!(e.to_string().contains("timed out"), "{e}");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
 fn connect_refused_names_host() {
     let port = {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");

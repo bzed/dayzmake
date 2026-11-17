@@ -42,6 +42,8 @@ pub enum Fault {
     HugeFrame,
     /// Answer with a tile message whose payload is malformed (truncated).
     Malformed,
+    /// Answer with a valid frame header, then the payload one byte every 5 ms.
+    Trickle,
     /// Answer with message id 4 (world params) instead of 5.
     WrongMessage,
 }
@@ -264,6 +266,16 @@ fn answer(s: &mut TcpStream, shared: &Shared, fault: Fault, x: i32, z: i32) -> i
             let mut bytes = find(x, z).map(TileInput::encode).unwrap_or_default();
             bytes.truncate(bytes.len().saturating_sub(5).max(10));
             write_frame(s, 5, &bytes)?;
+        }
+        Fault::Trickle => {
+            let bytes = find(x, z).map(TileInput::encode).unwrap_or_default();
+            s.write_all(&u32::try_from(bytes.len() + 4).expect("small").to_le_bytes())?;
+            s.write_all(&5u32.to_le_bytes())?;
+            for b in bytes {
+                // Pacing a fake slow peer, not waiting for state.
+                thread::sleep(std::time::Duration::from_millis(5));
+                s.write_all(&[b])?;
+            }
         }
         Fault::WrongMessage => write_frame(s, 4, &[10, 0, 0, 0])?,
         Fault::WrongTile => match find(x + 1, z).or_else(|| find(x, z)) {

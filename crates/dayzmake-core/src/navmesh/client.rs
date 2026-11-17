@@ -6,7 +6,7 @@
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::navmesh::wire::{DEFAULT_PORT, TileInput, WorldParams, encode_tile_request};
 
@@ -179,6 +179,28 @@ pub(crate) fn write_frame(w: &mut impl Write, id: u32, payload: &[u8]) -> io::Re
     w.flush()
 }
 
+/// A reader that gives every `read` only the time left until the message deadline, so the receive
+/// timeout covers the whole message and not each `read` call.
+struct DeadlineReader<'a> {
+    stream: &'a TcpStream,
+    /// `None` when the deadline is not representable (a huge timeout): no limit.
+    deadline: Option<Instant>,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(deadline) = self.deadline {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "receive timed out"))?;
+            self.stream
+                .set_read_timeout(Some(at_least_a_millisecond(left)))?;
+        }
+        self.stream.read(buf)
+    }
+}
+
 /// A connection to a data server.
 #[derive(Debug)]
 pub struct Client {
@@ -308,7 +330,9 @@ impl Client {
             slot => slot.insert(open(&self.host, &self.policy)?),
         };
         write_frame(stream, id, payload)?;
-        read_frame(stream)
+        // One deadline for the whole message (spec 3.1), not one per `read`.
+        let deadline = Instant::now().checked_add(at_least_a_millisecond(self.policy.recv_timeout));
+        read_frame(&mut DeadlineReader { stream, deadline })
     }
 }
 
