@@ -869,6 +869,51 @@ fn a_new_target_inside_the_source_is_refused_without_force_and_nothing_is_create
     }
 }
 
+/// A `..` after a folder that does not exist cannot be resolved by name: the error says so.
+#[test]
+fn a_target_with_dotdot_after_a_missing_folder_is_refused_with_the_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    let target = tmp.path().join("elsewhere/missing/../x");
+    let err = extract(
+        &src,
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("Invalid target folder \""), "{err}");
+    assert!(
+        err.contains("cannot resolve \"..\" after a folder that does not exist."),
+        "{err}"
+    );
+    assert!(!tmp.path().join("elsewhere").exists());
+}
+
+/// A target below a symbolic link to the source is inside the source: refused, and nothing is created.
+#[cfg(unix)]
+#[test]
+fn a_target_below_a_symlink_to_the_source_is_refused_and_nothing_is_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("mod");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    std::os::unix::fs::symlink(&src, tmp.path().join("link")).unwrap();
+    let before = listing(&src);
+    let target = tmp.path().join("link/out");
+    let err = extract(
+        &tmp.path().join("mod"),
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("is inside the source"), "{err}");
+    assert!(!src.join("out").exists());
+    assert_eq!(listing(&src), before);
+}
+
 #[test]
 fn a_new_target_beside_the_source_is_still_accepted() {
     let tmp = tempfile::tempdir().unwrap();

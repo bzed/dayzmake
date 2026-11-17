@@ -212,7 +212,9 @@ fn check_target(
             // a new target inside the source would write into it, and the next run with --force would
             // refuse it: refuse before anything is created
             let Some(resolved) = resolve_for_comparison(target) else {
-                return Err(error!("Invalid target folder \"{shown}\"."));
+                return Err(error!(
+                    "Invalid target folder \"{shown}\": cannot resolve \"..\" after a folder that does not exist."
+                ));
             };
             if source
                 .canonicalize()

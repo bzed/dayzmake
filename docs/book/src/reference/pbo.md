@@ -398,7 +398,8 @@ Behaviour:
   folder. It must also be a real folder (not a file or a symbolic link), must not contain the source and must not lie
   inside it: `extract -f m m/addons` is refused, so the PBOs are never deleted. A new `<targetfolder>` inside the
   source (`extract m m/out`) is refused as well, without `-f`, before anything is created; the paths are compared
-  with symbolic links resolved.
+  with symbolic links resolved. A new `<targetfolder>` with a `..` after a folder that does not exist
+  (`elsewhere/missing/../x`) cannot be resolved and is refused with the error `Invalid target folder "<path>": cannot resolve ".." after a folder that does not exist.`
 - Everything that goes wrong with a PBO is an error that leaves the old tree alone: a PBO or entry that cannot be
   read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names
   a path clash across entries and a `.bin` that cannot be derapified are skipped, with a warning.
