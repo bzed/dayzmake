@@ -32,6 +32,7 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- Config errors raised from a grammar action (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) start with `In line <file>:<line>:` like a parse error (#94).
 - New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute, drive and `..` paths are errors and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
 - `extract`: the `pbo-map.tsv` prefix is written with `/` instead of `\`, and `\` is escaped as `\\` in both columns (#87).
 - New module `extract`: `extract(source, target, &ExtractOptions, warnings)` unpacks an install, a mod or a PBO into one tree by prefix, with `ExtractOptions` (`force`, `derapify`, `only`, `exclude`), a `pbo-map.tsv` and an atomic swap; it streams entries, fails on I/O and decompression errors, and returns an `ExtractSummary` with `pbos()` and `files()` (#87). `force` only replaces an empty folder or an earlier extract result, never a folder that contains or lies inside the source.

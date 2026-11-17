@@ -920,3 +920,49 @@ fn array_floats_accept_whitespace_before_terminators() {
     );
     assert_eq!(a.elements().len(), 3);
 }
+
+fn read_err(src: &str, path: &str) -> String {
+    Config::from_string(
+        src.to_string(),
+        Some(std::path::PathBuf::from(path)),
+        &[],
+        &mut Warnings::new(),
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default()
+}
+
+#[test]
+fn grammar_action_errors_carry_file_and_line() {
+    let cases = [
+        ("class A {\n  y = 1;\n  x = 1e999;\n};", "3", "out of range"),
+        (
+            "class A {\n  x = 99999999999999999999;\n};",
+            "2",
+            "Invalid integer",
+        ),
+        (
+            "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
+            "4",
+            "division by zero",
+        ),
+        // CRLF line ends count the same
+        (
+            "class A {\r\n  y = 1;\r\n  x = 1e999;\r\n};",
+            "3",
+            "out of range",
+        ),
+    ];
+    for (src, line, what) in cases {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.contains(&format!("In line dir/cfg.cpp:{line}:")),
+            "{src:?}: {err:?}"
+        );
+        assert!(err.contains(what), "{src:?}: {err:?}");
+    }
+    // the same prefix as a PEG parse error in the same file
+    let peg = read_err("class A {\n  y = 1;\n  x = ;;\n};", "dir/cfg.cpp");
+    assert!(peg.contains("In line dir/cfg.cpp:3:"), "{peg:?}");
+}

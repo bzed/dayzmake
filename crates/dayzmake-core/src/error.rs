@@ -91,21 +91,7 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
         match self {
             Ok(t) => Ok(t),
             Err(pe) => {
-                // line_origins holds one entry per preprocessed line and is empty for an
-                // input without lines, so the lookup can fail (handled below); otherwise its
-                // length is an upper bound for the parser's 1-based line numbers.
-                let idx = min(pe.location.line, info.line_origins.len()).saturating_sub(1);
-                let Some((line_origin, file)) = info.line_origins.get(idx) else {
-                    return Err(error!(
-                        "Parse error location out of range: line {}",
-                        pe.location.line
-                    ));
-                };
-                let line_origin = *line_origin;
-                let file_origin = match file {
-                    Some(path) => format!("{}:", printable(&path.display().to_string())),
-                    None => String::new(),
-                };
+                let (file_origin, line_origin) = source_location(info, pe.location.line)?;
 
                 let line = input
                     .lines()
@@ -121,6 +107,43 @@ impl<T> ConfigParseErrorExt<T> for Result<T, ParseError<LineCol>> {
                 ))
             }
         }
+    }
+}
+
+/// The file prefix (`file:` or empty) and the original line number of line `line` (1-based) of the
+/// preprocessed input; the one place that maps a preprocessed line to its source, shared by every
+/// config error that has a location.
+fn source_location(info: &PreprocessInfo, line: usize) -> Result<(String, u32), Error> {
+    // line_origins holds one entry per preprocessed line and is empty for an input without lines,
+    // so the lookup can fail (handled below); otherwise its length is an upper bound for the
+    // parser's 1-based line numbers.
+    let idx = min(line, info.line_origins.len()).saturating_sub(1);
+    let Some((line_origin, file)) = info.line_origins.get(idx) else {
+        return Err(error!("Parse error location out of range: line {line}"));
+    };
+    let file_origin = match file {
+        Some(path) => format!("{}:", printable(&path.display().to_string())),
+        None => String::new(),
+    };
+    Ok((file_origin, *line_origin))
+}
+
+/// Gives `message` the `In line <file>:<line>:` context of a parse error, for an error found at byte
+/// `offset` of the preprocessed `input` (an error raised from a grammar action, not by the parser).
+pub(crate) fn located_error(
+    info: &PreprocessInfo,
+    input: &str,
+    offset: usize,
+    message: &Error,
+) -> Error {
+    // `\n` counts the same for LF and CRLF line ends
+    let line = input
+        .get(..offset)
+        .map_or(0, |head| head.matches('\n').count())
+        + 1;
+    match source_location(info, line) {
+        Ok((file, line_number)) => error!("In line {file}{line_number}:\n\n  {message}"),
+        Err(_) => error!("{message}"),
     }
 }
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error;
-use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
+use crate::error::{ConfigParseErrorExt, ErrorExt, located_error, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::{IncludeFolders, MAX_NESTING_DEPTH, nesting_error, preprocess_in};
@@ -31,7 +31,8 @@ fn text_name(name: &str, what: &str) -> Result<(), Error> {
 #[derive(Default)]
 pub(crate) struct EvalCtx {
     vars: std::collections::HashMap<String, EvalValue>,
-    error: Option<Error>,
+    /// The first error raised from a grammar action, with the byte offset of the token it belongs to.
+    error: Option<(usize, Error)>,
 }
 
 impl From<EvalValue> for ConfigEntry {
@@ -94,7 +95,7 @@ peg::parser! {
 
         rule exponent() = ['e' | 'E'] ['-' | '+']? ['0'..='9']+
 
-        rule float_text() -> &'input str = $((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent())))
+        rule float_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) { (p, t) }
 
         /// A float followed by the end of an entry. The terminator is checked before the value is,
         /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
@@ -103,17 +104,18 @@ peg::parser! {
         /// A float followed by the end of an array element.
         rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }
 
-        rule float_value(f: &str) -> f32 = {?
+        rule float_value(at: (usize, &str)) -> f32 = {?
+            let (pos, f) = at;
             // `parse` gives infinity on overflow; that would not survive a derapify/rapify round trip
             f.parse::<f32>()
-                .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
+                .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
                 .and_then(|v| if v.is_finite() { Ok(v) } else {
-                    ctx.error.get_or_insert(error!("Invalid float \"{f}\": out of range"));
+                    ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": out of range")));
                     Err("a float in range")
                 })
         }
 
-        rule integer_text() -> &'input str = $((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+))
+        rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
 
         /// An integer followed by the end of an entry; the terminator is checked first, like for floats
         /// (`99999999999x` stays an unquoted string).
@@ -122,13 +124,14 @@ peg::parser! {
         /// An integer followed by the end of an array element.
         rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
 
-        rule integer_value(i: &str) -> i32 = {?
+        rule integer_value(at: (usize, &str)) -> i32 = {?
+            let (pos, i) = at;
             if i.contains("0x") {
                 i32::from_str_radix(&i.replace("0x", ""), 16)
-                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
             } else {
                 i.parse::<i32>()
-                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
             }
         }
 
@@ -160,9 +163,9 @@ peg::parser! {
         }
 
         /// Fails (and records the error) when `d` levels of classes, arrays or parentheses are exceeded.
-        rule nesting_ok(d: usize) = {?
+        rule nesting_ok(d: usize) = pos:position!() {?
             if d >= MAX_NESTING_DEPTH {
-                ctx.error.get_or_insert(nesting_error());
+                ctx.error.get_or_insert((pos, nesting_error()));
                 Err("nesting within the limit")
             } else {
                 Ok(())
@@ -171,17 +174,17 @@ peg::parser! {
 
         rule eval_body(d: usize) = ("(" nesting_ok(d) eval_body(d + 1) ")" / "\"" (!"\"" [_])* "\"" / !['(' | ')'] [_])*
 
-        rule eval_value(d: usize) -> EvalValue = "__EVAL" whitespace()? "(" b:$(eval_body(d)) ")" {?
+        rule eval_value(d: usize) -> EvalValue = pos:position!() "__EVAL" whitespace()? "(" b:$(eval_body(d)) ")" {?
             match eval(b, &mut ctx.vars) {
                 Ok(v) => Ok(v),
-                Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EVAL expression") }
+                Err(e) => { ctx.error.get_or_insert((pos, e)); Err("a supported __EVAL expression") }
             }
         }
 
-        rule exec_entry(d: usize) = "__EXEC" whitespace()? "(" b:$(eval_body(d)) ")" whitespace()? ";" {?
+        rule exec_entry(d: usize) = pos:position!() "__EXEC" whitespace()? "(" b:$(eval_body(d)) ")" whitespace()? ";" {?
             match exec(b, &mut ctx.vars) {
                 Ok(()) => Ok(()),
-                Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EXEC statement") }
+                Err(e) => { ctx.error.get_or_insert((pos, e)); Err("a supported __EXEC statement") }
             }
         }
 
@@ -1258,7 +1261,7 @@ impl Config {
         let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
         let result = match ctx.error.take() {
             // the warnings were raised by the fallback rules tried after the failed __EVAL/__EXEC
-            Some(e) => return Err(e),
+            Some((pos, e)) => return Err(located_error(&info, &preprocessed, pos, &e)),
             _ => ConfigParseErrorExt::format_error(parsed, &info, &preprocessed),
         };
 
