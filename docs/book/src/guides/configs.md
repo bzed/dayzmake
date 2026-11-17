@@ -134,13 +134,12 @@ A real syntax error stops the command:
 
 ```text
 $ dayzmake rapify bad.cpp        # class A { x = 1
-In file bad.cpp:1: warning: String value "1" is not quoted properly. [unquoted-string]
-error: In line bad.cpp:2:
+error: In line bad.cpp:1:
 
-  
-  ^
+  class A { x = 1
+                 ^
 
-Unexpected token "\n", expected: one of ";", "__EXEC", "class", "delete", "}", ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']
+Unexpected token "\n", expected: one of ".", ";", ['0'..='9'], ['e' | 'E'], [_]
 ```
 
 A macro called with the wrong number of arguments is a warning that names the line:

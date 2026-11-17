@@ -126,6 +126,21 @@ peg::parser! {
         /// An integer followed by the end of an array element.
         rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
 
+        /// A decimal literal that does not fit `i64`, which `CfgConvert` stores as a float (`1e20`); one that
+        /// fits is left to `integer_entry`.
+        rule huge_integer_text() -> (usize, &'input str) = quiet!{ p:position!() t:$((['-' | '+'])? ['0'..='9']+) {?
+            if t.parse::<i64>().is_err() { Ok((p, t)) } else { Err("an integer that fits 64 bits") }
+        } }
+
+        /// A decimal literal that does not fit `i32`, in an array, where `CfgConvert` stores it as a float.
+        rule wide_integer_text() -> (usize, &'input str) = quiet!{ p:position!() t:$((['-' | '+'])? ['0'..='9']+) {?
+            if t.parse::<i32>().is_err() { Ok((p, t)) } else { Err("an integer that fits 32 bits") }
+        } }
+
+        rule huge_integer_entry() -> f32 = i:huge_integer_text() &entry_end() v:float_value(i) { v }
+
+        rule wide_integer_element() -> f32 = i:wide_integer_text() &(whitespace()? [',' | '}']) v:float_value(i) { v }
+
         rule integer_value(at: (usize, &str)) -> i32 = {?
             let (pos, i) = at;
             if i.contains("0x") {
@@ -194,6 +209,7 @@ peg::parser! {
 
         rule array_element(d: usize) -> ConfigArrayElement =
             f:float_element() { ConfigArrayElement::FloatElement(f) } /
+            f:wide_integer_element() { ConfigArrayElement::FloatElement(f) } /
             i:integer_element() { ConfigArrayElement::IntElement(i) } /
             a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
@@ -211,6 +227,7 @@ peg::parser! {
 
         rule var(d: usize) -> ConfigEntry =
             f:float_entry() { ConfigEntry::FloatEntry(f) } /
+            f:huge_integer_entry() { ConfigEntry::FloatEntry(f) } /
             i:integer_entry() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
             v:eval_value(d) { v.into() }
@@ -1288,9 +1305,25 @@ impl Config {
 
         let mut ctx = EvalCtx::default();
         let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
+        // The first line (1-based, of the preprocessed text) the parse failed on. Warnings raised there are
+        // by the attempts that failed (`x = 1 // c` is tried as an unquoted string first), not about the
+        // input, so they are dropped; the ones from earlier lines are real and stay.
+        let line_of = |pos: usize| {
+            preprocessed
+                .get(..pos)
+                .map_or(0, |t| t.chars().filter(|c| c == &'\n').count())
+                + 1
+        };
+        let failed_line = match (&ctx.error, &parsed) {
+            (Some((pos, _)), _) => Some(line_of(*pos)),
+            (None, Err(pe)) => Some(pe.location.line),
+            (None, Ok(_)) => None,
+        };
+        if let Some(line) = failed_line {
+            found.0.retain(|w| line_of(w.0) < line);
+        }
         let result = match ctx.error.take() {
-            // the warnings were raised by the fallback rules tried after the failed __EVAL/__EXEC
-            Some((pos, e)) => return Err(located_error(&info, &preprocessed, pos, &e)),
+            Some((pos, e)) => Err(located_error(&info, &preprocessed, pos, &e)),
             _ => ConfigParseErrorExt::format_error(parsed, &info, &preprocessed),
         };
 

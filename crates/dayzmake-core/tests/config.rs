@@ -878,14 +878,10 @@ fn an_overflowing_integer_alone_is_still_an_error() {
         )
         .is_err()
     );
-    assert!(
-        Config::from_string(
-            "class A { a[] = {99999999999}; };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+    // in an array `CfgConvert` makes it a float (`overflowing_integer_literal_is_a_float_like_cfgconvert`)
+    assert_eq!(
+        text_of("class A { a[] = {99999999999}; };"),
+        "class A {\n    a[] = {100000000000.0};\n};\n"
     );
 }
 
@@ -954,15 +950,11 @@ fn read_err(src: &str, path: &str) -> String {
 fn grammar_action_errors_carry_file_and_line() {
     let cases = [
         (
-            "class A {\n  y = 1;\n  x = 99999999999999999999;\n};",
+            "class A {\n  y = 1;\n  x = 2147483648;\n};",
             "3",
             "Invalid integer",
         ),
-        (
-            "class A {\n  x = 99999999999999999999;\n};",
-            "2",
-            "Invalid integer",
-        ),
+        ("class A {\n  x = 2147483648;\n};", "2", "Invalid integer"),
         (
             "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
             "4",
@@ -970,7 +962,7 @@ fn grammar_action_errors_carry_file_and_line() {
         ),
         // CRLF line ends count the same
         (
-            "class A {\r\n  y = 1;\r\n  x = 99999999999999999999;\r\n};",
+            "class A {\r\n  y = 1;\r\n  x = 2147483648;\r\n};",
             "3",
             "Invalid integer",
         ),
@@ -1051,12 +1043,10 @@ fn comment_or_directive_on_the_last_line_without_line_end() {
 }
 
 /// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
+/// (`CfgConvert` stores 2147483648 as a 64-bit integer, which dayzmake does not write.)
 #[test]
 fn last_entry_without_semicolon_integer_overflow_is_an_error() {
-    for src in [
-        "y = 1;\nx = 99999999999999999999\n",
-        "y = 1;\r\nx = 99999999999999999999\r\n",
-    ] {
+    for src in ["y = 1;\nx = 2147483648\n", "y = 1;\r\nx = 2147483648\r\n"] {
         let err = read_err(src, "cfg.cpp");
         assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
         assert!(err.contains("Invalid integer"), "{err:?}");
@@ -1123,4 +1113,89 @@ fn last_entry_before_a_continued_define_or_open_comment_keeps_its_type() {
     }
     assert_eq!(text_of("x = 1\n#define A \\\n 2"), "x = 1;\n");
     assert_eq!(text_of("x = 1\n/* c\ny = 2;"), "x = 1;\n");
+}
+
+/// An integer literal that does not fit `i64` is a float in `CfgConvert` (`golden_int_ovf`), at a line end
+/// and before `;`; in an array so is one that does not fit `i32`. One followed by text stays a string.
+#[test]
+fn overflowing_integer_literal_is_a_float_like_cfgconvert() {
+    assert_eq!(
+        text_of("x = 99999999999999999999\ny = 1;\n"),
+        "x = 1e20;\ny = 1;\n"
+    );
+    assert_eq!(text_of("x = 99999999999999999999;"), "x = 1e20;\n");
+    assert_eq!(text_of("x = -99999999999999999999;"), "x = -1e20;\n");
+    assert_eq!(
+        text_of("x[] = {99999999999999999999, 3000000000, 2147483647};"),
+        "x[] = {1e20, 3000000000.0, 2147483647};\n"
+    );
+    assert_eq!(
+        text_of("x = 99999999999999999999x;"),
+        "x = \"99999999999999999999x\";\n"
+    );
+}
+
+/// `x = 1 // c` and `x = 2 \` plus a comment line, both without a final newline: `CfgConvert` rejects them
+/// (2026-11-17), so does dayzmake, naming the line.
+#[test]
+fn entry_followed_by_a_comment_at_the_end_of_the_file_is_an_error() {
+    let err = read_err("x = 1 // c", "cfg.cpp");
+    assert!(err.starts_with("In line cfg.cpp:1:\n\n  "), "{err:?}");
+    let err = read_err("y = 1;\nx = 2 \\\n// c", "cfg.cpp");
+    assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
+}
+
+/// The last line of an included file without a line end is not an unterminated entry: `CfgConvert` accepts
+/// `a = 1;\nb = 2` from an include followed by `z = 3;` (it glues its own `#line` marker to the value, so
+/// its `b` is the string `2#line ...`, which dayzmake does not copy). This pins the lenient result.
+#[test]
+fn include_without_final_newline_is_accepted() {
+    let dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(dir.path().join("inc.hpp"), "a = 1;\nb = 2").unwrap();
+    let main = dir.path().join("m.cpp");
+    std::fs::write(&main, "#include \"inc.hpp\"\nz = 3;\n").unwrap();
+    let config = Config::read(
+        &mut std::fs::File::open(&main).unwrap(),
+        Some(main),
+        &[],
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(config.to_string().unwrap(), "a = 1;\nb = 2;\nz = 3;\n");
+}
+
+fn unquoted_lines(src: &str) -> (bool, Vec<u32>) {
+    let mut warnings = Warnings::new();
+    let ok = Config::from_string(
+        src.to_string(),
+        Some(std::path::PathBuf::from("cfg.cpp")),
+        &[],
+        &mut warnings,
+    )
+    .is_ok();
+    let lines = warnings
+        .warnings()
+        .iter()
+        .filter(|w| w.name == Some("unquoted-string"))
+        .filter_map(|w| w.line)
+        .collect();
+    (ok, lines)
+}
+
+/// A parse error does not bring the `unquoted-string` warning of the failed attempt on its own line
+/// (`x = 1 // c` was tried as an unquoted string first), but keeps the real ones from earlier lines.
+#[test]
+fn parse_error_drops_stray_warnings_of_its_own_line_only() {
+    assert_eq!(unquoted_lines("x = 1 // c"), (false, vec![]));
+    assert_eq!(unquoted_lines("y = 1;\nx = 2 \\\n// c"), (false, vec![]));
+    assert_eq!(
+        unquoted_lines("a = abc;\nb = 2;\nc = 1 // c"),
+        (false, vec![1])
+    );
+    assert_eq!(
+        unquoted_lines("a = abc;\nb = 2;\nc = ;;\n"),
+        (false, vec![1])
+    );
+    // without an error every warning stays
+    assert_eq!(unquoted_lines("a = abc;\nb = def;\n"), (true, vec![1, 2]));
 }

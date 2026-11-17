@@ -51,11 +51,12 @@ Behaviour:
   the directive. Absolute includes (starting with `\`) are searched in the `-i` folders by path suffix and
   `$PBOPREFIX$`. A missing include is an error naming the file and line.
 - A source that is already rapified is copied unchanged with the `prerapified-file` warning.
-- Syntax errors name the line and the token that was expected. Values that are not quoted are accepted with the
+- Syntax errors name the line and the token that was expected. Warnings the failed parse raised on the error's own line are dropped, those of earlier lines are kept. Values that are not quoted are accepted with the
   `unquoted-string` warning and an entry without a value with `empty-value`.
 - A value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
-  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is an error, as with `;`. An entry on the last line of a file
+  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is handled as with `;` (next bullet). An entry on the last line of a file
   that has no line end after it is a syntax error, because CfgConvert rejects it too.
+- A decimal integer that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`), as in CfgConvert; in an array a decimal that does not fit 32 bits (`3000000000`) is a float. In an entry a literal that fits 64 but not 32 bits (`2147483648`) and a hex literal that overflows are errors (CfgConvert writes the first as a 64-bit integer, which dayzmake does not). Followed by text the value stays an unquoted string.
 - A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
   (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
   the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.
@@ -99,13 +100,12 @@ A syntax error:
 
 ```text
 $ dayzmake rapify bad.cpp        # contains:  class A { x = 1
-In file bad.cpp:1: warning: String value "1" is not quoted properly. [unquoted-string]
-error: In line bad.cpp:2:
+error: In line bad.cpp:1:
 
-  
-  ^
+  class A { x = 1
+                 ^
 
-Unexpected token "\n", expected: one of ";", "__EXEC", "class", "delete", "}", ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']
+Unexpected token "\n", expected: one of ".", ";", ['0'..='9'], ['e' | 'E'], [_]
 ```
 
 See also: [derapify](#dayzmake-derapify), [preprocess](#dayzmake-preprocess), [Config files and the

@@ -44,6 +44,15 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   `-1e-999` (`80000000`, `-0.0`), `3.4028235e38` (`7f7fffff`) and an array `{1e999, -1e999, 1e-999}`. No error, empty log.
   `x = 1e999x;` stays the string `"1e999x"`. CfgConvert's own decode shows `inf`; the expected files hold dayzmake's
   form `1e999` / `-1e999`.
+- `cfgconvert/int_ovf*.cpp` and `define_open_comment.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup
+  (Proton 10.0, xvfb-run, work folder linked as `P:`, `Bin/CfgConvert` copied to `P:\tool`). `x = 99999999999999999999\ny = 1;\n`
+  (`int_ovf`) gives `x = 1e20;` (a float, not a string and not an error); `int_ovf2` adds `-99999999999999999999`
+  (`-1e20`), `w = 99999999999999999999.5;`, and an array `{99999999999999999999, 3000000000, -3000000000, 2147483647}` that gives
+  `{1e20, 3000000000.0, -3000000000.0, 2147483647}`. `#define X a /* b\ny = 2;\n` (`define_open_comment`) gives an empty
+  config, no error. Not committed: `x = 2147483648;` (entry) is a 64-bit integer (entry subtype 6, which our reader does not know);
+  `x = 0x1FFFFFFFFF;` gives `-1`; `x = 1 // c` and `y = 1;\nx = 2 \\\n// c` (no final newline) are rejected (no output file);
+  `m.cpp` = `#include "inc.hpp"\nz = 3;\n` with `inc.hpp` = `a = 1;\nb = 2` (no final newline) is accepted and gives
+  `a = 1; b = "2#line 1 ""P:\in\m.cpp"""; z = 3;` (CfgConvert glues its `#line` marker to the last value; dayzmake gives `b = 2;`).
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`

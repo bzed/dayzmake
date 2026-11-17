@@ -167,3 +167,16 @@ fn enum_duplicate_resolves_like_cfgconvert() {
         }
     }
 }
+
+/// An integer literal that does not fit `i64` is a float in `CfgConvert` (`1e20`), at a line end, before
+/// `;` and in an array; in an array a literal that does not fit `i32` is a float too (2026-11-17).
+#[test]
+fn golden_int_ovf() {
+    golden("int_ovf");
+    golden("int_ovf2");
+}
+/// `#define X a /* b` with the comment never closed: the rest of the file is the comment, the config is empty.
+#[test]
+fn golden_define_open_comment() {
+    golden("define_open_comment");
+}
