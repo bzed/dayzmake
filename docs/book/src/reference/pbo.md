@@ -382,7 +382,8 @@ Behaviour:
   with a warning (`unsafe-path`), and so is a PBO whose prefix is not a safe folder name or is `pbo-map.tsv`;
   `$PBOPREFIX$` is not written, the map holds the prefixes.
 - When two PBOs write the same path, ignoring case, the later one in sorted order wins and the warning
-  `duplicate-path` names both PBOs. Two entries of one PBO with the same path give `duplicate-entry`.
+  `duplicate-path` names both PBOs. Two entries of one PBO with the same path give `duplicate-entry`. When one PBO has a file where another (or the same one) has a folder, the first in
+  that order is written and the later entry is skipped with the warning `extract-path-clash`; the extract does not fail.
 - `--derapify`: a `*.bin` that starts with the rapified signature (`config.bin` or any other) is written as
   `.cpp` of the same name, in the text that [derapify](config.md#dayzmake-derapify) prints. One that cannot be
   read stays a `.bin`, with the warning `derapify-failed`. `--only` and `-x` match the entry name in the PBO
@@ -395,10 +396,12 @@ Behaviour:
   only when it is an empty folder or holds a `pbo-map.tsv` at its top level, that is, looks like the result of an
   earlier `extract`; any other folder is refused with an error that names it, so a wrong target cannot wipe a home
   folder. It must also be a real folder (not a file or a symbolic link), must not contain the source and must not lie
-  inside it: `extract -f m m/addons` is refused, so the PBOs are never deleted.
+  inside it: `extract -f m m/addons` is refused, so the PBOs are never deleted. A new `<targetfolder>` inside the
+  source (`extract m m/out`) is refused as well, without `-f`, before anything is created; the paths are compared
+  with symbolic links resolved.
 - Everything that goes wrong with a PBO is an error that leaves the old tree alone: a PBO or entry that cannot be
   read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names
-  and a `.bin` that cannot be derapified are skipped, with a warning.
+  a path clash across entries and a `.bin` that cannot be derapified are skipped, with a warning.
 - `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
   <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
   name without `.pbo`. The prefix is written with `/` instead of `\` (like the folders of the tree), and then `\`, TAB, CR and

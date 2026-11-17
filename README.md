@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
 - `api grep` prints at most 512 bytes of a matching line, cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
 - `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
 - Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).

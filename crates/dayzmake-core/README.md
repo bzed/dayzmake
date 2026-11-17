@@ -32,6 +32,7 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- `extract`: a new target inside the source is refused without `force` too, before anything is created; a file/folder clash across entries skips the later entry with the warning `extract-path-clash` instead of failing (part of #98).
 - `Config::read`/`from_string`: any config entry may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
 - `Config::read`/`from_string`: a float literal that overflows f32 (`1e999`, `-1e39`) is an infinity, not an error (CfgConvert does the same); `Config::to_string` writes an infinity as `1e999` / `-1e999`, which reads back to the same f32 (#102).
 - `preprocess`: a `//` comment at the very end of the input (no line end after it) is stripped, and an unterminated `/*` runs to the end of the file (an include's ends with the include), as in CfgConvert, with a new warning `unterminated-comment`; before, the comment text reached the grammar (#103).

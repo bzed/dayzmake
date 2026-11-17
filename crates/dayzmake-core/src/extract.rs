@@ -141,6 +141,27 @@ fn looks_like_extract_result(folder: &Path) -> bool {
     is_empty || fs::symlink_metadata(folder.join(MAP_FILE)).is_ok_and(|m| m.is_file())
 }
 
+/// `path` with symlinks resolved as far as it exists: the nearest existing ancestor is canonicalized and the
+/// missing rest appended. `None` if the missing rest has a `..` or a root, which cannot be resolved by name.
+fn resolve_for_comparison(path: &Path) -> Option<PathBuf> {
+    let mut existing = path.to_path_buf();
+    let mut rest = Vec::new();
+    let mut resolved = loop {
+        if existing.as_os_str().is_empty() {
+            existing = PathBuf::from(".");
+        }
+        if let Ok(done) = existing.canonicalize() {
+            break done;
+        }
+        rest.push(existing.file_name()?.to_os_string());
+        if !existing.pop() {
+            return None;
+        }
+    };
+    resolved.extend(rest.iter().rev());
+    Some(resolved)
+}
+
 /// Checks the target before anything is written: an existing one needs `force`, must be a real folder
 /// that is empty or an earlier result, and must neither contain nor lie inside the source.
 fn check_target(
@@ -187,7 +208,22 @@ fn check_target(
             }
             Ok(())
         }
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            // a new target inside the source would write into it, and the next run with --force would
+            // refuse it: refuse before anything is created
+            let Some(resolved) = resolve_for_comparison(target) else {
+                return Err(error!("Invalid target folder \"{shown}\"."));
+            };
+            if source
+                .canonicalize()
+                .map_or(true, |source| resolved.starts_with(source))
+            {
+                return Err(error!(
+                    "Target folder \"{shown}\" is inside the source; refusing to replace it."
+                ));
+            }
+            Ok(())
+        }
         Err(e) => Err(e).prepend_error(format!("Failed to read target \"{shown}\":")),
     }
 }
@@ -280,6 +316,45 @@ struct Run<'a> {
 }
 
 impl Run<'_> {
+    /// The file already written that a new file at `relative` (lowercase `key`) cannot coexist with: one at
+    /// a parent folder's path, or one below `relative` as a folder. Its path and the index of its PBO.
+    fn clash(&self, relative: &Path, key: &str) -> Option<(PathBuf, usize)> {
+        for parent in relative.ancestors().skip(1) {
+            let parent = parent.to_string_lossy().to_lowercase();
+            if let Some((path, owner)) = self.owners.get(&parent) {
+                return Some((path.clone(), *owner));
+            }
+        }
+        let below = format!("{key}{}", std::path::MAIN_SEPARATOR);
+        let (found, (path, owner)) = self.owners.range(below.clone()..).next()?;
+        found.starts_with(&below).then(|| (path.clone(), *owner))
+    }
+
+    /// Warns and returns `true` if the file at `relative` clashes with one written earlier, see [`Run::clash`].
+    fn skip_clash(
+        &self,
+        index: usize,
+        relative: &Path,
+        key: &str,
+        warnings: &mut dyn WarningSink,
+    ) -> bool {
+        let Some((other, owner)) = self.clash(relative, key) else {
+            return false;
+        };
+        let pbo_name = |i: usize| self.names.get(i).map_or("?", String::as_str);
+        warnings.warn(Warning::new(
+            Some("extract-path-clash"),
+            format!(
+                "Skipping \"{}\" of {}: it is a file where {} has a folder, or a folder where it has a file (\"{}\"); keeping the first.",
+                printable(&relative.to_string_lossy()),
+                printable(pbo_name(index)),
+                printable(pbo_name(owner)),
+                printable(&other.to_string_lossy()),
+            ),
+        ));
+        true
+    }
+
     /// Extracts one PBO. A PBO that cannot be read or an entry that cannot be decompressed or written is
     /// an error; unsafe names are skipped.
     fn pbo(
@@ -364,7 +439,7 @@ impl Run<'_> {
                 format!("Entry name {name:?} is not valid UTF-8; extracting it as windows-1252."),
             ));
         }
-        let Some((relative, stripped)) = unpack_relative(name) else {
+        let Some((mut relative, stripped)) = unpack_relative(name) else {
             warnings.warn(Warning::new(
                 Some("unsafe-path"),
                 format!("Skipping \"{}\": unsafe path.", printable(name)),
@@ -378,7 +453,6 @@ impl Run<'_> {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("bin"));
         let fail = |what: &str| format!("{what} \"{}\":", printable(name));
-        let mut relative = relative;
         let mut content = Content::Stream {
             offset: entry.offset,
             size: entry.size,
@@ -405,6 +479,9 @@ impl Run<'_> {
         }
         let relative = folder.join(relative);
         let key = relative.to_string_lossy().to_lowercase();
+        if self.skip_clash(index, &relative, &key, warnings) {
+            return Ok(()); // the clash is a warning, not an error
+        }
         if let Some((old, owner)) = self.owners.get(&key).cloned() {
             if owner == index {
                 warnings.warn(Warning::new(
@@ -570,7 +647,9 @@ fn swap(staging: &mut Staging, target: &Path, warnings: &mut dyn WarningSink) ->
 /// directly in its `dta` and `addons` subfolders (any case) is read, in sorted path order. The entries of
 /// each PBO go to `<target>/<prefix>/<entry>`; an empty prefix means the file stem of the PBO. Names are
 /// validated like [`crate::pbo::unpack`] does and unsafe ones are skipped with a warning. When two PBOs
-/// write the same path (ignoring case), the later one wins and a `duplicate-path` warning names both.
+/// write the same path (ignoring case), the later one wins and a `duplicate-path` warning names both. When
+/// an entry would be a file where an earlier one has a folder, or the reverse, the first stays and the
+/// later one is skipped with an `extract-path-clash` warning.
 /// With `options.derapify`, a rapified `*.bin` becomes a `.cpp` of the same name, or stays a `.bin` with a
 /// `derapify-failed` warning. `options.only` and `options.exclude` select entries like they do for
 /// [`crate::pbo::unpack`].

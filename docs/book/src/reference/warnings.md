@@ -161,6 +161,16 @@ A config entry has no value (`z = ;`, or a macro that expanded to nothing). It i
 In file warn.cpp:1: warning: Entry "z" has no value; it is stored as an empty string. [empty-value]
 ```
 
+## extract-path-clash
+
+Raised by: `extract`, and the MCP tool `extract`.
+
+An entry would be a file where an earlier entry of the same extract has a folder, or a folder where it has a file (`p/a` in one PBO, `p/a/b` in another). The first one in the sorted PBO order is written; the later entry is skipped and is not part of the tree. The warning names both PBOs and the path.
+
+```text
+warning: Skipping "p/x/y.txt" of addons/b.pbo: it is a file where addons/a.pbo has a folder, or a folder where it has a file ("p/x"); keeping the first. [extract-path-clash]
+```
+
 ## include-case
 
 Raised by: `rapify`, `preprocess`, `build`.
