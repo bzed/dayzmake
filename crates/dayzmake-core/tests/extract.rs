@@ -721,6 +721,20 @@ fn a_target_without_a_folder_name_is_an_error() {
 }
 
 #[test]
+fn a_target_ending_in_dotdot_is_refused_before_the_existence_check() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a.pbo");
+    write_pbo(&pbo, "p", &[("x.txt", b"x")]);
+    let existing = tmp.path().join("existing");
+    fs::create_dir(&existing).unwrap();
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    let err = extract(&pbo, &existing.join(".."), &options, &mut Warnings::new()).unwrap_err();
+    assert!(err.to_string().contains("Invalid target"), "{err}");
+    assert!(existing.is_dir());
+}
+
+#[test]
 fn a_target_below_a_file_is_an_error_and_a_taken_staging_name_is_skipped() {
     let tmp = tempfile::tempdir().unwrap();
     let pbo = tmp.path().join("a.pbo");

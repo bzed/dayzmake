@@ -192,10 +192,9 @@ fn check_target(
     }
 }
 
-/// Creates an empty staging folder next to `target` (same parent, so the final rename stays on one
-/// file system).
-fn create_staging(target: &Path) -> Result<Staging, Error> {
-    let name = target
+/// The final folder name of `target`; a target that ends in `..` or is a root has none and is refused.
+fn target_name(target: &Path) -> Result<String, Error> {
+    target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .ok_or_else(|| {
@@ -203,7 +202,13 @@ fn create_staging(target: &Path) -> Result<Staging, Error> {
                 "Invalid target folder \"{}\".",
                 printable(&target.display().to_string())
             )
-        })?;
+        })
+}
+
+/// Creates an empty staging folder next to `target` (same parent, so the final rename stays on one
+/// file system).
+fn create_staging(target: &Path) -> Result<Staging, Error> {
+    let name = target_name(target)?;
     let parent = parent_of(target);
     fs::create_dir_all(&parent).prepend_error("Failed to create the folder of the target:")?;
     for attempt in 0..1000_u32 {
@@ -591,6 +596,8 @@ pub fn extract(
     warnings: &mut dyn WarningSink,
 ) -> Result<ExtractSummary, Error> {
     let sources = find_pbos(source)?;
+    // before anything looks at the target: `a/missing/..` must fail the same way where it resolves to `a`
+    target_name(target)?;
     check_target(&sources, source, target, options.force)?;
     let mut staging = create_staging(target)?;
     let mut run = Run {
