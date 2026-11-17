@@ -14,7 +14,6 @@ pub(crate) fn trunc_i32(x: f32) -> i32 {
 }
 
 /// C `(int)floorf(x)`.
-#[expect(dead_code, reason = "used by the tile builder tasks that follow")]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "C truncation of an integral value as in Recast; saturating on out-of-range values"
@@ -24,7 +23,6 @@ pub(crate) fn floor_i32(x: f32) -> i32 {
 }
 
 /// C `(int)ceilf(x)`.
-#[expect(dead_code, reason = "used by the tile builder tasks that follow")]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "C truncation of an integral value as in Recast; saturating on out-of-range values"

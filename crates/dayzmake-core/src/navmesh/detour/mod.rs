@@ -8,9 +8,12 @@
 //! Every reader treats its input as hostile: counts are checked with checked arithmetic against the
 //! bytes available before anything is allocated, and errors are returned instead of panics.
 
+mod common;
+mod create;
 mod set;
 mod tile;
 
+pub use create::{CreateParams, OffMeshInput, create_tile_data};
 pub use set::{
     NavMeshParams, NavMeshSet, SET_MAGIC, SET_VERSION, SET_VERSION_OLD, SetTile, decode_poly_ref,
     encode_poly_ref,
