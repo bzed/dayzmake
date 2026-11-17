@@ -1031,3 +1031,59 @@ fn entry_filter_normalises_patterns_and_names() {
     assert!(!filter.matches("data/a.c"));
     assert!(EntryFilter::default().matches("anything"));
 }
+
+/// #92: the prefix hash input is the prefix as stored, by position. A UTF-8 `é` prefix next to another
+/// extension holding the windows-1252 byte `e9` (both decode to `é`) must hash `c3 a9`, not `e9`. Signing
+/// and verifying with the same code cannot show that, so the expected hash is computed here.
+#[cfg(feature = "sign")]
+#[test]
+fn signature_hashes_the_stored_prefix_bytes_of_colliding_extensions() {
+    use num_bigint::BigUint;
+    use sha1::{Digest, Sha1};
+
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    // a rewrite gives a PBO with a valid SHA-1 trailer
+    let pbo = rewrite(&bytes);
+    let written = pack_bytes(&pbo);
+    assert_eq!(pbo.header_extensions_bytes()[0].1, b"\xc3\xa9");
+
+    let signed = sign_bytes(&armk(), &pbo);
+    // armk is 1024 bits: after the key name come a 24 byte header and n, a length, sig1, a version and a
+    // length, then sig2
+    let name_len = signed.iter().position(|&b| b == 0).unwrap() + 1;
+    let n_at = name_len + 24;
+    let sig2_at = n_at + 128 + 4 + 128 + 8;
+    let n = BigUint::from_bytes_le(&signed[n_at..n_at + 128]);
+    let sig2 = BigUint::from_bytes_le(&signed[sig2_at..sig2_at + 128]);
+    let block = sig2.modpow(&BigUint::from(65537u32), &n).to_bytes_be();
+
+    let mut namehash = Sha1::new();
+    namehash.update(b"a.txt");
+    let mut hash2 = Sha1::new();
+    hash2.update(&written[written.len() - 20..]);
+    hash2.update(namehash.finalize());
+    hash2.update(b"\xc3\xa9\\");
+    // the PKCS#1 block ends with the SHA-1 hash
+    assert_eq!(block[block.len() - 20..], hash2.finalize()[..]);
+}
+
+#[test]
+fn insert_entry_over_a_windows_1252_name_stores_the_new_names_bytes() {
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("nonutf8.pbo")).unwrap()).unwrap();
+    let (name, _) = pbo
+        .entries()
+        .find(|(n, _)| pbo.name_bytes(n).contains(&0x97))
+        .unwrap();
+    let name = name.to_string();
+    // the lossily decoded name is valid UTF-8 now; the entry takes its bytes, not the old 0x97
+    pbo.insert_entry(name.clone(), b"new".to_vec()).unwrap();
+    assert_eq!(pbo.name_bytes(&name), name.as_bytes());
+    let again = rewrite(&pack_bytes(&pbo));
+    let headers = again.entry_headers();
+    let header = headers.iter().find(|h| h.name_bytes == name.as_bytes());
+    assert!(header.is_some(), "{headers:?}");
+    assert!(!headers.iter().any(|h| h.name_bytes.contains(&0x97)));
+}

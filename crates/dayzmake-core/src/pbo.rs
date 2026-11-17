@@ -693,6 +693,8 @@ impl PBO {
             return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
         }
         self.modified(&name);
+        // the new name is stored as the UTF-8 it was given in, not as the bytes of the entry it replaces
+        self.raw_names.remove(&name);
         self.files
             .insert(name, Cursor::new(data.into_boxed_slice()));
         Ok(())

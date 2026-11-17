@@ -32,6 +32,7 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
 - `extract`: a new target inside the source is refused without `force` too, before anything is created; a file/folder clash across entries skips the later entry with the warning `extract-path-clash` instead of failing (part of #98).
 - `Config::read`/`from_string`: any config entry may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
 - `Config::read`/`from_string`: a float literal that overflows f32 (`1e999`, `-1e39`) is an infinity, not an error (CfgConvert does the same); `Config::to_string` writes an infinity as `1e999` / `-1e999`, which reads back to the same f32 (#102).

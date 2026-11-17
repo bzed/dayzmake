@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
 - `api config` sorts the config PBOs of the game and of all selected mods together by `requiredAddons`, as the engine does (a game addon that requires a mod addon loads after it); ties go to the source (game, then the mods in `-m` order) and then to the path. `-m all` includes mods that have only a config. The `api-config-base-changed` warning shows the class path as written (`CfgVehicles/Car_Base`), the game is recognised by a flag and no longer by the name `vanilla`, and an infinite float is shown as `1e999` / `-1e999` as derapify writes it (a string in `--json`) (part of #98).
 - `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
 - `api grep` prints at most 512 bytes of a matching line, cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
