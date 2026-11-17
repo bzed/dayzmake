@@ -31,7 +31,8 @@ is maintained here.
 
 ### Unreleased
 
-- Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is the usual error. At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
+- Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
+- A config float literal that overflows f32 (`1e999`, `-1e39`) is rapified as an infinity, no longer an error, as CfgConvert does; a literal that underflows is 0. `derapify` writes an infinity as `1e999` / `-1e999`, so derapify then rapify keeps the bits (#102).
 - Config errors raised while parsing a value (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
@@ -66,7 +67,7 @@ is maintained here.
   spelling would otherwise swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
-  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  A float that does not fit an f32 (`1e999`, `-1e39`) becomes an f32 infinity, as in CfgConvert (#102); followed by text
   (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
   entry may end at a closing brace without a semicolon.
 - `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,

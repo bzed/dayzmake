@@ -19,8 +19,7 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   a fresh prefix, drive `P:` linked to the work folder, a copy of `Bin/CfgConvert` as `P:\tool`, `xvfb-run` (the tool
   opens a window on failure and Wine has no display here), stdin from `/dev/null`, `prlimit --as=4G timeout 300`.
   Observed: `x = 1.5`, `x = 1e5` and `x = abc` with a final newline give `x = 1.5;`, `x = 100000.0;`, `x = "abc";`
-  (`last_float`, `last_exp`, `last_str`); `x = 1e999` with or without `;` gives `x = inf;` (dayzmake keeps its error,
-  which is not changed here); the same four inputs without a final newline fail with
+  (`last_float`, `last_exp`, `last_str`); `x = 1e999` with or without `;` gives `x = inf;` (since #102 dayzmake does the same); the same four inputs without a final newline fail with
   `File ..., line 0: '.x': '<EOF byte>' encountered instead of ';'`, `x = 1.5\r\n` works. Enums (`enum_dup.cpp`):
   `enum { A, B = 5, A };` is accepted silently and the table holds `a` once, at its first place, with the last value
   (`a = 6`, `b = 5`); `enum_dup2.cpp`: `enum { A = 1, A = 2 };` gives `a = 2`; a later `y = A;` stays the string `"A"`. The enum
@@ -30,6 +29,12 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   `#endif` / `#define Y 1` without line end) are all accepted and typed. `x = 1` followed by a final `// c`
   without line end is accepted by CfgConvert too, but dayzmake's preprocessor does not strip a comment at the very
   end of a file (existing, separate bug), so it has no fixture.
+- `cfgconvert/float_ovf*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
+  `a = 1e999; b = -1e39; c = 1e-999; d = 3.4e38;` gives f32 bits `7f800000`, `ff800000`, `00000000`, `7f7fc99e`
+  (inf, -inf, 0, 3.4e38); `float_ovf2` adds `-1e999` (`ff800000`), `1e39` and `3.5e38` and `3.4028236e38` (all `7f800000`),
+  `-1e-999` (`80000000`, `-0.0`), `3.4028235e38` (`7f7fffff`) and an array `{1e999, -1e999, 1e-999}`. No error, empty log.
+  `x = 1e999x;` stays the string `"1e999x"`. CfgConvert's own decode shows `inf`; the expected files hold dayzmake's
+  form `1e999` / `-1e999`.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`

@@ -108,15 +108,12 @@ peg::parser! {
         /// A float followed by the end of an array element.
         rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }
 
+        /// An overflowing literal (`1e999`) is an infinity, as `CfgConvert` writes it; derapify writes
+        /// `1e999` / `-1e999` for it, which reads back to the same value.
         rule float_value(at: (usize, &str)) -> f32 = {?
             let (pos, f) = at;
-            // `parse` gives infinity on overflow; that would not survive a derapify/rapify round trip
             f.parse::<f32>()
                 .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
-                .and_then(|v| if v.is_finite() { Ok(v) } else {
-                    ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": out of range")));
-                    Err("a float in range")
-                })
         }
 
         rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
@@ -341,6 +338,21 @@ peg::parser! {
 /// Reads the enum table at the header's `enum_offset`. The class tree is usable without it, so a bad
 /// offset, a cut-short table or a name that is not a config identifier gives the values read before
 /// it, never an error.
+/// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
+/// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
+fn float_text(f: f32) -> String {
+    if f.is_infinite() {
+        if f.is_sign_positive() {
+            "1e999"
+        } else {
+            "-1e999"
+        }
+        .to_string()
+    } else {
+        format!("{f:?}")
+    }
+}
+
 fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
     let mut out = Vec::new();
     // an unreadable table is not an error: the values read so far are returned
@@ -552,7 +564,7 @@ impl ConfigArray {
                     )?;
                 }
                 ConfigArrayElement::FloatElement(f) => {
-                    output.write_all(format!("{f:?}").as_bytes())?;
+                    output.write_all(float_text(*f).as_bytes())?;
                 }
                 ConfigArrayElement::IntElement(i) => {
                     output.write_all(format!("{i}").as_bytes())?;
@@ -778,7 +790,7 @@ impl ConfigClass {
                         )?;
                     }
                     ConfigEntry::FloatEntry(f) => {
-                        output.write_all(format!("{key} = {f:?};\n").as_bytes())?;
+                        output.write_all(format!("{key} = {};\n", float_text(*f)).as_bytes())?;
                     }
                     ConfigEntry::IntEntry(i) => {
                         output.write_all(format!("{key} = {i};\n").as_bytes())?;

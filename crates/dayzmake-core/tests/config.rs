@@ -753,22 +753,45 @@ fn derapified_exponent_float_roundtrips() {
     assert_eq!(first, second);
 }
 
+/// `CfgConvert` writes an f32 infinity for a literal that overflows (`float_ovf` fixtures).
 #[test]
-fn out_of_range_floats_are_errors() {
+fn overflowing_floats_become_infinity() {
     let long = format!("1{}.5", "0".repeat(45));
-    for v in ["1e999", "-1e999", "1e39", "-1e39", long.as_str()] {
-        for src in [
-            format!("class A {{ x = {v}; }};"),
-            format!("class A {{ x[] = {{1, {v}}}; }};"),
-        ] {
-            let err = Config::from_string(src.clone(), None, &[], &mut Warnings::new())
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            assert!(err.contains("out of range"), "{src}: {err:?}");
-            assert!(err.contains("Invalid float"), "{src}: {err:?}");
-        }
+    let cases = [
+        ("1e999", f32::INFINITY),
+        ("-1e999", f32::NEG_INFINITY),
+        ("1e39", f32::INFINITY),
+        ("-1e39", f32::NEG_INFINITY),
+        ("3.5e38", f32::INFINITY),
+        (long.as_str(), f32::INFINITY),
+    ];
+    for (v, want) in cases {
+        let (config, w) = parse_a(&format!("class A {{ x = {v}; y[] = {{1, {v}}}; }};"));
+        assert!(w.warnings().is_empty(), "{v}: {:?}", w.warnings());
+        assert!(
+            matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == want.to_bits()),
+            "{v}"
+        );
+        let ConfigEntry::ArrayEntry(a) = entry_a(&config, "y") else {
+            panic!("not an array");
+        };
+        assert!(
+            matches!(a.elements(), [_, ConfigArrayElement::FloatElement(f)] if f.to_bits() == want.to_bits()),
+            "{v}"
+        );
     }
+}
+
+/// Derapify writes infinity as `1e999` / `-1e999`, which parses back to the same f32.
+#[test]
+fn infinite_floats_roundtrip_through_derapify() {
+    let bytes =
+        rapify_src("class A { a = 1e999; b = -1e39; c[] = {1e999, -1e999, 1.5}; d = -1e-999; };");
+    let text = derapify(bytes.clone());
+    assert!(text.contains("a = 1e999;"), "{text}");
+    assert!(text.contains("b = -1e999;"), "{text}");
+    assert!(text.contains("c[] = {1e999, -1e999, 1.5};"), "{text}");
+    assert_eq!(rapify_src(&text), bytes);
 }
 
 #[test]
@@ -894,16 +917,10 @@ fn floats_ending_at_a_closing_brace_stay_floats() {
     assert!(
         matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1e5_f32.to_bits())
     );
-    let err = Config::from_string(
-        "class A { x = 1e999 };".to_string(),
-        None,
-        &[],
-        &mut Warnings::new(),
-    )
-    .err()
-    .map(|e| e.to_string())
-    .unwrap_or_default();
-    assert!(err.contains("out of range"), "{err:?}");
+    let (config, _) = parse_a("class A { x = 1e999 };");
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == f32::INFINITY.to_bits())
+    );
 }
 
 #[test]
@@ -936,7 +953,11 @@ fn read_err(src: &str, path: &str) -> String {
 #[test]
 fn grammar_action_errors_carry_file_and_line() {
     let cases = [
-        ("class A {\n  y = 1;\n  x = 1e999;\n};", "3", "out of range"),
+        (
+            "class A {\n  y = 1;\n  x = 99999999999999999999;\n};",
+            "3",
+            "Invalid integer",
+        ),
         (
             "class A {\n  x = 99999999999999999999;\n};",
             "2",
@@ -949,9 +970,9 @@ fn grammar_action_errors_carry_file_and_line() {
         ),
         // CRLF line ends count the same
         (
-            "class A {\r\n  y = 1;\r\n  x = 1e999;\r\n};",
+            "class A {\r\n  y = 1;\r\n  x = 99999999999999999999;\r\n};",
             "3",
-            "out of range",
+            "Invalid integer",
         ),
     ];
     for (src, line, what) in cases {
@@ -1014,16 +1035,6 @@ fn last_entry_without_semicolon_keeps_its_type() {
         text_of("class A { x = 1.5\n};"),
         "class A {\n    x = 1.5;\n};\n"
     );
-}
-
-/// `1e999` is the same hard error without a `;`, with the line of the entry.
-#[test]
-fn last_entry_without_semicolon_out_of_range_is_an_error() {
-    for src in ["y = 1;\nx = 1e999\n", "y = 1;\r\nx = 1e999\r\n"] {
-        let err = read_err(src, "cfg.cpp");
-        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
-        assert!(err.contains("out of range"), "{err:?}");
-    }
 }
 
 /// `CfgConvert` rejects a last entry at the very end of the file with neither `;` nor line end

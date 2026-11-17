@@ -90,6 +90,14 @@ fn golden_last_float() {
     golden("last_float");
 }
 #[test]
+fn golden_float_ovf() {
+    golden("float_ovf");
+}
+#[test]
+fn golden_float_ovf2() {
+    golden("float_ovf2");
+}
+#[test]
 fn golden_last_exp() {
     golden("last_exp");
 }

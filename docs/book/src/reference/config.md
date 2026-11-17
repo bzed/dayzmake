@@ -54,8 +54,11 @@ Behaviour:
 - Syntax errors name the line and the token that was expected. Values that are not quoted are accepted with the
   `unquoted-string` warning and an entry without a value with `empty-value`.
 - Any entry may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
-  `__EVAL(...)` values are evaluated as with `;` (`1e999` is the same error). An entry on the last line of a file
+  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below). An entry on the last line of a file
   that has no line end after it is a syntax error, because CfgConvert rejects it too.
+- A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
+  (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
+  the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.
 - `delete`, `class X: Y`, forward declarations and `+=` array appends are supported.
 
 Examples:

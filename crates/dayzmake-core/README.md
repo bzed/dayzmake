@@ -33,6 +33,7 @@ need to be GPL-2.0-or-later compatible.
 ### Unreleased
 
 - `Config::read`/`from_string`: any config entry may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
+- `Config::read`/`from_string`: a float literal that overflows f32 (`1e999`, `-1e39`) is an infinity, not an error (CfgConvert does the same); `Config::to_string` writes an infinity as `1e999` / `-1e999`, which reads back to the same f32 (#102).
 - Config errors raised from a grammar action (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) start with `In line <file>:<line>:` like a parse error (#94).
 - New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute, drive and `..` paths are errors and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
 - `extract`: the `pbo-map.tsv` prefix is written with `/` instead of `\`, and `\` is escaped as `\\` in both columns (#87).
@@ -42,7 +43,7 @@ need to be GPL-2.0-or-later compatible.
 - `PBO::write` and signing use the stored bytes of each header extension by position, so a UTF-8 and a windows-1252 spelling of one string no longer swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
-  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  A float that does not fit an f32 (`1e999`, `-1e39`) becomes an f32 infinity, as in CfgConvert (#102); followed by text
   (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
   entry may end at a closing brace without a semicolon.
 - `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per
