@@ -35,7 +35,7 @@ use crate::navmesh::detour::query::find_nearest_poly_in_tile;
 use crate::navmesh::detour::set::{
     NavMeshParams, NavMeshSet, SET_VERSION, SetTile, decode_poly_ref, encode_poly_ref,
 };
-use crate::navmesh::detour::tile::{NAVMESH_MAGIC, NAVMESH_VERSION, TileData};
+use crate::navmesh::detour::tile::{NAVMESH_MAGIC, NAVMESH_VERSION, Poly, TileData};
 use crate::navmesh::num::trunc_u8;
 
 /// `DT_NULL_LINK`.
@@ -208,19 +208,19 @@ fn overlap_slabs(
     py: f32,
 ) -> bool {
     // The segments are shrunk a little so that slabs which touch at end points are not connected.
-    let minx = dt_max(amin[0] + px, bmin[0] + px);
-    let maxx = dt_min(amax[0] - px, bmax[0] - px);
-    if minx > maxx {
+    let lo_x = dt_max(amin[0] + px, bmin[0] + px);
+    let hi_x = dt_min(amax[0] - px, bmax[0] - px);
+    if lo_x > hi_x {
         return false;
     }
     let ad = (amax[1] - amin[1]) / (amax[0] - amin[0]);
     let ak = amin[1] - ad * amin[0];
     let bd = (bmax[1] - bmin[1]) / (bmax[0] - bmin[0]);
     let bk = bmin[1] - bd * bmin[0];
-    let aminy = ad * minx + ak;
-    let amaxy = ad * maxx + ak;
-    let bminy = bd * minx + bk;
-    let bmaxy = bd * maxx + bk;
+    let aminy = ad * lo_x + ak;
+    let amaxy = ad * hi_x + ak;
+    let bminy = bd * lo_x + bk;
+    let bmaxy = bd * hi_x + bk;
     let dmin = bminy - aminy;
     let dmax = bmaxy - amaxy;
     // Crossing segments always overlap.
@@ -633,6 +633,58 @@ impl NavMesh {
                 })
                 .collect(),
         }
+    }
+
+    /// The tiles of the grid cells `min..=max` (`x`, `y`), with their reference bases, row by row
+    /// (`y` outer, `x` inner) as `dtNavMeshQuery::queryPolygons` visits them.
+    pub(crate) fn tiles_in_range(
+        &self,
+        (lo_x, lo_y): (i32, i32),
+        (hi_x, hi_y): (i32, i32),
+    ) -> Vec<(u64, &TileData)> {
+        if lo_x > hi_x || lo_y > hi_y {
+            return Vec::new();
+        }
+        let cells =
+            (i64::from(hi_x) - i64::from(lo_x) + 1) * (i64::from(hi_y) - i64::from(lo_y) + 1);
+        let mut keys: Vec<(i32, i32)> =
+            if usize::try_from(cells).is_ok_and(|c| c <= self.grid.len()) {
+                (lo_y..=hi_y)
+                    .flat_map(|y| (lo_x..=hi_x).map(move |x| (x, y)))
+                    .filter(|k| self.grid.contains_key(k))
+                    .collect()
+            } else {
+                // A box far larger than the grid: scan the grid instead of the cells.
+                self.grid
+                    .keys()
+                    .copied()
+                    .filter(|&(x, y)| (lo_x..=hi_x).contains(&x) && (lo_y..=hi_y).contains(&y))
+                    .collect()
+            };
+        keys.sort_by_key(|&(x, y)| (y, x));
+        keys.iter()
+            .filter_map(|k| {
+                let slot = *self.grid.get(k)?;
+                Some((self.base_of(slot), &self.tile(slot)?.data))
+            })
+            .collect()
+    }
+
+    /// The polygons of every tile, tile by tile in slot order, for the island filter.
+    pub(crate) fn polys_mut(&mut self) -> impl Iterator<Item = (u32, &mut [Poly])> {
+        self.slots
+            .iter_mut()
+            .filter_map(|(&slot, s)| s.tile.as_mut().map(|t| (slot, t.data.polys.as_mut_slice())))
+    }
+
+    /// The tile a polygon reference points into, with its slot, if the salt and the polygon index
+    /// are valid (`getTileAndPolyByRef`).
+    pub(crate) fn tile_by_ref(&self, reference: u64) -> Option<(u32, &TileData)> {
+        let (salt, slot, poly) = decode_poly_ref(reference);
+        let s = self.slots.get(&slot)?;
+        let t = s.tile.as_ref()?;
+        let valid = s.salt == salt && usize::try_from(poly).is_ok_and(|p| p < t.data.polys.len());
+        valid.then_some((slot, &t.data))
     }
 
     fn tile(&self, slot: u32) -> Option<&MeshTile> {

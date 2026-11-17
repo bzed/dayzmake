@@ -9,5 +9,6 @@ pub(crate) mod bytes;
 pub mod capture;
 pub mod client;
 pub mod detour;
+pub mod islands;
 pub(crate) mod num;
 pub mod wire;

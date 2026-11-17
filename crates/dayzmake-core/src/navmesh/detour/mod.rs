@@ -17,6 +17,7 @@ mod tile;
 
 pub use create::{CreateParams, OffMeshInput, create_tile_data};
 pub use mesh::NavMesh;
+pub use query::find_nearest_poly;
 pub use set::{
     NavMeshParams, NavMeshSet, SET_MAGIC, SET_VERSION, SET_VERSION_OLD, SetTile, decode_poly_ref,
     encode_poly_ref,

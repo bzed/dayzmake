@@ -17,8 +17,9 @@
 //
 // Ported to Rust and altered for DayZ (see the dayzmake navmesh spec); this is not the original software.
 
-//! The per-tile queries of `dtNavMesh` the tile linker needs: `queryPolygonsInTile`,
-//! `findNearestPolyInTile`, `closestPointOnPoly` and `getPolyHeight`.
+//! The queries of `dtNavMesh` and `dtNavMeshQuery` the tile linker and the island filter need:
+//! `queryPolygonsInTile`, `findNearestPolyInTile`, `closestPointOnPoly`, `getPolyHeight` and the
+//! multi-tile [`find_nearest_poly`] with a query filter.
 //!
 //! The last two are the pre-2016 behaviour DayZ uses (spec 10.2): there is no detail mesh, so the
 //! height comes from the first triangle of the polygon's fan that contains the position, with the
@@ -28,9 +29,10 @@ use crate::navmesh::detour::common::{
     distance_pt_poly_edges_sqr, dt_clamp, dt_max, dt_min, overlap_bounds, overlap_quant_bounds,
     point_in_polygon, vadd, vdist, vlerp, vsub,
 };
+use crate::navmesh::detour::mesh::NavMesh;
 use crate::navmesh::detour::set::decode_poly_ref;
-use crate::navmesh::detour::tile::TileData;
-use crate::navmesh::num::trunc_u16;
+use crate::navmesh::detour::tile::{Poly, TileData};
+use crate::navmesh::num::{floor_i32, trunc_u16};
 
 /// `DT_POLYTYPE_OFFMESH_CONNECTION`.
 const POLYTYPE_OFFMESH: u8 = 1;
@@ -103,7 +105,7 @@ fn fan_height(verts: &[[f32; 3]], pos: &[f32; 3]) -> Option<f32> {
     not(test),
     expect(
         dead_code,
-        reason = "used by the public nearest-polygon query that follows"
+        reason = "port of getPolyHeight; the nearest-polygon query and the island filter do not need it"
     )
 )]
 pub(crate) fn get_poly_height(tile: &TileData, poly: usize, pos: &[f32; 3]) -> Option<f32> {
@@ -193,10 +195,23 @@ pub(crate) fn query_polygons_in_tile(
     qmax: &[f32; 3],
     max_polys: usize,
 ) -> Vec<u64> {
+    query_polygons_filtered(tile, base, qmin, qmax, max_polys, &|_| true)
+}
+
+/// `dtNavMeshQuery::queryPolygonsInTile`: [`query_polygons_in_tile`] that only reports polygons
+/// that pass `filter` (the filter runs before the `max_polys` limit counts).
+pub(crate) fn query_polygons_filtered(
+    tile: &TileData,
+    base: u64,
+    qmin: &[f32; 3],
+    qmax: &[f32; 3],
+    max_polys: usize,
+    filter: &dyn Fn(&Poly) -> bool,
+) -> Vec<u64> {
     let mut out = Vec::new();
     if tile.bv_tree.is_empty() {
         for (i, p) in tile.polys.iter().enumerate() {
-            if p.poly_type() == POLYTYPE_OFFMESH {
+            if p.poly_type() == POLYTYPE_OFFMESH || !filter(p) {
                 continue;
             }
             let Some((arr, nv)) = poly_verts(tile, i) else {
@@ -246,7 +261,7 @@ pub(crate) fn query_polygons_in_tile(
             && overlap
             && out.len() < max_polys
             && let Ok(i) = usize::try_from(node.i)
-            && i < tile.polys.len()
+            && tile.polys.get(i).is_some_and(filter)
         {
             out.push(base | u64::try_from(i).unwrap_or(0));
         }
@@ -266,11 +281,47 @@ pub(crate) fn query_polygons_in_tile(
     out
 }
 
+/// The running result of `dtFindNearestPolyQuery`.
+struct Nearest {
+    distance_sqr: f32,
+    found: Option<(u64, [f32; 3])>,
+}
+
+impl Nearest {
+    fn new() -> Self {
+        Self {
+            distance_sqr: f32::MAX,
+            found: None,
+        }
+    }
+
+    /// `dtFindNearestPolyQuery::process` for the polygons `refs` of `tile`.
+    ///
+    /// A position directly over a polygon counts by its vertical distance beyond the tile's
+    /// `walkableClimb` only, which favours it over a nearer polygon the position is not over.
+    fn process(&mut self, tile: &TileData, refs: &[u64], center: &[f32; 3]) {
+        for &r in refs {
+            let idx = usize::try_from(decode_poly_ref(r).2).unwrap_or(usize::MAX);
+            let Some((closest, over)) = closest_point_on_poly(tile, idx, center) else {
+                continue;
+            };
+            let diff = vsub(center, &closest);
+            let d = if over {
+                let d = diff[1].abs() - tile.header.walkable_climb;
+                if d > 0.0 { d * d } else { 0.0 }
+            } else {
+                diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]
+            };
+            if d < self.distance_sqr {
+                self.found = Some((r, closest));
+                self.distance_sqr = d;
+            }
+        }
+    }
+}
+
 /// `findNearestPolyInTile`: the polygon of the tile nearest to `center` within the box of
 /// `half_extents`, and the nearest point on it.
-///
-/// A position directly over a polygon counts by its vertical distance beyond the tile's
-/// `walkableClimb` only, which favours it over a nearer polygon the position is not over.
 pub(crate) fn find_nearest_poly_in_tile(
     tile: &TileData,
     base: u64,
@@ -280,27 +331,48 @@ pub(crate) fn find_nearest_poly_in_tile(
     let bmin = vsub(center, half_extents);
     let bmax = vadd(center, half_extents);
     let polys = query_polygons_in_tile(tile, base, &bmin, &bmax, NEAREST_MAX_POLYS);
+    let mut nearest = Nearest::new();
+    nearest.process(tile, &polys, center);
+    nearest.found
+}
 
-    let mut nearest = None;
-    let mut nearest_distance_sqr = f32::MAX;
-    for r in polys {
-        let idx = usize::try_from(decode_poly_ref(r).2).unwrap_or(usize::MAX);
-        let Some((closest, over)) = closest_point_on_poly(tile, idx, center) else {
-            continue;
-        };
-        let diff = vsub(center, &closest);
-        let d = if over {
-            let d = diff[1].abs() - tile.header.walkable_climb;
-            if d > 0.0 { d * d } else { 0.0 }
-        } else {
-            diff[0] * diff[0] + diff[1] * diff[1] + diff[2] * diff[2]
-        };
-        if d < nearest_distance_sqr {
-            nearest = Some((r, closest));
-            nearest_distance_sqr = d;
-        }
+/// `dtNavMeshQuery::findNearestPoly`: the polygon of the mesh nearest to `center` within the box
+/// `center` plus or minus `half_extents`, and the nearest point on it.
+///
+/// A polygon is a candidate when its flags have a bit of `include` and none of `exclude` (the
+/// stock `dtQueryFilter`). Off-mesh connections are never candidates. The candidates come from
+/// the BV trees of the tiles the box touches (`calcTileLoc` of its corners, rows first), and the
+/// nearest is chosen as in Detour: a position directly over a polygon counts by its vertical
+/// distance beyond the tile's `walkableClimb` only. The point uses the DayZ
+/// `closestPointOnPoly` (spec 10.2).
+///
+/// Returns `None` when no candidate exists.
+#[must_use]
+pub fn find_nearest_poly(
+    mesh: &NavMesh,
+    center: [f32; 3],
+    half_extents: [f32; 3],
+    include: u16,
+    exclude: u16,
+) -> Option<(u64, [f32; 3])> {
+    let bmin = vsub(&center, &half_extents);
+    let bmax = vadd(&center, &half_extents);
+    let params = mesh.params();
+    let loc = |pos: &[f32; 3]| {
+        (
+            floor_i32((pos[0] - params.orig[0]) / params.tile_width),
+            floor_i32((pos[2] - params.orig[2]) / params.tile_height),
+        )
+    };
+    let (lo_x, lo_y) = loc(&bmin);
+    let (hi_x, hi_y) = loc(&bmax);
+    let pass = |p: &Poly| p.flags & include != 0 && p.flags & exclude == 0;
+    let mut nearest = Nearest::new();
+    for (base, tile) in mesh.tiles_in_range((lo_x, lo_y), (hi_x, hi_y)) {
+        let polys = query_polygons_filtered(tile, base, &bmin, &bmax, usize::MAX, &pass);
+        nearest.process(tile, &polys, &center);
     }
-    nearest
+    nearest.found
 }
 
 #[cfg(test)]
