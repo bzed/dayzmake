@@ -261,7 +261,10 @@ pub(crate) fn query_polygons_filtered(
             && overlap
             && out.len() < max_polys
             && let Ok(i) = usize::try_from(node.i)
-            && tile.polys.get(i).is_some_and(filter)
+            && tile
+                .polys
+                .get(i)
+                .is_some_and(|p| p.poly_type() != POLYTYPE_OFFMESH && filter(p))
         {
             out.push(base | u64::try_from(i).unwrap_or(0));
         }
@@ -355,6 +358,10 @@ pub fn find_nearest_poly(
     include: u16,
     exclude: u16,
 ) -> Option<(u64, [f32; 3])> {
+    // As upstream (`dtVisfinite`): a non-finite centre or extent is a failure.
+    if !center.iter().chain(&half_extents).all(|v| v.is_finite()) {
+        return None;
+    }
     let bmin = vsub(&center, &half_extents);
     let bmax = vadd(&center, &half_extents);
     let params = mesh.params();
@@ -454,6 +461,43 @@ mod tests {
         assert!(!over);
         assert!((c[0] - 10.0).abs() < 1e-4 && (c[2] - 5.0).abs() < 1e-4);
         assert!((c[1] - 10.0).abs() < 1e-4);
+    }
+
+    /// A quad whose second fan triangle is not coplanar with the first: `v2` is 20 m up, so the
+    /// first triangle `(v0, v1, v2)` is `y = 2x` and the second `(v0, v2, v3)` is `y = 2z`.
+    fn warped() -> TileData {
+        let mut t = slope();
+        t.verts[2] = [10.0, 20.0, 10.0];
+        t.verts[3] = [10.0, 0.0, 0.0];
+        t
+    }
+
+    #[test]
+    fn closest_point_inside_uses_fan_height() {
+        let t = warped();
+        // 0.009 m below the diagonal v0-v2 (z < x): inside the second triangle, and inside the
+        // first only by the 1e-3 barycentric tolerance. The first triangle containing it wins.
+        let pos = [5.0, 77.0, 4.991];
+        let (c, over) = closest_point_on_poly(&t, 0, &pos).expect("poly");
+        assert!(over);
+        assert!((c[0] - 5.0).abs() < 1e-6 && (c[2] - 4.991).abs() < 1e-6);
+        // First triangle: 2 * x = 10.0. The second would give 2 * z = 9.982.
+        assert!((c[1] - 10.0).abs() < 0.005, "height {}", c[1]);
+        let second = closest_height_point_triangle(&pos, &t.verts[0], &t.verts[2], &t.verts[3])
+            .expect("second triangle contains it");
+        assert!((second - 9.982).abs() < 0.005 && (second - c[1]).abs() > 0.01);
+    }
+
+    #[test]
+    fn closest_point_outside_clamps_to_edge() {
+        let t = slope();
+        // 5 mm beyond the x = 10 edge: clamped to x = 10, but a fan triangle contains the
+        // original position within tolerance, so the height is the fan height there (10.005),
+        // not the height of the clamped point (10.0).
+        let (c, over) = closest_point_on_poly(&t, 0, &[10.005, 0.0, 5.0]).expect("poly");
+        assert!(!over);
+        assert!((c[0] - 10.0).abs() < 1e-4 && (c[2] - 5.0).abs() < 1e-4);
+        assert!((c[1] - 10.005).abs() < 1e-3, "height {}", c[1]);
     }
 
     #[test]

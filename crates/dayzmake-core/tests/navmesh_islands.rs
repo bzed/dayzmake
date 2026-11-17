@@ -11,7 +11,7 @@ use dayzmake_core::navmesh::detour::{
     CreateParams, NavMesh, NavMeshParams, OffMeshInput, TileData, TileExtra, create_tile_data,
     decode_poly_ref, encode_poly_ref, find_nearest_poly,
 };
-use dayzmake_core::navmesh::islands::{IslandReport, filter_islands};
+use dayzmake_core::navmesh::islands::filter_islands;
 
 const NIL: u16 = 0xffff;
 
@@ -90,9 +90,8 @@ const SEED_A: [f32; 3] = [25.0, 0.0, 25.0];
 
 #[test]
 fn nearest_poly_prefers_poly_directly_below_within_climb() {
-    // Two stacked tiles' worth of polygons cannot share a grid cell, so use two tiles side by
-    // side: the centre is over tile 0's polygon (0.3 m above, within the climb height 0.45) and
-    // nearer in 3D to nothing else.
+    // Tile 0's polygon is at y 0 and tile 1's at y 0.3, side by side. A centre 0.3 m above tile
+    // 0's polygon is within the climb height 0.45, so it counts as distance 0.
     let mut mesh = NavMesh::new(mesh_params(2)).unwrap();
     mesh.set_tile(square((0, 0), 0, [NIL; 4], 1, &[])).unwrap();
     mesh.set_tile(square((1, 0), 3, [NIL; 4], 1, &[])).unwrap();
@@ -124,6 +123,25 @@ fn nearest_poly_honours_the_flags() {
 }
 
 #[test]
+fn nearest_poly_rejects_non_finite_input() {
+    let mesh = three_tiles(1);
+    let e = [30.0, 30.0, 3.0];
+    assert!(find_nearest_poly(&mesh, SEED_A, e, 0xffff, 0).is_some());
+    assert!(find_nearest_poly(&mesh, [f32::NAN, 0.0, 25.0], e, 0xffff, 0).is_none());
+    assert!(find_nearest_poly(&mesh, SEED_A, [f32::INFINITY, 30.0, 3.0], 0xffff, 0).is_none());
+}
+
+#[test]
+fn seed_extents_are_30_30_3() {
+    let mut mesh = NavMesh::new(mesh_params(1)).unwrap();
+    mesh.set_tile(square((0, 0), 0, [NIL; 4], 1, &[])).unwrap();
+    // The polygon is z 0..50: 10 m beyond it in z is outside the z half extent of 3 ...
+    assert!(filter_islands(&mut mesh, [25.0, 0.0, 60.0]).is_none());
+    // ... and the same offset in x is inside the x half extent of 30.
+    assert!(filter_islands(&mut mesh, [60.0, 0.0, 25.0]).is_some());
+}
+
+#[test]
 fn islands_flag_unreachable() {
     let mut mesh = three_tiles(0x8001);
     let report = filter_islands(&mut mesh, SEED_A).expect("seed found");
@@ -136,7 +154,6 @@ fn islands_flag_unreachable() {
     // Running it again gives the same result.
     let again = filter_islands(&mut mesh, SEED_A).unwrap();
     assert_eq!((again.reachable, again.isolated), (2, 1));
-    let _: IslandReport = IslandReport::default();
 }
 
 #[test]
@@ -179,8 +196,7 @@ fn islands_traverse_disabled_doors() {
 fn seed_not_found_is_none() {
     let mut mesh = three_tiles(1);
     assert!(filter_islands(&mut mesh, [900.0, 0.0, 900.0]).is_none());
-    // The flags are still cleared first (step 1 of 8.5): the stray 0x8000 of tile 2 is gone... and
-    // so is nothing else, because no flood ran.
+    // Step 1 of 8.5 still ran: the stray 0x8000 of tile 2 is cleared and nothing is flagged.
     assert_eq!(flags_of(&mesh, 2, 0), vec![0x0001]);
     // Too high above the polygons for the vertical extent of 30 m.
     assert!(filter_islands(&mut mesh, [25.0, 100.0, 25.0]).is_none());
