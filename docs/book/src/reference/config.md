@@ -56,7 +56,8 @@ Behaviour:
 - A value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
   `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is handled as with `;` (next bullet). An entry on the last line of a file
   that has no line end after it is a syntax error, because CfgConvert rejects it too.
-- A decimal integer that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`), as in CfgConvert; in an array a decimal that does not fit 32 bits (`3000000000`) is a float. In an entry a literal that fits 64 but not 32 bits (`2147483648`) and a hex literal that overflows are errors (CfgConvert writes the first as a 64-bit integer, which dayzmake does not). Followed by text the value stays an unquoted string.
+- A decimal integer is stored by size, as in CfgConvert: an `i32` is a 32-bit integer, one that fits 64 but not 32 bits (`2147483648`) is a 64-bit integer entry (entry subtype 6; `derapify` and `api config` read it), one that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`). Arrays have no 64-bit element type: there a decimal that does not fit 32 bits (`3000000000`) is a float. Followed by text the value stays an unquoted string.
+- A hex literal without a sign keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`); `0X` works like `0x`. With a sign it is a float (`-0x10` is `-16.0`).
 - A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
   (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
   the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.

@@ -117,19 +117,40 @@ peg::parser! {
                 .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
         }
 
+        /// An integer of an enum value (a sign and `0x` are accepted, the value must fit `i32`).
         rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
+
+        /// A literal `CfgConvert` stores as an integer: unsigned hex (any length, `0x` or `0X`) or a decimal.
+        rule int_literal() -> (usize, &'input str) = p:position!() t:$(("0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ((['-' | '+'])? ['0'..='9']+)) { (p, t) }
+
+        /// A signed hex literal (`-0x10`), which `CfgConvert` stores as a float.
+        rule signed_hex_text() -> &'input str = $(['-' | '+'] "0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+)
 
         /// An integer followed by the end of an entry; the terminator is checked first, like for floats
         /// (`99999999999x` stays an unquoted string).
-        rule integer_entry() -> i32 = i:integer_text() &entry_end() v:integer_value(i) { v }
+        rule integer_entry() -> i32 = i:int_literal() &entry_end() v:int_value(i) { v }
 
         /// An integer followed by the end of an array element.
-        rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
+        rule integer_element() -> i32 = i:int_literal() &(whitespace()? [',' | '}']) v:int_value(i) { v }
+
+        /// A signed hex literal followed by the end of an entry.
+        rule signed_hex_entry() -> f32 = t:signed_hex_text() &entry_end() { signed_hex_float(t) }
+
+        /// A signed hex literal followed by the end of an array element.
+        rule signed_hex_element() -> f32 = t:signed_hex_text() &(whitespace()? [',' | '}']) { signed_hex_float(t) }
 
         /// A decimal literal that does not fit `i64`, which `CfgConvert` stores as a float (`1e20`); one that
-        /// fits is left to `integer_entry`.
+        /// fits is left to `int64_entry` and `integer_entry`.
         rule huge_integer_text() -> (usize, &'input str) = quiet!{ p:position!() t:$((['-' | '+'])? ['0'..='9']+) {?
             if t.parse::<i64>().is_err() { Ok((p, t)) } else { Err("an integer that fits 64 bits") }
+        } }
+
+        /// A decimal literal that fits `i64` but not `i32`, which `CfgConvert` stores as a 64-bit integer in an entry.
+        rule int64_text() -> i64 = quiet!{ t:$((['-' | '+'])? ['0'..='9']+) {?
+            match (t.parse::<i64>(), t.parse::<i32>()) {
+                (Ok(v), Err(_)) => Ok(v),
+                _ => Err("an integer between 32 and 64 bits"),
+            }
         } }
 
         /// A decimal literal that does not fit `i32`, in an array, where `CfgConvert` stores it as a float.
@@ -139,7 +160,19 @@ peg::parser! {
 
         rule huge_integer_entry() -> f32 = i:huge_integer_text() &entry_end() v:float_value(i) { v }
 
+        rule int64_entry() -> i64 = i:int64_text() &entry_end() { i }
+
         rule wide_integer_element() -> f32 = i:wide_integer_text() &(whitespace()? [',' | '}']) v:float_value(i) { v }
+
+        /// An integer literal of an entry or array element: hex keeps its low 32 bits, as in `CfgConvert`.
+        rule int_value(at: (usize, &str)) -> i32 = {?
+            let (pos, i) = at;
+            match hex_digits(i) {
+                Some(digits) => Ok(hex_wrapped(digits)),
+                None => i.parse::<i32>()
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" }),
+            }
+        }
 
         rule integer_value(at: (usize, &str)) -> i32 = {?
             let (pos, i) = at;
@@ -210,6 +243,7 @@ peg::parser! {
         rule array_element(d: usize) -> ConfigArrayElement =
             f:float_element() { ConfigArrayElement::FloatElement(f) } /
             f:wide_integer_element() { ConfigArrayElement::FloatElement(f) } /
+            f:signed_hex_element() { ConfigArrayElement::FloatElement(f) } /
             i:integer_element() { ConfigArrayElement::IntElement(i) } /
             a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
@@ -227,7 +261,9 @@ peg::parser! {
 
         rule var(d: usize) -> ConfigEntry =
             f:float_entry() { ConfigEntry::FloatEntry(f) } /
+            f:signed_hex_entry() { ConfigEntry::FloatEntry(f) } /
             f:huge_integer_entry() { ConfigEntry::FloatEntry(f) } /
+            i:int64_entry() { ConfigEntry::Int64Entry(i) } /
             i:integer_entry() { ConfigEntry::IntEntry(i) } /
             s:string()  { ConfigEntry::StringEntry(s) } /
             v:eval_value(d) { v.into() }
@@ -355,6 +391,42 @@ peg::parser! {
 
 /// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
 /// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
+/// The hex digits of an unsigned `0x` / `0X` literal.
+fn hex_digits(text: &str) -> Option<&str> {
+    text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+}
+
+/// The low 32 bits of a hex literal of any length, as `CfgConvert` stores it (`0x1FFFFFFFFF` is `-1`).
+fn hex_wrapped(digits: &str) -> i32 {
+    let bits = digits
+        .chars()
+        .filter_map(|c| c.to_digit(16))
+        .fold(0_u32, |acc, d| {
+            // 4 bits per digit: the high bits fall off, which is the wrap-around wanted here
+            acc.wrapping_shl(4) | d
+        });
+    i32::from_ne_bytes(bits.to_ne_bytes())
+}
+
+/// The value of a signed hex literal (`-0x10`), which `CfgConvert` stores as a float.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a hex magnitude is rounded to the nearest f32, overflow is infinity, as strtod then a float store does"
+)]
+fn signed_hex_float(text: &str) -> f32 {
+    let (negative, rest) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let magnitude = hex_digits(rest)
+        .unwrap_or_default()
+        .chars()
+        .filter_map(|c| c.to_digit(16))
+        .fold(0.0_f64, |acc, d| acc * 16.0 + f64::from(d));
+    let value = magnitude as f32;
+    if negative { -value } else { value }
+}
+
 fn float_literal(f: f32) -> String {
     if f.is_infinite() {
         if f.is_sign_positive() {
@@ -458,6 +530,8 @@ pub enum ConfigEntry {
     FloatEntry(f32),
     /// Int entry
     IntEntry(i32),
+    /// 64-bit int entry (entry subtype 6): `CfgConvert` writes a decimal literal that fits `i64` but not `i32` this way
+    Int64Entry(i64),
     /// Array entry
     ArrayEntry(ConfigArray),
     /// Class entry
@@ -690,6 +764,7 @@ impl ConfigEntry {
             ConfigEntry::StringEntry(s) => s.len() + 3,
             ConfigEntry::FloatEntry(_f) => 6,
             ConfigEntry::IntEntry(_i) => 6,
+            ConfigEntry::Int64Entry(_i) => 10,
             ConfigEntry::ArrayEntry(a) => {
                 let len = 1
                     + compressed_int_len_of(a.elements.len())
@@ -813,6 +888,9 @@ impl ConfigClass {
                     ConfigEntry::IntEntry(i) => {
                         output.write_all(format!("{key} = {i};\n").as_bytes())?;
                     }
+                    ConfigEntry::Int64Entry(i) => {
+                        output.write_all(format!("{key} = {i};\n").as_bytes())?;
+                    }
                     ConfigEntry::ArrayEntry(a) => {
                         if a.is_expansion {
                             output.write_all(format!("{key}[] += ").as_bytes())?;
@@ -892,6 +970,12 @@ impl ConfigClass {
                             output.write_cstring(name)?;
                             output.write_i32::<LittleEndian>(*i)?;
                             written += name.len() + 7;
+                        }
+                        ConfigEntry::Int64Entry(i) => {
+                            output.write_all(&[1, 6])?;
+                            output.write_cstring(name)?;
+                            output.write_i64::<LittleEndian>(*i)?;
+                            written += name.len() + 11;
                         }
                         ConfigEntry::ArrayEntry(a) => {
                             output.write_all(if a.is_expansion { &[5] } else { &[2] })?;
@@ -1035,6 +1119,11 @@ impl ConfigClass {
                     entries.push((
                         name,
                         ConfigEntry::IntEntry(input.read_i32::<LittleEndian>()?),
+                    ));
+                } else if subtype == 6 {
+                    entries.push((
+                        name,
+                        ConfigEntry::Int64Entry(input.read_i64::<LittleEndian>()?),
                     ));
                 } else {
                     return Err(error!("Unrecognized variable entry subtype: {}.", subtype));

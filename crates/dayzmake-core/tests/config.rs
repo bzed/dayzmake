@@ -89,11 +89,12 @@ fn garbage_is_an_error_not_a_panic() {
     assert!(Config::read_rapified(&mut garbage).is_err());
 }
 
-/// Integer literals that do not fit an i32 are an error, not a panic.
+/// An enum value that does not fit an i32 is an error, not a panic (entries and array elements take
+/// 64-bit and wide hex values like `CfgConvert`).
 #[test]
 fn integer_overflow_is_an_error() {
     let result = Config::from_string(
-        String::from("x = 0x1FFFFFFFF;\n"),
+        String::from("enum { X = 0x1FFFFFFFF };\n"),
         None,
         &Vec::new(),
         &mut Warnings::new(),
@@ -868,15 +869,10 @@ fn overflowing_integer_followed_by_text_stays_a_string() {
 }
 
 #[test]
-fn an_overflowing_integer_alone_is_still_an_error() {
-    assert!(
-        Config::from_string(
-            "class A { a = 99999999999; };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+fn an_integer_beyond_32_bits_alone_is_a_64_bit_entry_or_an_array_float() {
+    assert_eq!(
+        text_of("class A { a = 99999999999; };"),
+        "class A {\n    a = 99999999999;\n};\n"
     );
     // in an array `CfgConvert` makes it a float (`overflowing_integer_literal_is_a_float_like_cfgconvert`)
     assert_eq!(
@@ -950,11 +946,15 @@ fn read_err(src: &str, path: &str) -> String {
 fn grammar_action_errors_carry_file_and_line() {
     let cases = [
         (
-            "class A {\n  y = 1;\n  x = 2147483648;\n};",
+            "class A {\n  y = 1;\n  enum { X = 2147483648 };\n};",
             "3",
             "Invalid integer",
         ),
-        ("class A {\n  x = 2147483648;\n};", "2", "Invalid integer"),
+        (
+            "class A {\n  enum { X = 2147483648 };\n};",
+            "2",
+            "Invalid integer",
+        ),
         (
             "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
             "4",
@@ -962,7 +962,7 @@ fn grammar_action_errors_carry_file_and_line() {
         ),
         // CRLF line ends count the same
         (
-            "class A {\r\n  y = 1;\r\n  x = 2147483648;\r\n};",
+            "class A {\r\n  y = 1;\r\n  enum { X = 2147483648 };\r\n};",
             "3",
             "Invalid integer",
         ),
@@ -1042,14 +1042,11 @@ fn comment_or_directive_on_the_last_line_without_line_end() {
     assert_eq!(text_of("x = 1\r// c"), "x = 1;\n");
 }
 
-/// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
-/// (`CfgConvert` stores 2147483648 as a 64-bit integer, which dayzmake does not write.)
+/// A last entry without `;` keeps its integer type at the line end, LF and CRLF: 2147483648 is a 64-bit integer.
 #[test]
-fn last_entry_without_semicolon_integer_overflow_is_an_error() {
+fn last_entry_without_semicolon_is_a_64_bit_integer() {
     for src in ["y = 1;\nx = 2147483648\n", "y = 1;\r\nx = 2147483648\r\n"] {
-        let err = read_err(src, "cfg.cpp");
-        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
-        assert!(err.contains("Invalid integer"), "{err:?}");
+        assert_eq!(text_of(src), "y = 1;\nx = 2147483648;\n", "{src:?}");
     }
 }
 
@@ -1252,4 +1249,121 @@ fn parse_error_and_warnings_across_an_include() {
     assert!(!ok);
     assert_eq!(msgs.len(), 1, "{msgs:?}");
     assert!(msgs[0].contains("def"), "{msgs:?}");
+}
+
+/// The entry subtype byte of the first entry of a rapified config with a single top-level entry named
+/// `x`: header (16 bytes), parent `\0`, count, entry type, subtype.
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn first_subtype(config: &Config) -> u8 {
+    config.to_cursor().unwrap().into_inner()[16 + 1 + 1 + 1]
+}
+
+/// A decimal literal that fits `i64` but not `i32` is a 64-bit integer entry (subtype 6), as in `CfgConvert`
+/// (`golden_int64`); one that fits `i32` stays subtype 2, one beyond `i64` is a float (subtype 1).
+#[test]
+fn decimal_entries_pick_the_subtype_like_cfgconvert() {
+    for (lit, subtype) in [
+        ("2147483647", 2),
+        ("-2147483648", 2),
+        ("2147483648", 6),
+        ("-2147483649", 6),
+        ("+2147483648", 6),
+        ("9223372036854775807", 6),
+        ("-9223372036854775808", 6),
+        ("9223372036854775808", 1),
+        ("-9223372036854775809", 1),
+    ] {
+        let config = parse(&format!("x = {lit};"));
+        assert_eq!(first_subtype(&config), subtype, "{lit}");
+        // the same at a line end
+        let config = parse(&format!("x = {lit}\n"));
+        assert_eq!(first_subtype(&config), subtype, "{lit} at a line end");
+    }
+    let config = parse("x = 2147483648; y = -9223372036854775808;");
+    let ConfigEntry::Int64Entry(x) = entry_top(&config, "x") else {
+        panic!("not an Int64Entry");
+    };
+    assert_eq!(*x, 2_147_483_648);
+    assert!(matches!(
+        entry_top(&config, "y"),
+        ConfigEntry::Int64Entry(i64::MIN)
+    ));
+    assert_eq!(
+        config.to_string().unwrap(),
+        "x = 2147483648;\ny = -9223372036854775808;\n"
+    );
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn entry_top<'a>(config: &'a Config, name: &str) -> &'a ConfigEntry {
+    config.root().get(name).unwrap()
+}
+
+/// Derapify writes a literal that reads back to the same subtype: text, rapify, derapify, rapify is
+/// bit for bit the same.
+#[test]
+fn int64_entries_round_trip_bit_for_bit() {
+    let first = parse("a = 2147483648; b = -2147483649; c = 9223372036854775807; d = 1;\n");
+    let bytes = first.to_cursor().unwrap().into_inner().into_vec();
+    let decoded = Config::read_rapified(&mut Cursor::new(bytes.clone())).unwrap();
+    assert!(matches!(
+        entry_top(&decoded, "a"),
+        ConfigEntry::Int64Entry(2_147_483_648)
+    ));
+    let again = parse(&decoded.to_string().unwrap());
+    assert_eq!(again.to_cursor().unwrap().into_inner().into_vec(), bytes);
+}
+
+/// A hex literal without a sign keeps its low 32 bits (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`), at any
+/// length and with `0X`; with a sign it is a float. All as `CfgConvert` writes it (`golden_hex_*`).
+#[test]
+fn hex_literals_follow_cfgconvert() {
+    assert_eq!(
+        text_of(
+            "a = 0xFFFFFFFF; b = 0x100000000; c = 0x1FFFFFFFFF; d = 0x1FFFFFFFFFFFFFFFF; e = 0X10; f = 0x0000000000000000000001;"
+        ),
+        "a = -1;\nb = 0;\nc = -1;\nd = -1;\ne = 16;\nf = 1;\n"
+    );
+    assert_eq!(
+        text_of("a = -0x10; b = +0x10; c = -0X10; d = -0x0;"),
+        "a = -16.0;\nb = 16.0;\nc = -16.0;\nd = -0.0;\n"
+    );
+    assert_eq!(
+        text_of("x[] = {0x1FFFFFFFFF, 0X10, -0x10, +0x10, 0x100000000};"),
+        "x[] = {-1, 16, -16.0, 16.0, 0};\n"
+    );
+    assert_eq!(text_of("a = 0x;"), "a = \"0x\";\n");
+}
+
+/// Reading entry subtype 6, and rejecting a cut-short one with an error.
+#[test]
+fn rapified_int64_entry_is_read_and_a_short_one_is_an_error() {
+    let bytes = parse("x = 4294967296;")
+        .to_cursor()
+        .unwrap()
+        .into_inner()
+        .into_vec();
+    let decoded = Config::read_rapified(&mut Cursor::new(bytes.clone())).unwrap();
+    assert!(matches!(
+        entry_top(&decoded, "x"),
+        ConfigEntry::Int64Entry(4_294_967_296)
+    ));
+    // name `x\0` then 8 value bytes: cut after 7 of them
+    let end = 16 + 1 + 1 + 1 + 1 + 2 + 7;
+    assert!(Config::read_rapified(&mut Cursor::new(&bytes[..end])).is_err());
+}
+
+/// The committed fuzz seed with subtype 6 reads, and its cut-short copy is an error, not a panic.
+#[test]
+fn int64_fuzz_seeds() {
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/corpus/config_rapified");
+    let whole = std::fs::read(dir.join("int64-entries.bin")).unwrap();
+    let config = Config::read_rapified(&mut Cursor::new(whole)).unwrap();
+    assert!(matches!(
+        entry_top(&config, "d"),
+        ConfigEntry::Int64Entry(i64::MAX)
+    ));
+    let cut = std::fs::read(dir.join("int64-truncated.bin")).unwrap();
+    assert!(Config::read_rapified(&mut Cursor::new(cut)).is_err());
 }

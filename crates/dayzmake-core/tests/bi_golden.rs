@@ -180,3 +180,26 @@ fn golden_int_ovf() {
 fn golden_define_open_comment() {
     golden("define_open_comment");
 }
+
+/// 64-bit integer entries (subtype 6) and the values around the `i32` and `i64` limits, as `CfgConvert`
+/// writes them (2026-11-17); arrays have no 64-bit element type, so those become floats.
+#[test]
+fn golden_int64() {
+    golden("int64");
+    golden("int64_arr");
+}
+
+/// Hex literals over 32 bits keep the low 32 bits; signed ones are floats (2026-11-17).
+#[test]
+fn golden_hex_wide() {
+    for name in [
+        "hex_wide",
+        "hex_sign",
+        "hex_sign_arr",
+        "hex_long",
+        "hex_long_arr",
+        "hex_zeros",
+    ] {
+        golden(name);
+    }
+}

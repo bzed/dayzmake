@@ -49,10 +49,19 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   (`int_ovf`) gives `x = 1e20;` (a float, not a string and not an error); `int_ovf2` adds `-99999999999999999999`
   (`-1e20`), `w = 99999999999999999999.5;`, and an array `{99999999999999999999, 3000000000, -3000000000, 2147483647}` that gives
   `{1e20, 3000000000.0, -3000000000.0, 2147483647}`. `#define X a /* b\ny = 2;\n` (`define_open_comment`) gives an empty
-  config, no error. Not committed: `x = 2147483648;` (entry) is a 64-bit integer (entry subtype 6, which our reader does not know);
-  `x = 0x1FFFFFFFFF;` gives `-1`; `x = 1 // c` and `y = 1;\nx = 2 \\\n// c` (no final newline) are rejected (no output file);
+  config, no error. Not committed: `x = 1 // c` and `y = 1;\nx = 2 \\\n// c` (no final newline) are rejected (no output file);
   `m.cpp` = `#include "inc.hpp"\nz = 3;\n` with `inc.hpp` = `a = 1;\nb = 2` (no final newline) is accepted and gives
-  `a = 1; b = "2#line 1 ""P:\in\m.cpp"""; z = 3;` (CfgConvert glues its `#line` marker to the last value; dayzmake gives `b = 2;`).
+  `a = 1; b = "2#line 1 ""P:\in\m.cpp"""; z = 3;` (CfgConvert glues its `#line` marker to the last value; dayzmake gives `b = 2;`). Re-checked 2026-11-17 with the include on line 3 (`y = 1;\nw = 2;\n#include "inc.hpp"\nz = 3;\n`): the marker is `#line 3`, so `#line <line of the include>` is right and `#line 1` above is correct, not an off-by-one.
+- `cfgconvert/int64*.cpp`, `hex_*.cpp` (with `.bin`, `.expected.cpp`): made 2026-11-17, same setup (Proton 10.0, xvfb-run).
+  Entries (`int64`: `a = 2147483647; b = 2147483648; c = -2147483649; d = 9223372036854775807; e = 9223372036854775808; f = 0xFFFFFFFF;
+  g = 0x100000000; h = 0x1FFFFFFFFF; j = -2147483648; k = -9223372036854775808; l = -9223372036854775809; m = 0x7FFFFFFF; n = 0x80000000`):
+  `a`, `j`, `m` subtype 2 (int32); `b`, `c`, `d`, `k` subtype 6 (8-byte little-endian i64); `e`, `l` subtype 1 (f32, 2^63 and -2^63);
+  `f` -1, `g` 0, `h` -1, `n` -2147483648, all subtype 2 (hex keeps its low 32 bits). `int64_arr` (`arr[]` of the same values): there is
+  no int64 element type; a decimal outside i32 is an element of type 1 (float: 2^31, -2^31, 2^63), a hex literal is type 2 with the low 32 bits.
+  `hex_long` (`p = 0x1FFFFFFFFFFFFFFFF;`) is -1, `hex_zeros` (`0x0000000000000000000001`) is 1, `hex_long_arr` the same in an array.
+  `hex_wide`: `-0x10` and `-0x1FFFFFFFFF` are subtype 1 floats (-16.0, -2^37), `0X10` is 16, `+2147483648` is subtype 6, `+5` is 5, `0x8000000000000000` is 0,
+  `0xFFFFFFFFFFFFFFFF` is -1. `hex_sign`: `+0x10` is the float 16.0, `-0x0` the float -0.0, `-0X10` -16.0, `00012` the int 12 (decimal), `-0` the int 0.
+  `hex_sign_arr`: the same rules in an array (`-0x10`, `+0x10` floats, `0X10` int, `+2147483648` float, `-0` int 0). `x = 0x;` is the string `"0x"`.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`
