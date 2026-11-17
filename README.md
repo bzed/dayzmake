@@ -291,13 +291,16 @@ On Linux or macOS, in the folder with the downloaded files (the Linux archive is
 ```
 gpg --import dayzmake-release-key.asc
 gpg --fingerprint 662441B36A5785AD18FB8667DF753D99D064EB7E
-gpg --verify SHA256SUMS.asc SHA256SUMS
+s=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null)
+grep -q '^\[GNUPG:\] GOODSIG ' <<<"$s" && grep -q '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ' <<<"$s" && echo 'signature OK'
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-`gpg --verify` must say `Good signature from "dayzmake release signing key (https://github.com/bzed/dayzmake)"`;
-the warning that the key is not certified with a trusted signature is expected as long as you have not
-signed it yourself, the fingerprint printed next to it is what counts. `sha256sum -c --ignore-missing` checks
+The check must print `signature OK`. Do not rely on the `Good signature` text or the exit status of a plain
+`gpg --verify`: gpg prints that text, and exits with 0, for a signature of a key that has expired since. Only the
+`GOODSIG` status line means that the signature is good and its key is neither expired nor revoked, and `VALIDSIG`
+names the key that made it. The warning that the key is not certified with a trusted signature is expected as long
+as you have not signed it yourself, so the check ignores it; the fingerprint is what counts. `sha256sum -c --ignore-missing` checks
 the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
 `SHA512SUMS` works the same way with `sha512sum`.
 
@@ -306,13 +309,14 @@ hash of your download with its line in `SHA256SUMS`:
 
 ```
 gpg --import dayzmake-release-key.asc
-gpg --verify SHA256SUMS.asc SHA256SUMS
+$s = gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null
+($null -ne (Select-String -InputObject $s -SimpleMatch '[GNUPG:] GOODSIG ')) -and ($null -ne (Select-String -InputObject $s -SimpleMatch '[GNUPG:] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E '))
 $file = 'dayzmake-v3.0.2-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
 
-The last line must print `True`.
+The signature check and the last line must each print `True`.
 
 <!-- ANCHOR_END: verifying -->
 

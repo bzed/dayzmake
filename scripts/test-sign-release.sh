@@ -136,6 +136,35 @@ if RELEASE_GPG_PRIVATE_KEY=$secret RELEASE_GPG_PASSPHRASE="correct horse" "$scri
     fail "a missing folder was accepted"
 fi
 
+# 9. verify_signature (sourced from the script) accepts a good signature and rejects an expired key and a foreign key
+fingerprint_of() { gpg --homedir "$1" --batch --with-colons --list-keys 2>/dev/null | awk -F: '$1 == "fpr" {print $10; exit}'; }
+printf 'payload\n' >"$work/payload"
+# a signature of the published key, made now
+gpg --homedir "$work/key-home" --batch --quiet --pinentry-mode loopback --passphrase "correct horse" \
+    --armor --detach-sign --output "$work/good.asc" "$work/payload" 2>/dev/null
+# a signature made on 2020-01-01 12:00, while the one day key of case 6 was valid; the key has expired since
+gpg --homedir "$work/expired-home" --batch --quiet --pinentry-mode loopback --passphrase pw \
+    --faked-system-time 20200101T120000 --armor --detach-sign --output "$work/exp.asc" "$work/payload" 2>/dev/null
+# a signature of a valid key that is not the published one
+gpg --homedir "$work/other-home" --batch --quiet --pinentry-mode loopback --passphrase pw2 \
+    --armor --detach-sign --output "$work/other.asc" "$work/payload" 2>/dev/null
+mkdir -m 700 "$work/verify-home-v"
+for pub in public.asc expired-public.asc; do
+    gpg --homedir "$work/verify-home-v" --batch --quiet --import "$work/$pub" 2>/dev/null
+done
+gpg --homedir "$work/other-home" --armor --export >"$work/other-public.asc" 2>/dev/null
+gpg --homedir "$work/verify-home-v" --batch --quiet --import "$work/other-public.asc" 2>/dev/null
+published_fpr=$(fingerprint_of "$work/key-home")
+expired_fpr=$(fingerprint_of "$work/expired-home")
+# shellcheck source=sign-release.sh
+check() ( source "$script" && verify_signature "$work/verify-home-v" "$1" "$2" "$work/payload" ) 2>/dev/null
+check "$published_fpr" "$work/good.asc" || fail "verify_signature rejected a good signature"
+# plain gpg --verify still exits 0 for the expired key: this is what the check must not rely on
+gpg --homedir "$work/verify-home-v" --batch --verify "$work/exp.asc" "$work/payload" 2>/dev/null ||
+    fail "setup: gpg --verify should exit 0 for a signature of an expired key"
+check "$expired_fpr" "$work/exp.asc" && fail "verify_signature accepted a signature of an expired key"
+check "$published_fpr" "$work/other.asc" && fail "verify_signature accepted a signature of another key"
+
 if [ "$failures" -eq 0 ]; then
     echo "all sign-release tests passed"
 else
