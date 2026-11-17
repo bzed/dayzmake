@@ -185,7 +185,7 @@ In file warn.cpp:1: warning: Entry "z" has no value; it is stored as an empty st
 
 Raised by: `extract`, and the MCP tool `extract`.
 
-An entry would be a file where an earlier entry of the same extract has a folder, or a folder where it has a file (`p/a` in one PBO, `p/a/b` in another). The first one in the sorted PBO order is written; the later entry is skipped and is not part of the tree. The warning says which case it is and names both PBOs and the path (always with `/`). The other case reads `Skipping "p/a" from <pbo>: it is a file, but <pbo> has a folder there`.
+An entry would be a file where an earlier entry of the same extract has a folder, or a folder where it has a file (`p/a` in one PBO, `p/a/b` in another). The first one in the sorted PBO order is written; the later entry is skipped and is not part of the tree. The warning says which case it is and names both PBOs and the path (always with `/`). The other case reads `Skipping "p/a" from <pbo>: it is a file, but <other pbo> has a folder there`; `<pbo>` is the skipped one and `<other pbo>` the one whose entry was written (the owner).
 
 ```text
 warning: Skipping "p/x/y.txt" from addons/b.pbo: it needs "p/x" as a folder, but addons/a.pbo has a file there. [extract-path-clash]

@@ -211,9 +211,18 @@ fn golden_enum_f32() {
         };
         let bi = std::fs::read(dir.join(format!("{name}.bin"))).unwrap();
         let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+        // CfgConvert's table order is the one of the `.expected.cpp`: no sorting here.
+        let expected = std::fs::read_to_string(dir.join(format!("{name}.expected.cpp"))).unwrap();
+        assert_eq!(bi.to_string().unwrap(), expected, "{name} (CfgConvert .bin)");
         let src = std::fs::read_to_string(dir.join(format!("{name}.cpp"))).unwrap();
         let ours = Config::from_string(src, None, &Vec::new(), &mut Warnings::new()).unwrap();
         assert_eq!(sorted(&ours), sorted(&bi), "{name}");
+        // and once through our own writer
+        let mut written = Cursor::new(Vec::new());
+        ours.write_rapified(&mut written).unwrap();
+        written.set_position(0);
+        let reread = Config::read_rapified(&mut written).unwrap();
+        assert_eq!(sorted(&reread), sorted(&bi), "{name} (round trip)");
     }
 }
 

@@ -165,10 +165,13 @@ peg::parser! {
         rule wide_integer_element() -> f32 = i:wide_integer_text() &(whitespace()? [',' | '}']) v:float_value(i) { v }
 
         /// An integer literal of an entry or array element: hex keeps its low 32 bits, as in `CfgConvert`.
+        /// A decimal one is always an `i32` here: wider ones are taken first by `huge_integer_entry` and
+        /// `int64_entry` (entries) or `wide_integer_element` (arrays).
         rule int_value(at: (usize, &str)) -> i32 = {?
             let (pos, i) = at;
             match hex_digits(i) {
                 Some(digits) => Ok(hex_wrapped(digits)),
+                // the error cannot fire (see above); it stays as a guard against a grammar change
                 None => i.parse::<i32>()
                     .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" }),
             }
