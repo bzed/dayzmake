@@ -1,8 +1,9 @@
 //! The config index: the classes of every `config.bin` and `config.cpp` of the game and of mods, merged the way
 //! the engine merges them.
 //!
-//! One [`ConfigLayer`](crate::api::config_index::ConfigLayer) is built per source (vanilla, each mod) and cached as JSON; the layers are merged in load
-//! order at query time. All input is untrusted: PBO bytes are read through the bounded PBO and config readers,
+//! One [`ConfigSource`](crate::api::config_index::ConfigSource) is built per source (vanilla, each mod) and cached
+//! as JSON; it holds one [`ConfigLayer`](crate::api::config_index::ConfigLayer) per config PBO. The layers of all
+//! selected sources are merged in load order at query time. All input is untrusted: PBO bytes are read through the bounded PBO and config readers,
 //! nothing is allocated from a length field, nesting and the number of classes and properties are limited, and no
 //! file system path is built from config content.
 //!
@@ -10,9 +11,10 @@
 //!
 //! A class defined again extends the earlier definition (its parent is replaced only when the new definition names
 //! one); properties are overwritten; `x[] += {..}` appends to the array; `delete X;` removes the class with
-//! everything below it; `class X;` (an external declaration) creates nothing. Inside a source the config files are
-//! applied in the order of their `CfgPatches.*.requiredAddons` (sorted path order breaks ties); vanilla comes
-//! first, then the mods in the order they were selected.
+//! everything below it; `class X;` (an external declaration) creates nothing. The config PBOs of all selected
+//! sources are sorted together by their `CfgPatches.*.requiredAddons`, as the engine does, so a game addon that
+//! requires a mod addon loads after it. Ties are broken by the source (vanilla first, then the mods in the order
+//! they were selected) and then by the sorted path.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
@@ -23,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 
 use super::cache::Cacheable;
+use super::config_query::display_path;
 use super::model::InputStamp;
 use super::source::child_ignore_case;
 use dayzmake_core::config::{
@@ -36,7 +39,7 @@ use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
 /// Version of the config index layout. Bump it on every change of the model; the cache treats other values as
 /// stale.
-pub const CONFIG_FORMAT: u32 = 2;
+pub const CONFIG_FORMAT: u32 = 3;
 
 /// Most classes one layer holds; the rest of a hostile config is skipped with a warning.
 const MAX_CLASSES: usize = 2_000_000;
@@ -119,6 +122,9 @@ pub struct ConfigLayer {
     pub version: String,
     /// `vanilla` or the mod name.
     pub name: String,
+    /// The layer is made of the game's own configs: its base class changes are not warned about.
+    #[serde(default)]
+    pub is_vanilla: bool,
     /// Build or version the layer was made from.
     pub build: String,
     /// Files the layer was built from.
@@ -132,7 +138,63 @@ pub struct ConfigLayer {
     pub prop_count: usize,
 }
 
-impl Cacheable for ConfigLayer {
+/// The addons a config PBO provides (`CfgPatches` classes) and requires (`requiredAddons`), in lowercase.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Patches {
+    /// The `CfgPatches` class names.
+    pub provides: Vec<String>,
+    /// The `requiredAddons` entries.
+    pub requires: Vec<String>,
+}
+
+/// The classes of one config PBO.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigPart {
+    /// The PBO file relative to its install or mod directory, `/`-separated.
+    pub pbo: String,
+    /// The addons the PBO provides and requires.
+    pub patches: Patches,
+    /// The classes of the PBO, with its path as the only entry of the PBO table.
+    pub layer: ConfigLayer,
+}
+
+/// The config PBOs of one source (the game or a mod), each as a layer of its own so that the PBOs of all sources
+/// can be merged in one global order. This is what the cache stores.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSource {
+    /// Layout version, [`CONFIG_FORMAT`].
+    pub format: u32,
+    /// The dayzmake version that built the source; the cache treats other versions as stale.
+    #[serde(default)]
+    pub version: String,
+    /// `vanilla` or the mod name.
+    pub name: String,
+    /// The source is the game itself.
+    #[serde(default)]
+    pub is_vanilla: bool,
+    /// Build or version the source was made from.
+    pub build: String,
+    /// Files the source was built from.
+    pub inputs: Vec<InputStamp>,
+    /// The PBOs that have a config, in sorted path order.
+    pub parts: Vec<ConfigPart>,
+}
+
+impl ConfigSource {
+    /// How many distinct classes the source defines (deletions are not counted).
+    #[must_use]
+    pub fn class_count(&self) -> usize {
+        self.parts
+            .iter()
+            .flat_map(|p| p.layer.nodes.iter())
+            .filter(|(_, n)| !n.deleted)
+            .map(|(k, _)| k.as_str())
+            .collect::<BTreeSet<&str>>()
+            .len()
+    }
+}
+
+impl Cacheable for ConfigSource {
     fn is_current(&self, want: &[InputStamp]) -> bool {
         self.format == CONFIG_FORMAT
             && self.version == env!("CARGO_PKG_VERSION")
@@ -156,6 +218,7 @@ impl ConfigLayer {
             format: CONFIG_FORMAT,
             version: env!("CARGO_PKG_VERSION").to_string(),
             name: name.to_string(),
+            is_vanilla: false,
             build: build.to_string(),
             inputs: Vec::new(),
             pbos: Vec::new(),
@@ -283,7 +346,7 @@ impl ConfigLayer {
             Some("api-config-base-changed"),
             format!(
                 "class {} changes its base class: {} -> {}",
-                printable(key),
+                printable(&display_path(self, key)),
                 shown(change.from.as_ref()),
                 shown(change.to.as_ref())
             ),
@@ -342,6 +405,7 @@ impl ConfigLayer {
     /// The PBOs of `over` are added to the PBO table. A layer that reaches a size limit stops taking classes
     /// and the function returns `false`.
     pub fn merge(&mut self, over: ConfigLayer, warnings: &mut dyn WarningSink) -> bool {
+        let over_is_vanilla = over.is_vanilla;
         let map: Vec<u32> = over
             .pbos
             .iter()
@@ -382,7 +446,8 @@ impl ConfigLayer {
                 }
             }
             mine.parent = node.parent;
-            if let Some(change) = boundary {
+            // the game's own layout changes bases on purpose; only a mod's change is worth a warning
+            if let Some(change) = boundary.filter(|_| !over_is_vanilla) {
                 let warning = self.base_changed_warning(&key, &change);
                 warnings.warn(warning);
             }
@@ -413,6 +478,9 @@ fn child_key(scope: &str, name: &str) -> Option<String> {
     })
 }
 
+/// The key of the object that holds an infinite float in [`Prop::value`].
+pub const NONFINITE: &str = "nonfinite";
+
 /// A float as the shortest number that reads back as the same `f32`.
 fn float_value(f: f32) -> Value {
     if f.is_finite()
@@ -420,6 +488,17 @@ fn float_value(f: f32) -> Value {
         && let Some(n) = Number::from_f64(d)
     {
         return Value::Number(n);
+    }
+    // An infinity is kept apart from a string that reads the same: `{"nonfinite": "1e999"}` (derapify's text).
+    // The query shows it as `1e999` in the text output and as the string `"1e999"` in JSON. NaN has no literal and
+    // stays the string `NaN`.
+    if f.is_infinite() {
+        let text = if f.is_sign_positive() {
+            "1e999"
+        } else {
+            "-1e999"
+        };
+        return serde_json::json!({ NONFINITE: text });
     }
     Value::String(f.to_string())
 }
@@ -479,7 +558,7 @@ fn apply_class(
                         node.pbos.push(pbo);
                     }
                     // the game's own layout changes bases on purpose; only a mod's change is worth a warning
-                    if let Some(change) = change.filter(|_| layer.name != "vanilla") {
+                    if let Some(change) = change.filter(|_| !layer.is_vanilla) {
                         warnings.warn(
                             layer
                                 .base_changed_warning(&key, &change)
@@ -507,14 +586,6 @@ fn apply_class(
         }
     }
     Ok(())
-}
-
-/// What a config says about load order: the `CfgPatches` classes it defines and the addons they require, in
-/// lowercase.
-#[derive(Debug, Default)]
-struct Patches {
-    provides: Vec<String>,
-    requires: Vec<String>,
 }
 
 fn patches_of(config: &Config) -> Patches {
@@ -614,9 +685,11 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
 }
 
 /// The order to load `infos` in: every config after the configs that provide the addons it requires, ties and
-/// the rest in index order (the PBOs are sorted by path). `None` entries have no config and are left out.
+/// the rest in index order (the sources in selection order, each with its PBOs sorted by path). `None` entries
+/// have no config and are left out. Kahn's algorithm with the lowest ready index first, so the result does not
+/// depend on anything but the input; a cycle is reported and its members are appended in index order.
 fn load_order(
-    infos: &[Option<Patches>],
+    infos: &[Option<&Patches>],
     names: &[String],
     warnings: &mut dyn WarningSink,
 ) -> Vec<usize> {
@@ -653,8 +726,12 @@ fn load_order(
         .collect();
     let total = infos.iter().flatten().count();
     let mut order = Vec::with_capacity(total);
+    let mut done = vec![false; infos.len()];
     while let Some(next) = ready.pop_first() {
         order.push(next);
+        if let Some(d) = done.get_mut(next) {
+            *d = true;
+        }
         for d in dependents.get(next).into_iter().flatten() {
             if let Some(slot) = waiting.get_mut(*d) {
                 *slot -= 1;
@@ -668,7 +745,7 @@ fn load_order(
         let stuck: Vec<usize> = infos
             .iter()
             .enumerate()
-            .filter(|(i, info)| info.is_some() && !order.contains(i))
+            .filter(|(i, info)| info.is_some() && done.get(*i) == Some(&false))
             .map(|(i, _)| i)
             .collect();
         let shown: Vec<String> = stuck
@@ -695,18 +772,20 @@ fn load_order(
     order
 }
 
-/// Builds the layer of one source from its PBOs, given as (file, name relative to the source, `/`-separated).
-/// A PBO that cannot be read is skipped with a warning.
+/// Builds the config source from its PBOs, given as (file, name relative to the source, `/`-separated), sorted
+/// by path. A PBO that cannot be read is skipped with a warning, and so is one without a config. Each PBO becomes
+/// a layer of its own; the load order is decided across all sources by [`merge_sources`].
 ///
 /// # Errors
 ///
 /// Never fails today; the `Result` is kept so the cache can call it like the other builders.
-pub fn build_layer(
+pub fn build_source(
     name: &str,
     build: &str,
+    is_vanilla: bool,
     pbos: &[(PathBuf, String)],
     warnings: &mut dyn WarningSink,
-) -> Result<ConfigLayer, Error> {
+) -> Result<ConfigSource, Error> {
     let filter = EntryFilter::new(
         ["config.bin", "config.cpp", "*/config.bin", "*/config.cpp"]
             .map(str::to_string)
@@ -719,51 +798,35 @@ pub fn build_layer(
                 .in_file(path.display().to_string()),
         );
     };
-    // pass 1: which addons each PBO provides and requires
-    let mut infos: Vec<Option<Patches>> = Vec::with_capacity(pbos.len());
-    let mut names: Vec<String> = Vec::with_capacity(pbos.len());
-    for (path, rel) in pbos {
-        names.push(rel.clone());
-        infos.push(match read_configs(path, &filter) {
-            Ok(configs) if configs.is_empty() => None,
-            Ok(configs) => {
-                let mut all = Patches::default();
-                for (entry, parsed) in configs {
-                    match parsed {
-                        Ok(config) => {
-                            let mut one = patches_of(&config);
-                            all.provides.append(&mut one.provides);
-                            all.requires.append(&mut one.requires);
-                        }
-                        Err(e) => bad(warnings, path, &format!("{}: ", printable(&entry)), &e),
-                    }
-                }
-                Some(all)
-            }
+    let mut parts: Vec<ConfigPart> = Vec::new();
+    'pbos: for (path, rel) in pbos {
+        let configs = match read_configs(path, &filter) {
+            Ok(configs) if configs.is_empty() => continue,
+            Ok(configs) => configs,
             Err(e) => {
                 bad(warnings, path, "", &e);
-                None
+                continue;
             }
-        });
-    }
-    let order = load_order(&infos, &names, warnings);
-    // pass 2: apply them in load order, reading each config again so that no parsed config is kept; what could
-    // not be read was reported in pass 1
-    let mut layer = ConfigLayer::new(name, build);
-    'pbos: for i in order {
-        let Some((path, rel)) = pbos.get(i) else {
-            continue;
         };
-        let Ok(configs) = read_configs(path, &filter) else {
-            continue;
-        };
+        let mut layer = ConfigLayer::new(name, build);
+        layer.is_vanilla = is_vanilla;
         let pbo = layer.pbo_index(PboRef {
             source: name.to_string(),
             pbo: rel.clone(),
         });
         let origin = path.display().to_string();
-        // `.ok()`: a config that cannot be read was reported in pass 1
-        for config in configs.into_iter().filter_map(|(_, c)| c.ok()) {
+        let mut patches = Patches::default();
+        for (entry, parsed) in configs {
+            let config = match parsed {
+                Ok(config) => config,
+                Err(e) => {
+                    bad(warnings, path, &format!("{}: ", printable(&entry)), &e);
+                    continue;
+                }
+            };
+            let mut one = patches_of(&config);
+            patches.provides.append(&mut one.provides);
+            patches.requires.append(&mut one.requires);
             if apply_class(&mut layer, "", config.root(), pbo, 0, warnings, &origin).is_err() {
                 warnings.warn(
                     Warning::new(
@@ -774,11 +837,74 @@ pub fn build_layer(
                     )
                     .in_file(origin),
                 );
+                parts.push(ConfigPart {
+                    pbo: rel.clone(),
+                    patches,
+                    layer,
+                });
                 break 'pbos;
             }
         }
+        parts.push(ConfigPart {
+            pbo: rel.clone(),
+            patches,
+            layer,
+        });
     }
-    Ok(layer)
+    Ok(ConfigSource {
+        format: CONFIG_FORMAT,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        name: name.to_string(),
+        is_vanilla,
+        build: build.to_string(),
+        inputs: Vec::new(),
+        parts,
+    })
+}
+
+/// Merges the config PBOs of all `sources` into one layer. The PBOs of all sources are sorted together by
+/// `requiredAddons` (Kahn's algorithm, lowest index first); the order of `sources` and the order of the PBOs inside a source break
+/// ties. A cycle is a warning (`api-config-order`). A merge that reaches a size limit stops taking classes
+/// (`api-config-limit`).
+#[must_use]
+pub fn merge_sources(
+    sources: Vec<ConfigSource>,
+    build: &str,
+    warnings: &mut dyn WarningSink,
+) -> ConfigLayer {
+    let mut flat: Vec<(String, Patches, Option<ConfigLayer>)> = Vec::new();
+    for source in sources {
+        for part in source.parts {
+            flat.push((source.name.clone(), part.patches, Some(part.layer)));
+        }
+    }
+    let infos: Vec<Option<&Patches>> = flat.iter().map(|(_, p, _)| Some(p)).collect();
+    let names: Vec<String> = flat
+        .iter()
+        .map(|(_, _, l)| {
+            l.as_ref()
+                .and_then(|l| l.pbos.first())
+                .map_or_else(String::new, |p| p.pbo.clone())
+        })
+        .collect();
+    let order = load_order(&infos, &names, warnings);
+    let mut merged = ConfigLayer::new("merged", build);
+    for i in order {
+        let Some((source, _, layer)) = flat.get_mut(i) else {
+            continue;
+        };
+        let Some(layer) = layer.take() else { continue };
+        if !merged.merge(layer, warnings) {
+            warnings.warn(Warning::new(
+                Some("api-config-limit"),
+                format!(
+                    "the merged config is too large; the rest of {} is skipped",
+                    printable(source)
+                ),
+            ));
+        }
+    }
+    merged
 }
 
 /// The PBOs of the game that can hold a config: every `*.pbo` of `dta` and `addons` (any case), as (file, name

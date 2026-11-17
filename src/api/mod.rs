@@ -90,6 +90,16 @@ pub fn mods_text(
 }
 
 fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, Error> {
+    locate_mods(ctx, false, warnings)
+}
+
+/// Like [`locate`]; with `configs`, `-m all` also selects the mods that have a config but no scripts (the
+/// config index reads those, the script index has nothing to take from them).
+fn locate_mods(
+    ctx: &ApiContext,
+    configs: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Located, Error> {
     let libs = libraries(&steam_roots());
     let (scripts_pbo, build, game) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
@@ -146,7 +156,10 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
         for spec in specs {
             match &spec {
                 ModSpec::All => {
-                    for m in installed.iter().filter(|m| m.has_scripts) {
+                    for m in installed
+                        .iter()
+                        .filter(|m| m.has_scripts || (configs && m.has_config))
+                    {
                         add(installed_source(m)?);
                     }
                 }
@@ -881,7 +894,8 @@ pub fn src_cat(
     }
 }
 
-/// The merged config index: vanilla first, then the selected mods in order, each source cached on its own.
+/// The merged config index. The config PBOs of vanilla and of the selected mods are sorted together by
+/// `requiredAddons` (ties: vanilla, then the mods in order, then the path); each source is cached on its own.
 /// With `lines`, one `# config <source>: <n> classes, <build>` line per source is added for `-v`.
 ///
 /// # Errors
@@ -893,18 +907,19 @@ pub fn load_config(
     lines: &mut Vec<String>,
     warnings: &mut dyn WarningSink,
 ) -> Result<config_index::ConfigLayer, Error> {
-    let found = locate(ctx, warnings)?;
+    let found = locate_mods(ctx, true, warnings)?;
     let pbos = config_index::vanilla_config_pbos(&found.game)?;
     let inputs: Vec<PathBuf> = pbos.iter().map(|(p, _)| p.clone()).collect();
     let key = format!("config-vanilla-{}", ctx.branch.name());
-    let mut merged = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
-        config_index::build_layer("vanilla", &found.build, &pbos, w)
+    let vanilla = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+        config_index::build_source("vanilla", &found.build, true, &pbos, w)
     })?;
     lines.push(format!(
         "# config vanilla: {} classes, {}",
-        merged.class_count(),
-        merged.build
+        vanilla.class_count(),
+        vanilla.build
     ));
+    let mut sources = vec![vanilla];
     for m in &found.mods {
         let mod_pbos: Vec<(PathBuf, String)> = m
             .pbos
@@ -922,28 +937,17 @@ pub fn load_config(
             .collect();
         let inputs: Vec<PathBuf> = mod_pbos.iter().map(|(p, _)| p.clone()).collect();
         let key = format!("config-{}", mod_key(m, ctx.branch));
-        let layer = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
-            config_index::build_layer(&m.name, ctx.branch.name(), &mod_pbos, w)
+        let source = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+            config_index::build_source(&m.name, ctx.branch.name(), false, &mod_pbos, w)
         });
-        match layer {
-            Ok(layer) => {
+        match source {
+            Ok(source) => {
                 lines.push(format!(
                     "# config {}: {} classes",
-                    printable(&layer.name),
-                    layer.class_count()
+                    printable(&source.name),
+                    source.class_count()
                 ));
-                if !merged.merge(layer, warnings) {
-                    warnings.warn(
-                        Warning::new(
-                            Some("api-config-limit"),
-                            format!(
-                                "the merged config is too large; the rest of {} is skipped",
-                                printable(&m.name)
-                            ),
-                        )
-                        .in_file(m.dir.display().to_string()),
-                    );
-                }
+                sources.push(source);
             }
             Err(e) => warnings.warn(
                 Warning::new(
@@ -954,7 +958,8 @@ pub fn load_config(
             ),
         }
     }
-    Ok(merged)
+    let build = found.build.clone();
+    Ok(config_index::merge_sources(sources, &build, warnings))
 }
 
 /// `dayzmake api config`: the class at `path` with its inheritance chain, resolved properties, subclasses and

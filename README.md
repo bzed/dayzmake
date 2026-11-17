@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- `api config` sorts the config PBOs of the game and of all selected mods together by `requiredAddons`, as the engine does (a game addon that requires a mod addon loads after it); ties go to the source (game, then the mods in `-m` order) and then to the path. `-m all` includes mods that have only a config. The `api-config-base-changed` warning shows the class path as written (`CfgVehicles/Car_Base`), the game is recognised by a flag and no longer by the name `vanilla`, and an infinite float is shown as `1e999` / `-1e999` as derapify writes it (a string in `--json`) (part of #98).
 - `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
 - `api grep` prints at most 512 bytes of a matching line, cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
 - `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
@@ -41,8 +42,8 @@ is maintained here.
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
-  ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
-  `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
+  ones in folders of a PBO) and of the `-m` mods, loads the PBOs of all sources by
+  `CfgPatches` `requiredAddons` (ties: vanilla, the mods in order, sorted path), and merges like the engine: a class defined again extends the
   earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by [<source>] <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
   output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
   error. An `#include` in a mod `config.cpp` is resolved from the entries of the same PBO only, never from the file system (#97). The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
@@ -477,7 +478,7 @@ dayzmake api update                           # rebuild the cache now
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (the first
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`: or a config) (the first
   run indexes each mod once, which can take a while; later runs use the cache). A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.

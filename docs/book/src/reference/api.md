@@ -18,7 +18,7 @@ With a real installation `--dayz` is not needed.
 |---|---|
 | `cf`, `cot`, `dabs`, `expansion` | Community Framework, Community Online Tools, DabsFramework, DayZ Expansion, by their workshop ids; the mod must be subscribed on Steam. |
 | `aliases` | All four aliases above. |
-| `all` | Every installed mod that has scripts. The first run indexes each mod, which can take a while; the result is cached. |
+| `all` | Every installed mod that has scripts (`api config`: also a mod that has only a config, such as a retexture). The first run indexes each mod, which can take a while; the result is cached. |
 | a number | A workshop id. |
 | a directory | A mod folder that has an `addons` folder with PBOs. A name that exists as a path, or contains `/` or `\`, is taken as a directory. |
 | a name | The `name` of an installed mod's `meta.cpp` or its `@folder` name, matched ignoring case; a unique part of the name is enough. See [api mods](#dayzmake-api-mods). |
@@ -480,14 +480,17 @@ dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh]
 
 Which configs: every rapified `config.bin` and every plain `config.cpp` of the PBOs in the `dta` and `addons`
 folders of the game (any case), including the ones in folders of a PBO (the weapon PBOs keep one per weapon), and
-of the `addons` folder of each selected mod. `-m all` selects the installed mods that have scripts, so a mod with
-only a config must be named. Everything else in the PBOs is left unread.
+of the `addons` folder of each selected mod. `-m all` selects the installed mods that have scripts or a config, so
+retexture and tweak mods with only a config are included. Everything else in the PBOs is left unread.
 
 Load order and merging, as the engine does it:
 
-- Vanilla loads first, then the mods in `-m` order. Inside the game, and inside each mod, the PBOs are sorted
-  by `CfgPatches.*.requiredAddons` (an addon after the PBO that provides the addons it requires); sorted path order
-  breaks ties. A cycle in `requiredAddons` is a warning (`api-config-order`) and the PBOs involved load in path order.
+- The config PBOs of the game and of all selected mods are sorted together by `CfgPatches.*.requiredAddons` (an
+  addon after the PBO that provides the addons it requires), as the engine does: a game addon that requires a mod
+  addon loads after it, and a mod addon that a later mod requires loads first. Ties are broken by the source (the
+  game first, then the mods in `-m` order) and then by the sorted path, so without dependencies the order is the
+  game, then the mods as selected. A cycle in `requiredAddons` is a warning (`api-config-order`) and the PBOs
+  involved load in that tie-break order.
 - A class defined again extends the earlier definition: its properties are added or overwritten. Like the engine,
   the base class becomes whatever the new definition names, and no base when it names none: a mod that writes
   `class Hatchback_02 { ... }` without `: CarScript` cuts the class off from its base (the game logs
@@ -506,7 +509,9 @@ nowhere ends the chain with `(not found)`; a base that leads back to the class i
 Output: the class path, the chain (`Hatch : Base`), the PBOs that define or modify the class (`[<source>] <pbo>`,
 in load order), the resolved properties sorted by name, each tagged `(from <class>)` with the nearest class that
 sets it (the last one that extended it, for `+=`), the classes declared inside the class (`classes`) and its direct
-subclasses (classes whose base resolves to it). Long values are cut in text output. JSON is
+subclasses (classes whose base resolves to it). Long values are cut in text output. A float that overflows (`1e999`)
+is an infinity; the text output shows it as derapify writes it, `1e999` or `-1e999`, and JSON as the string
+`"1e999"` / `"-1e999"`, since JSON has no infinity. JSON is
 `{"path", "name", "chain": [{"name", "path"}], "chain_end": "root" or "unknown base <name>",
 "properties": [{"name", "value", "origin", "origin_path"}], "subclasses", "classes", "pbos": [{"source", "pbo"}],
 "base_changes": [{"from", "to", "source", "pbo"}], "truncated": N}`.
