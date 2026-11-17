@@ -745,6 +745,12 @@ fn values_of_every_kind_are_shown_and_long_ones_are_cut() {
     assert!(out.contains(" ..."), "cut values end in an ellipsis: {out}");
     assert!(!out.contains(&long_string), "{out}");
     assert!(out.contains("word0"), "{out}");
+    assert!(!out.contains("word399"), "a late word is cut: {out}");
+    let deep = out
+        .lines()
+        .find(|l| l.trim_start().starts_with("deep"))
+        .expect("deep line");
+    assert!(deep.contains("{{{{"), "{deep}");
     let (code, out, err) = w.run(&["api", "config", "-v", "CfgVehicles/Scalar"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.starts_with("# config vanilla: "), "{out}");

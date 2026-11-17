@@ -2951,7 +2951,7 @@ mod from_pbo {
         fs::write(w.stable_pbo(), b"not a pbo at all").expect("write");
         let (code, _, err) = w.run(&["api", "class", "Base"]);
         assert_eq!(code, 1);
-        assert_ne!(err, "");
+        assert!(err.contains("scripts.pbo"), "{err}");
     }
 
     #[test]

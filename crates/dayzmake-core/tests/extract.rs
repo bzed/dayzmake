@@ -701,7 +701,7 @@ fn a_repeated_entry_of_one_pbo_is_skipped_and_a_leading_separator_is_stripped() 
     assert_eq!(fs::read(out.join("p/lead.txt")).unwrap(), b"l");
     let got = names(&warnings);
     assert!(got.contains(&"duplicate-entry"), "{got:?}");
-    assert!(got.len() >= 2, "a leading separator warns too: {got:?}");
+    assert!(got.contains(&"leading-separator"), "{got:?}");
 }
 
 #[test]
@@ -736,7 +736,8 @@ fn a_target_below_a_file_is_an_error_and_a_taken_staging_name_is_skipped() {
         )
         .is_err()
     );
-    // the first staging name is taken by a folder: the next one is used
+    // the first staging name is taken by a folder: the next one is used; the name mirrors `create_staging`
+    // in src/extract.rs (`.<target>.extract-<pid>-<attempt>`)
     let taken = tmp
         .path()
         .join(format!(".out.extract-{}-0", std::process::id()));
@@ -745,6 +746,17 @@ fn a_target_below_a_file_is_an_error_and_a_taken_staging_name_is_skipped() {
     extract(&pbo, &out, &ExtractOptions::default(), &mut Warnings::new()).unwrap();
     assert!(out.join("p/x.txt").is_file());
     assert!(taken.is_dir(), "the foreign folder is left alone");
+    let leftovers: Vec<String> = fs::read_dir(tmp.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| {
+            n.starts_with(".out.extract-") && *n != taken.file_name().unwrap().to_string_lossy()
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "staging folders left behind: {leftovers:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -788,6 +800,8 @@ fn an_old_tree_that_cannot_be_removed_is_a_warning() {
         }
     }
     result.unwrap();
+    // as root the read-only folder does not block the removal and there is nothing to warn about; the test
+    // prints no note for that because the lints keep the library tests quiet
     if blocked {
         assert_eq!(names(&warnings), ["old-tree-left"]);
         assert!(out.join("p/x.txt").is_file());

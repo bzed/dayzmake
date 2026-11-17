@@ -1145,6 +1145,16 @@ fn api_env(w: &FakeSteam) -> [(&'static str, &Path); 3] {
 #[test]
 fn mcp_every_api_tool_maps_its_arguments() {
     let w = fake_steam_with_config();
+    let moddir = w.home.join("@Def");
+    fs::create_dir_all(moddir.join("addons")).expect("mkdir");
+    fs::write(
+        moddir.join("addons/d.pbo"),
+        support::raw_pbo(
+            &[("X.c", b"#define MCP_DEF_ZZ\nclass McpDef\n{\n}\n")],
+            &[("prefix", "mcpdef")],
+        ),
+    )
+    .expect("pbo");
     let r = run_raw(
         lines(&[
             call(
@@ -1152,11 +1162,15 @@ fn mcp_every_api_tool_maps_its_arguments() {
                 "api_class",
                 &json!({"name":"Base","inherited":true,"mods_only":false}),
             ),
-            call(2, "api_find", &json!({"regex":"Secret","class":"Base"})),
+            call(2, "api_find", &json!({"regex":"Get","class":"AIAgent"})),
             call(3, "api_subclasses", &json!({"name":"Base","all":true})),
             call(4, "api_enum", &json!({"name":"AIStatus"})),
             call(5, "api_chain", &json!({"name":"Variant"})),
-            call(6, "api_defines", &json!({"regex":"DAYZ"})),
+            call(
+                6,
+                "api_defines",
+                &json!({"regex":"MCP_DEF","mods":s(&moddir)}),
+            ),
             call(7, "api_config", &json!({"path":"CfgVehicles/Kid"})),
             call(
                 8,
@@ -1171,6 +1185,38 @@ fn mcp_every_api_tool_maps_its_arguments() {
     for reply in &r.replies[..8] {
         assert!(!is_error(reply), "{}", text(reply));
     }
+    // one fact per tool that only the mapped argument can produce
+    assert!(
+        text(&r.replies[0]).contains("m_Count"),
+        "inherited member: {}",
+        text(&r.replies[0])
+    );
+    let found = text(&r.replies[1]);
+    assert!(found.contains("GetStatus"), "{found}");
+    assert!(
+        !found.contains("GetInstance"),
+        "only members of AIAgent: {found}"
+    );
+    assert!(
+        text(&r.replies[2]).contains("Crlf"),
+        "{}",
+        text(&r.replies[2])
+    );
+    assert!(
+        text(&r.replies[3]).contains("HEX"),
+        "{}",
+        text(&r.replies[3])
+    );
+    assert!(
+        text(&r.replies[4]).contains("Base"),
+        "{}",
+        text(&r.replies[4])
+    );
+    assert!(
+        text(&r.replies[5]).contains("MCP_DEF_ZZ"),
+        "{}",
+        text(&r.replies[5])
+    );
     assert!(
         text(&r.replies[6]).contains("Kid : Base"),
         "{}",
@@ -1315,4 +1361,5 @@ fn mcp_config_tools_write_targets_and_sign_v2() {
             .contains("x = 1;")
     );
     assert_eq!(text(&r.replies[3]), "signed");
+    assert!(p.join("t.pbo.armk.bisign").is_file());
 }
