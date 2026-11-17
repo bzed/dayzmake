@@ -153,6 +153,8 @@ fn tree_records(chf: &CompactHeightfield, acc: &[TreeAcc]) -> Vec<Obstacle> {
 /// and whose footprint is at most `max_footprint` become `walkable_area` and give one obstacle
 /// record; all other tree spans become area 0. Tree spans lose their part id.
 ///
+/// Part ids are 16 bit, so `part_count` is clamped to 65536.
+///
 /// The obstacle position uses `chf.border_size` (0 at this point of the pipeline) and `chf.bmin`.
 pub fn extract_tree_obstacles(
     chf: &mut CompactHeightfield,
@@ -163,6 +165,7 @@ pub fn extract_tree_obstacles(
     clearance: f32,
     max_footprint: f32,
 ) -> Vec<Obstacle> {
+    let part_count = part_count.min(65536);
     let n = chf.spans.len();
     let w = chf.width;
     let h = chf.height;

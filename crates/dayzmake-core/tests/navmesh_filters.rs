@@ -101,6 +101,8 @@ fn mode_filter_majority_and_tie_to_lowest() {
     small.columns_mut()[usize::try_from(11 + 11 * 23).unwrap()][0].area = 3;
     mode_filter(&mut small, 10);
     assert_eq!(small.column(11, 11)[0].area, 3);
+    // A neighbour would take the 3 from its window if the filter ran.
+    assert_eq!(small.column(12, 11)[0].area, 0);
 }
 
 #[test]
@@ -116,6 +118,9 @@ fn low_height_multi() {
     put(&mut f, 5, 0, 25, 40, 1, 0);
     put(&mut f, 6, 0, 0, 10, 1, 0);
     put(&mut f, 6, 0, 26, 40, 1, 0);
+    // A span that is already area 0 is overwritten under a ceiling.
+    put(&mut f, 7, 0, 0, 10, 0, 0);
+    put(&mut f, 7, 0, 18, 40, 18, 0);
     filter_low_height_multi(&mut f, [3, 8, 15], [0, 16, 17], 18);
     let a = |x: i32| f.column(x, 0)[0].area;
     assert_eq!([a(0), a(1), a(2)], [0, 16, 17]);
@@ -123,6 +128,7 @@ fn low_height_multi() {
     assert_eq!(a(4), 1); // gap 16 under a ceiling: no entry matches
     assert_eq!(a(5), 0);
     assert_eq!(a(6), 1);
+    assert_eq!(a(7), 16);
     // The top span has nothing above it.
     assert_eq!(f.column(0, 0)[1].area, 18);
 }
@@ -201,13 +207,14 @@ fn compact_too_many_layers_is_not_connected() {
     for k in 0..70u16 {
         put(&mut f, 0, 0, k * 4, k * 4 + 1, 1, 0);
     }
-    put(&mut f, 1, 0, 0, 1, 1, 0);
+    // Column 1 has one span level with layer 62 (the highest connectable) and one level with layer 64 (6-bit packing would wrap it to 0).
+    put(&mut f, 1, 0, 248, 249, 1, 0);
+    put(&mut f, 1, 0, 256, 257, 1, 0);
     let c = build_compact(1, 1, &f).unwrap();
-    // The span of column 1 sees only layer 0 of column 0; column 0 layer 0 sees column 1.
     assert_eq!(c.cells[0].1, 70);
-    let s = c.spans[idx(&c, 1, 0)];
-    assert_eq!((s.con >> 6) & 0x3f, 0x3f);
-    assert_eq!(s.con & 0x3f, 0);
+    let first = idx(&c, 1, 0);
+    assert_eq!(c.spans[first].con & 0x3f, 62);
+    assert_eq!(c.spans[first + 1].con & 0x3f, 0x3f);
 }
 
 #[test]
@@ -242,28 +249,35 @@ fn erode_marks_the_border_ring() {
 #[test]
 fn dilate_copies_sub_area_from_nearest() {
     let mut f = flat(9, 3, 1);
-    f.columns_mut()[usize::try_from(4 + 9).unwrap()][0].area = 13;
-    f.columns_mut()[usize::try_from(4 + 9).unwrap()][0].sub_area = 5;
-    // A door span far away is not in the mask and keeps its area.
-    f.columns_mut()[usize::try_from(8 + 9).unwrap()][0].area = 12;
+    let at = |x: usize, z: usize| x + z * 9;
+    for (x, sub) in [(4, 5), (7, 6)] {
+        f.columns_mut()[at(x, 1)][0].area = 13;
+        f.columns_mut()[at(x, 1)][0].sub_area = sub;
+    }
+    // A door right next to a seed is not in the mask and keeps its area.
+    f.columns_mut()[at(4, 2)][0].area = 12;
     let mut c = build_compact(3, 5, &f).unwrap();
-    dilate_area(&mut c, 1, 13, &all_but_doors());
+    dilate_area(&mut c, 2, 13, &all_but_doors());
     for (x, z, area, sub) in [
         (4, 1, 13, 5),
         (3, 1, 13, 5),
+        (2, 1, 13, 5),
         (5, 1, 13, 5),
         (4, 0, 13, 5),
-        (4, 2, 13, 5),
-        (3, 0, 1, 0),
-        (2, 1, 1, 0),
-        (8, 1, 12, 0),
+        (3, 2, 13, 5),
+        (4, 2, 12, 0),
+        (6, 1, 13, 6), // 2 from the seed with part 6, 4 from the one with part 5
+        (8, 1, 13, 6),
+        (7, 1, 13, 6),
+        (1, 1, 1, 0),
+        (0, 1, 1, 0),
     ] {
         let i = idx(&c, x, z);
         assert_eq!((c.areas[i], c.sub_areas[i]), (area, sub), "{x},{z}");
     }
 }
 
-fn tree_world(wall_x: Option<i32>) -> CompactHeightfield {
+fn tree_world(wall: Option<(i32, u8)>) -> CompactHeightfield {
     let mut f = flat(40, 40, 1);
     f.bmin = [100.0, 3.0, 200.0];
     for z in 20..22 {
@@ -272,10 +286,16 @@ fn tree_world(wall_x: Option<i32>) -> CompactHeightfield {
             f.columns_mut()[i][0].area = 10;
         }
     }
-    if let Some(wx) = wall_x {
+    // A wall of door spans (area 12, a labelled seed), or area 0: such spans never enter the
+    // compact field, so the wall is a line of columns without a span and shows as a missing connection.
+    if let Some((wx, area)) = wall {
         for z in 0..40 {
             let i = usize::try_from(wx + z * 40).unwrap();
-            f.columns_mut()[i][0].area = 12;
+            if area == 0 {
+                f.columns_mut()[i].clear();
+            } else {
+                f.columns_mut()[i][0].area = area;
+            }
         }
     }
     build_compact(3, 5, &f).unwrap()
@@ -313,7 +333,20 @@ fn tree_obstacle_isolated_becomes_walkable_with_record() {
 
 #[test]
 fn tree_near_wall_becomes_hole() {
-    let mut c = tree_world(Some(25));
+    let mut c = tree_world(Some((25, 12)));
+    let obs = extract_tree_obstacles(&mut c, 10, 1, 1, &seeds(), 2.0, 3.0);
+    assert!(obs.is_empty());
+    for z in 20..22 {
+        for x in 20..22 {
+            assert_eq!(c.areas[idx(&c, x, z)], 0);
+        }
+    }
+}
+
+#[test]
+fn tree_near_missing_wall_becomes_hole() {
+    // The "no connection: candidate is the own distance" branch.
+    let mut c = tree_world(Some((25, 0)));
     let obs = extract_tree_obstacles(&mut c, 10, 1, 1, &seeds(), 2.0, 3.0);
     assert!(obs.is_empty());
     for z in 20..22 {
