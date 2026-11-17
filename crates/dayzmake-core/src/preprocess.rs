@@ -112,6 +112,8 @@ peg::parser! {
         /// file (`file_end`) allows it, not the re-tokenised substrings of macro arguments.
         rule open_comment() -> u32 = [' ' | '\t']* "/*" content:$([_]*) ![_] {?
             if file_end {
+                // The file's final line end does not start another line: a diagnostic stays inside the file.
+                let content = content.strip_suffix('\n').unwrap_or(content);
                 Ok(u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX))
             } else {
                 Err("a terminated comment")
@@ -414,6 +416,9 @@ pub struct PreprocessInfo {
     includes: usize,
     /// Bytes of the in-memory includes read so far.
     include_bytes: usize,
+    /// Whether the last source line of the file is an entry line (not empty, a directive, a comment or
+    /// inside an unterminated comment), so that the line end the preprocessor adds is not one of the source.
+    pub(crate) ends_in_entry: bool,
 }
 
 impl PreprocessInfo {
@@ -1301,8 +1306,10 @@ fn preprocess_rec(
     let mut original_lineno = 1;
     let mut level = 0;
     let mut level_true = 0;
+    let mut last_is_entry = false;
 
     for line in lines {
+        last_is_entry = false;
         // Every path leaves this block (never `continue`), so the line counter below always runs (#63).
         'line: {
             match line {
@@ -1486,6 +1493,14 @@ fn preprocess_rec(
                         original_lineno += skipped_newlines(&tokens);
                         break 'line;
                     }
+                    last_is_entry = !tokens
+                        .iter()
+                        .any(|t| matches!(t, Token::OpenCommentToken(_)))
+                        && tokens.iter().any(|t| match t {
+                            Token::RegularToken(s) => !s.trim().is_empty(),
+                            Token::NewlineToken(..) | Token::MacroToken(_) => true,
+                            _ => false,
+                        });
                     let stack: Vec<Definition> = Vec::new();
                     let mut mismatches: Vec<String> = Vec::new();
                     let mut budget = Budget::new(info.steps);
@@ -1542,6 +1557,7 @@ fn preprocess_rec(
         }
     }
 
+    info.ends_in_entry = last_is_entry;
     Ok(output)
 }
 
@@ -1629,6 +1645,7 @@ pub fn preprocess_in(
         steps: 0,
         includes: 0,
         include_bytes: 0,
+        ends_in_entry: false,
     };
 
     if let Some(ref path) = origin {

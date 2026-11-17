@@ -1273,23 +1273,14 @@ impl Config {
         }
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
-        // The last source line (a lone CR ends a line too) is an entry line unless it is empty or a
-        // directive: only then is the line end the preprocessor adds not one of the source. A comment
-        // line is stripped to an empty line, so it needs no case of its own.
-        let last_line_is_content = buffer
-            .rsplit(['\r', '\n'])
-            .next()
-            .map(str::trim)
-            .is_some_and(|l| !l.is_empty() && !l.starts_with('#'));
-
         let (preprocessed, info) = preprocess_in(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;
 
-        // The preprocessor ends its output with a line end. A file whose last line is an entry has
-        // no line end of its own there, so that entry ends at the end of the file, which CfgConvert
+        // The preprocessor ends its output with a line end. A file whose last source line is an entry
+        // (not empty, a directive, a comment or inside an unterminated comment) has no line end of its own there, so that entry ends at the end of the file, which CfgConvert
         // rejects unless it is closed by `;` or `}`.
         let preprocessed = match preprocessed.strip_suffix('\n') {
-            Some(text) if last_line_is_content => text.to_string(),
+            Some(text) if info.ends_in_entry => text.to_string(),
             _ => preprocessed,
         };
 

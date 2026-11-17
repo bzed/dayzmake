@@ -1105,3 +1105,22 @@ fn entries_in_the_middle_may_end_at_the_line_end() {
     );
     assert_eq!(text_of("x = __EVAL(1+1)\n"), "x = 2;\n");
 }
+
+/// The last source line decides whether the entry before the preprocessor's own line end is terminated,
+/// not the raw text: a continued `#define` or an unterminated `/*` on the last lines do not make the
+/// entry before them unterminated.
+#[test]
+fn last_entry_before_a_continued_define_or_open_comment_keeps_its_type() {
+    for src in [
+        "x = 1\n#define A \\\n 2",
+        "x = 1\n#define A \\\r\n 2",
+        "z = a /* c\ny = 2;",
+        "x = 1\n/* c\ny = 2;",
+        "x = 1.5\n#define A \\\n 2",
+    ] {
+        let text = text_of(src);
+        assert!(!text.is_empty(), "{src:?}: {text:?}");
+    }
+    assert_eq!(text_of("x = 1\n#define A \\\n 2"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\n/* c\ny = 2;"), "x = 1;\n");
+}

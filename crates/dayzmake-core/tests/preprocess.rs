@@ -711,3 +711,22 @@ fn macro_work_is_capped_per_file() {
 fn macro_work_below_the_file_cap_is_accepted() {
     preprocess(empty_steps_file(14, 1), None, &[], &mut Warnings::new()).unwrap();
 }
+
+/// The line of an output line stays inside the file even when an unterminated `/*` swallows the file's
+/// final line end (the 3-line file below has no line 4).
+#[test]
+fn line_origins_after_an_open_comment_stay_inside_the_file() {
+    let input = String::from("x = 1;\nx = a /* c\ny = 2;\n");
+    let (_, info) = preprocess(
+        input,
+        Some(PathBuf::from("b.cpp")),
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(
+        info.line_origins().iter().all(|(line, _)| *line <= 3),
+        "{:?}",
+        info.line_origins()
+    );
+}
