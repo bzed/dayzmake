@@ -10,6 +10,7 @@
 use std::io;
 use std::ops::Range;
 
+use crate::navmesh::bytes::Reader;
 use crate::navmesh::num::i32_to_f32;
 
 /// The protocol version of the world params message.
@@ -31,80 +32,6 @@ const MAX_CELLS: i32 = 2048;
 const MAX_GROUPS: usize = 65536;
 const MAX_PARTS: usize = 1_048_576;
 const MAX_VERTICES: i32 = 1 << 26;
-
-/// A bounds-checked little-endian cursor over a byte slice.
-struct Reader<'a> {
-    buf: &'a [u8],
-}
-
-impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Self {
-        Self { buf }
-    }
-
-    fn remaining(&self) -> usize {
-        self.buf.len()
-    }
-
-    fn array<const N: usize>(&mut self) -> io::Result<[u8; N]> {
-        let (head, tail) = self
-            .buf
-            .split_first_chunk::<N>()
-            .ok_or_else(|| error!("message truncated"))?;
-        self.buf = tail;
-        Ok(*head)
-    }
-
-    fn u8(&mut self) -> io::Result<u8> {
-        Ok(u8::from_le_bytes(self.array()?))
-    }
-
-    fn u16(&mut self) -> io::Result<u16> {
-        Ok(u16::from_le_bytes(self.array()?))
-    }
-
-    fn u32(&mut self) -> io::Result<u32> {
-        Ok(u32::from_le_bytes(self.array()?))
-    }
-
-    fn i32(&mut self) -> io::Result<i32> {
-        Ok(i32::from_le_bytes(self.array()?))
-    }
-
-    fn u64(&mut self) -> io::Result<u64> {
-        Ok(u64::from_le_bytes(self.array()?))
-    }
-
-    fn f32(&mut self) -> io::Result<f32> {
-        Ok(f32::from_le_bytes(self.array()?))
-    }
-
-    fn f32x3(&mut self) -> io::Result<[f32; 3]> {
-        Ok([self.f32()?, self.f32()?, self.f32()?])
-    }
-
-    /// A count read from the payload as `usize`, checked against `limit` and against the bytes left
-    /// (`count * element_len`) before anything is allocated for it.
-    fn count(&mut self, what: &str, limit: usize, element_len: usize) -> io::Result<usize> {
-        let n =
-            usize::try_from(self.u32()?).map_err(|_| error!("implausible {what} {}", u32::MAX))?;
-        if n > limit {
-            return Err(error!("implausible {what} {n}"));
-        }
-        self.check_available(n, element_len)?;
-        Ok(n)
-    }
-
-    fn check_available(&self, n: usize, element_len: usize) -> io::Result<()> {
-        let bytes = n
-            .checked_mul(element_len)
-            .ok_or_else(|| error!("message truncated"))?;
-        if bytes > self.remaining() {
-            return Err(error!("message truncated"));
-        }
-        Ok(())
-    }
-}
 
 /// The 84-byte world block of the world params message (spec 3.4).
 ///
@@ -361,7 +288,7 @@ impl WorldParams {
                 "server protocol version {version}, expected {PROTOCOL_VERSION}"
             ));
         }
-        Self::parse(r.buf)
+        Self::parse(r.rest())
     }
 
     /// Parses a world params payload without the protocol version.

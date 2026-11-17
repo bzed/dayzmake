@@ -9,6 +9,8 @@ use dayzmake_core::config::Config;
 #[cfg(feature = "navmesh")]
 use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
 #[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::detour::{NavMeshSet, TileData};
+#[cfg(feature = "navmesh")]
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::P3D;
@@ -175,6 +177,34 @@ fn navmesh_wire_seeds() -> io::Result<()> {
             let bytes = tile.encode();
             let again = TileInput::parse(&bytes)?;
             assert_eq!(again.encode(), bytes);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_nm_seeds() -> io::Result<()> {
+    for seed in seeds("navmesh_nm")? {
+        // Same as the fuzz target: the first byte selects the reader.
+        let Some((&selector, data)) = seed.split_first() else {
+            continue;
+        };
+        if selector & 1 == 1 {
+            if let Ok(tile) = TileData::parse(data) {
+                let bytes = tile.to_bytes();
+                assert_eq!(TileData::parse(&bytes)?.to_bytes(), bytes);
+            }
+            continue;
+        }
+        if let Ok(set) = NavMeshSet::read(&mut &data[..]) {
+            let mut bytes = Vec::new();
+            if set.write(&mut bytes).is_ok() {
+                let again = NavMeshSet::read(&mut &bytes[..])?;
+                let mut second = Vec::new();
+                again.write(&mut second)?;
+                assert_eq!(second, bytes);
+            }
         }
     }
     Ok(())

@@ -91,3 +91,10 @@ path = "fuzz_targets/navmesh_wire.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "navmesh_nm"
+path = "fuzz_targets/navmesh_nm.rs"
+test = false
+doc = false
+bench = false
