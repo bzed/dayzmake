@@ -189,6 +189,34 @@ fn golden_int64() {
     golden("int64_arr");
 }
 
+/// Enum values go through f32 like in `CfgConvert` (#107, 2026-11-17): a literal is rounded to f32, a value outside
+/// i32 is `i32::MIN`, and an implicit value is the explicit one before it plus the distance, added in f32. The
+/// table order differs (`CfgConvert`'s is not source order), so the values are compared sorted by name.
+#[test]
+fn golden_enum_f32() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/cfgconvert");
+    for name in [
+        "enum_f32_wide",
+        "enum_f32_round",
+        "enum_f32_hex",
+        "enum_f32_neg",
+        "enum_f32_count",
+        "enum_f32_sat",
+        "enum_hex_wide",
+    ] {
+        let sorted = |config: &Config| {
+            let mut values = config.enum_values().to_vec();
+            values.sort();
+            values
+        };
+        let bi = std::fs::read(dir.join(format!("{name}.bin"))).unwrap();
+        let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+        let src = std::fs::read_to_string(dir.join(format!("{name}.cpp"))).unwrap();
+        let ours = Config::from_string(src, None, &Vec::new(), &mut Warnings::new()).unwrap();
+        assert_eq!(sorted(&ours), sorted(&bi), "{name}");
+    }
+}
+
 /// Hex literals over 32 bits keep the low 32 bits; signed ones are floats (2026-11-17).
 #[test]
 fn golden_hex_wide() {

@@ -117,8 +117,8 @@ peg::parser! {
                 .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
         }
 
-        /// An integer of an enum value (a sign and `0x` are accepted, the value must fit `i32`).
-        rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
+        /// The literal of an enum value: a sign, decimal digits or `0x` / `0X` hex of any length.
+        rule integer_text() -> &'input str = $((['-' | '+'])? (("0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+))
 
         /// A literal `CfgConvert` stores as an integer: unsigned hex (any length, `0x` or `0X`) or a decimal.
         rule int_literal() -> (usize, &'input str) = p:position!() t:$(("0" ['x' | 'X'] ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ((['-' | '+'])? ['0'..='9']+)) { (p, t) }
@@ -174,18 +174,8 @@ peg::parser! {
             }
         }
 
-        rule integer_value(at: (usize, &str)) -> i32 = {?
-            let (pos, i) = at;
-            if i.contains("0x") {
-                i32::from_str_radix(&i.replace("0x", ""), 16)
-                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
-            } else {
-                i.parse::<i32>()
-                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
-            }
-        }
-
-        rule integer() -> i32 = i:integer_text() v:integer_value(i) { v }
+        /// The value of an enum literal, as `CfgConvert` computes it: an `f32` (see `enum_literal_value`).
+        rule enum_number() -> f32 = t:integer_text() { enum_literal_value(t) }
 
         rule doublequoted_string() -> String = "\"" s:$(("\"\"" / !['"'] [_])*) "\"" {
             s.to_string().replace("\"\"", "\"")
@@ -291,19 +281,21 @@ peg::parser! {
             }))
         }
 
-        rule enum_value() -> (String, Option<i32>) = n:name() v:(whitespace()? "=" whitespace()? i:integer() { i })? { (n, v) }
+        rule enum_value() -> (String, Option<f32>) = n:name() v:(whitespace()? "=" whitespace()? i:enum_number() { i })? { (n, v) }
 
-        /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase.
+        /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase. The
+        /// values are computed in `f32` like `CfgConvert` does (`enum_literal_value`, `enum_f32_to_i32`).
         rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {?
-            let mut next: Option<i32> = Some(0);
+            let mut base = 0.0_f32;
+            // the first implicit value is 0, so the distance starts one below
+            let mut distance = -1.0_f32;
             let mut out = Vec::new();
             for (n, v) in v {
-                let value = match v {
-                    Some(value) => value,
-                    None => next.ok_or("an enum value that fits in 32 bits")?,
-                };
-                next = value.checked_add(1);
-                out.push((n.to_ascii_lowercase(), value));
+                match v {
+                    Some(explicit) => { base = enum_i32_to_f32(enum_f32_to_i32(explicit)); distance = 0.0; }
+                    None => distance += 1.0,
+                }
+                out.push((n.to_ascii_lowercase(), enum_f32_to_i32(base + distance)));
             }
             Ok(out)
         }
@@ -404,6 +396,43 @@ fn hex_wrapped(digits: &str) -> i32 {
             acc.wrapping_shl(4) | d
         });
     bits.cast_signed()
+}
+
+/// The `f32` an enum literal stands for in `CfgConvert`: unsigned hex keeps its low 32 bits, a signed hex
+/// literal is a float, a decimal is rounded to `f32` (`16777217` is `16777216`).
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the rounding of an i32 to f32 is what CfgConvert does"
+)]
+fn enum_literal_value(text: &str) -> f32 {
+    let unsigned = text.strip_prefix(['-', '+']).unwrap_or(text);
+    match (hex_digits(unsigned), unsigned.len() < text.len()) {
+        (Some(digits), false) => hex_wrapped(digits) as f32,
+        (Some(_), true) => signed_hex_float(text),
+        // the grammar only passes digits, so this parses; NaN converts to i32::MIN if it ever did not
+        (None, _) => text.parse::<f32>().unwrap_or(f32::NAN),
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "an i32 that came from an f32 is exact; the cast is only the type change back"
+)]
+fn enum_i32_to_f32(value: i32) -> f32 {
+    value as f32
+}
+
+/// An enum value from its `f32`, as `CfgConvert` converts it: a value outside `i32` (and NaN) is `i32::MIN`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value is in the i32 range, checked right here"
+)]
+fn enum_f32_to_i32(value: f32) -> i32 {
+    if (-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        value as i32
+    } else {
+        i32::MIN
+    }
 }
 
 /// The value of a signed hex literal (`-0x10`), which `CfgConvert` stores as a float. The magnitude is rounded

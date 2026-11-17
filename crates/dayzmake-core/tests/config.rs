@@ -89,17 +89,21 @@ fn garbage_is_an_error_not_a_panic() {
     assert!(Config::read_rapified(&mut garbage).is_err());
 }
 
-/// An enum value that does not fit an i32 is an error, not a panic (entries and array elements take
-/// 64-bit and wide hex values like `CfgConvert`).
+/// A wide hex enum value keeps its low 32 bits, an out of range decimal is `i32::MIN` (`CfgConvert`, #107); neither
+/// is an error or a panic.
 #[test]
-fn integer_overflow_is_an_error() {
-    let result = Config::from_string(
-        String::from("enum { X = 0x1FFFFFFFF };\n"),
-        None,
-        &Vec::new(),
-        &mut Warnings::new(),
+fn wide_enum_values_are_not_an_error() {
+    let c =
+        parse("enum { X = 0x1FFFFFFFF, Y = 0X10, Z = 99999999999999999999, W = -2147483649 };\n");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("x".to_string(), -1),
+            ("y".to_string(), 16),
+            ("z".to_string(), i32::MIN),
+            ("w".to_string(), i32::MIN)
+        ]
     );
-    assert!(result.is_err());
 }
 
 /// The 16 byte header of a rapified config; the root body follows.
@@ -653,20 +657,31 @@ fn enum_table_ends_at_the_first_name_that_is_no_identifier() {
     assert_eq!(c.to_string().unwrap(), "");
 }
 
+/// `CfgConvert` computes enum values in f32: `i32::MAX` is 2^31 there, which converts to `i32::MIN`, and so does
+/// the implicit value after it (golden `enum_f32_wide`).
 #[test]
-fn enum_max_value_is_accepted_but_an_implicit_overflow_is_not() {
-    let c = parse("enum { A = 2147483647 };");
-    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
-    let c = parse("enum { A = 0x7FFFFFFF };");
-    assert_eq!(c.enum_values(), &[("a".to_string(), i32::MAX)]);
-    assert!(
-        Config::from_string(
-            "enum { A = 2147483647, B };".to_string(),
-            None,
-            &Vec::new(),
-            &mut Warnings::new()
-        )
-        .is_err()
+fn enum_values_pass_through_f32() {
+    let c = parse("enum { A = 2147483647, B, C = 0x7FFFFFFF, D };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("a".to_string(), i32::MIN),
+            ("b".to_string(), i32::MIN),
+            ("c".to_string(), i32::MIN),
+            ("d".to_string(), i32::MIN)
+        ]
+    );
+    // the implicit value is the explicit one plus the distance, added in f32: 16777216 + 2 is exact
+    let c = parse("enum { A = 16777217, B, C, D = 5, E };");
+    assert_eq!(
+        c.enum_values(),
+        &[
+            ("a".to_string(), 16_777_216),
+            ("b".to_string(), 16_777_216),
+            ("c".to_string(), 16_777_218),
+            ("d".to_string(), 5),
+            ("e".to_string(), 6)
+        ]
     );
 }
 
@@ -946,15 +961,11 @@ fn read_err(src: &str, path: &str) -> String {
 fn grammar_action_errors_carry_file_and_line() {
     let cases = [
         (
-            "class A {\n  y = 1;\n  enum { X = 2147483648 };\n};",
+            "class A {\n  y = 1;\n  x = __EVAL(1/0);\n};",
             "3",
-            "Invalid integer",
+            "division by zero",
         ),
-        (
-            "class A {\n  enum { X = 2147483648 };\n};",
-            "2",
-            "Invalid integer",
-        ),
+        ("class A {\n  x = __EVAL(1/0);\n};", "2", "division by zero"),
         (
             "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
             "4",
@@ -962,9 +973,9 @@ fn grammar_action_errors_carry_file_and_line() {
         ),
         // CRLF line ends count the same
         (
-            "class A {\r\n  y = 1;\r\n  enum { X = 2147483648 };\r\n};",
+            "class A {\r\n  y = 1;\r\n  x = __EVAL(1/0);\r\n};",
             "3",
-            "Invalid integer",
+            "division by zero",
         ),
     ];
     for (src, line, what) in cases {

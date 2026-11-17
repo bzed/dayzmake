@@ -43,6 +43,12 @@ An `enum { A, B = 5, C };` block is accepted at any class level. It is no class 
 in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
 one, as in C. A name that occurs twice is accepted without a warning, like CfgConvert; the last value counts.
 
+Values are computed in `f32`, as CfgConvert does. A literal is rounded to `f32` and a value outside `i32` is
+`-2147483648` (so are `2147483647`, `2147483648`, `99999999999999999999` and `-2147483649`); hex keeps its low 32
+bits at any length (`0x1FFFFFFFFF` is `-1`) and `0X` works. An implicit value is the last explicit value plus its
+distance, added in `f32`: `A = 16777217, B, C` gives `16777216`, `16777216`, `16777218`. `__EVAL` of large numbers
+keeps its exact floats; CfgConvert's imprecise low bits are not copied.
+
 Behaviour:
 
 - Reads `<source>`, runs the preprocessor (`#include`, `#define`, `#ifdef`, `__EVAL`, `__EXEC`, macros), parses
