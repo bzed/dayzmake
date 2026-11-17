@@ -41,7 +41,7 @@ Options:
 
 An `enum { A, B = 5, C };` block is accepted at any class level. It is no class entry: its names go, lowercase and
 in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
-one, as in C.
+one, as in C. A name that occurs twice is accepted without a warning, like CfgConvert; the last value counts.
 
 Behaviour:
 

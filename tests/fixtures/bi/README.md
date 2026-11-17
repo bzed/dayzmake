@@ -14,14 +14,16 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   Hotfix. The tests decode them with `Config::read_rapified` and compare the text with `<name>.expected.cpp`.
   The bytes themselves are not compared with dayzmake's output: CfgConvert writes an extra 4-byte offset after each
   class body.
-- `cfgconvert/last_*.cpp` (with `.bin` and `.expected.cpp`): made 2026-11-17 with
+- `cfgconvert/last_*.cpp`, `enum_dup.cpp` (with `.bin` and `.expected.cpp`): made 2026-11-17 with
   `CfgConvert.exe -bin -dst <out> <in>` under Proton 10.0 (Proton Hotfix hung on every run, even for `cmd.exe /c exit`),
   a fresh prefix, drive `P:` linked to the work folder, a copy of `Bin/CfgConvert` as `P:\tool`, `xvfb-run` (the tool
   opens a window on failure and Wine has no display here), stdin from `/dev/null`, `prlimit --as=4G timeout 300`.
   Observed: `x = 1.5`, `x = 1e5` and `x = abc` with a final newline give `x = 1.5;`, `x = 100000.0;`, `x = "abc";`
   (`last_float`, `last_exp`, `last_str`); `x = 1e999` with or without `;` gives `x = inf;` (dayzmake keeps its error,
   which is not changed here); the same four inputs without a final newline fail with
-  `File ..., line 0: '.x': '<EOF byte>' encountered instead of ';'`, `x = 1.5\r\n` works.
+  `File ..., line 0: '.x': '<EOF byte>' encountered instead of ';'`, `x = 1.5\r\n` works. Enums (`enum_dup.cpp`):
+  `enum { A, B = 5, A };` is accepted silently and the table holds `a` once, at its first place, with the last value
+  (`a = 6`, `b = 5`); `enum { A = 1, A = 2 };` gives `a = 2`; a later `y = A;` stays the string `"A"`.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`

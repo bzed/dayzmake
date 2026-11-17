@@ -97,3 +97,32 @@ fn golden_last_exp() {
 fn golden_last_str() {
     golden("last_str");
 }
+
+/// `enum { A, B = 5, A };`: `CfgConvert` accepts it silently and its table holds `a` once, at the
+/// first position, with the last value (`a = 6`, `b = 5`). dayzmake keeps every name, so
+/// the last entry of a name is the one that has to agree.
+#[test]
+fn enum_duplicate_resolves_like_cfgconvert() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/bi/cfgconvert");
+    let bi = std::fs::read(dir.join("enum_dup.bin")).unwrap();
+    let bi = Config::read_rapified(&mut Cursor::new(bi)).unwrap();
+    assert_eq!(
+        bi.enum_values(),
+        &[("a".to_string(), 6), ("b".to_string(), 5)]
+    );
+
+    let src = std::fs::read_to_string(dir.join("enum_dup.cpp")).unwrap();
+    let mut warnings = Warnings::new();
+    let ours = Config::from_string(src, None, &Vec::new(), &mut warnings).unwrap();
+    assert!(warnings.warnings().is_empty(), "silent, like CfgConvert");
+    let last = |name: &str| {
+        ours.enum_values()
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| *v)
+    };
+    for (name, value) in bi.enum_values() {
+        assert_eq!(last(name), Some(*value), "enum {name}");
+    }
+}
