@@ -187,9 +187,16 @@ fn check_target(
                 (Ok(outer), Ok(inner)) => inner.starts_with(outer),
                 _ => true,
             };
-            let inside = match (&outer, source.canonicalize()) {
-                (Ok(outer), Ok(source)) => outer.starts_with(source),
-                _ => true,
+            // `find_pbos` has just listed the source, so this fails only if it vanishes in between
+            let Ok(resolved_source) = source.canonicalize() else {
+                return Err(error!(
+                    "Cannot resolve the source folder \"{}\".",
+                    printable(&source.display().to_string())
+                ));
+            };
+            let inside = match &outer {
+                Ok(outer) => outer.starts_with(resolved_source),
+                Err(_) => true,
             };
             if inside {
                 return Err(error!(
@@ -220,7 +227,7 @@ fn check_target(
             let Ok(source) = source.canonicalize() else {
                 return Err(error!(
                     "Cannot resolve the source folder \"{}\".",
-                    source.display()
+                    printable(&source.display().to_string())
                 ));
             };
             if resolved.starts_with(source) {
@@ -359,20 +366,21 @@ impl Run<'_> {
                 .collect();
             printable(&parts.join("/"))
         };
-        // the clashing path is the folder the new entry needs when it is below a file, else the entry itself
-        let (path, kind, other_kind) = if other_is_file {
-            (shown(&other), "folder", "file")
-        } else {
-            (shown(relative), "file", "folder")
-        };
-        warnings.warn(Warning::new(
-            Some("extract-path-clash"),
+        let (pbo, other_pbo) = (printable(pbo_name(index)), printable(pbo_name(owner)));
+        // the existing file is at a parent folder of the new entry, or the new entry is a file where it has a folder
+        let message = if other_is_file {
             format!(
-                "Skipping \"{path}\" from {}: it is a {kind}, but {} has a {other_kind} there.",
-                printable(pbo_name(index)),
-                printable(pbo_name(owner)),
-            ),
-        ));
+                "Skipping \"{}\" from {pbo}: it needs \"{}\" as a folder, but {other_pbo} has a file there.",
+                shown(relative),
+                shown(&other),
+            )
+        } else {
+            format!(
+                "Skipping \"{}\" from {pbo}: it is a file, but {other_pbo} has a folder there.",
+                shown(relative),
+            )
+        };
+        warnings.warn(Warning::new(Some("extract-path-clash"), message));
         true
     }
 
