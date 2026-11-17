@@ -134,8 +134,8 @@ peg::parser! {
         }
 
         rule line() -> Line =
-            [' ' | '\t']* d:directive() cmts:(([' ' | '\t']* c:comment_token() { c })*) [' ' | '\t']* {
-                Line::DirectiveLine(d, cmts.iter().sum())
+            [' ' | '\t']* d:directive() cmts:(([' ' | '\t']* c:comment_token() { c })*) open:([' ' | '\t']* c:open_comment() { c })? [' ' | '\t']* {
+                Line::DirectiveLine(d, cmts.iter().sum::<u32>().saturating_add(open.unwrap_or(0)), open.is_some())
             } /
             [' ' | '\t']* t:tokens() { Line::TokenLine(t) }
 
@@ -212,7 +212,7 @@ pub(crate) enum Token {
 #[derive(Debug)]
 pub(crate) enum Line {
     /// Directive line
-    DirectiveLine(Directive, u32),
+    DirectiveLine(Directive, u32, bool),
     /// Non-directive line of tokens
     TokenLine(Vec<Token>),
 }
@@ -1217,6 +1217,19 @@ fn find_include_file(
     }
 }
 
+/// The warning for a `/*` that is never closed (`line` is where the comment starts).
+fn warn_unterminated(origin: Option<&Path>, line: u32, warnings: &mut dyn WarningSink) {
+    let mut warning = Warning::new(
+        Some("unterminated-comment"),
+        "A /* comment is never closed; the rest of the file is ignored.",
+    )
+    .at_line(line);
+    if let Some(origin) = origin {
+        warning = warning.in_file(origin.display().to_string());
+    }
+    warnings.warn(warning);
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one branch per directive keeps the preprocessor loop readable"
@@ -1246,7 +1259,10 @@ fn preprocess_rec(
         // Every path leaves this block (never `continue`), so the line counter below always runs (#63).
         'line: {
             match line {
-                Line::DirectiveLine(dir, newlines) => {
+                Line::DirectiveLine(dir, newlines, open) => {
+                    if open {
+                        warn_unterminated(origin, original_lineno, warnings);
+                    }
                     original_lineno += newlines;
 
                     match dir {
@@ -1343,6 +1359,18 @@ fn preprocess_rec(
                             output += &result;
                         }
                         Directive::DefineDirective(def) => {
+                            if let Some(at) = def
+                                .value
+                                .iter()
+                                .position(|t| matches!(t, Token::OpenCommentToken(_)))
+                            {
+                                let before = def.value.get(..at).unwrap_or_default();
+                                warn_unterminated(
+                                    origin,
+                                    original_lineno.saturating_add(skipped_newlines(before)),
+                                    warnings,
+                                );
+                            }
                             original_lineno += skipped_newlines(&def.value);
 
                             if level > level_true {
@@ -1393,28 +1421,23 @@ fn preprocess_rec(
                     }
                 }
                 Line::TokenLine(tokens) => {
-                    if level > level_true {
-                        // A disabled line is never expanded (#61): it can neither error nor cost time.
-                        original_lineno += skipped_newlines(&tokens);
-                        break 'line;
-                    }
-                    // Found after the parse, so a backtracked path never warns.
+                    // Found after the parse, so a backtracked path never warns; also in a disabled branch,
+                    // because the comment swallows the rest of the file there too.
                     if let Some(at) = tokens
                         .iter()
                         .position(|t| matches!(t, Token::OpenCommentToken(_)))
                     {
-                        let mut warning =
-                            Warning::new(
-                                Some("unterminated-comment"),
-                                "A /* comment is never closed; the rest of the file is ignored.",
-                            )
-                            .at_line(original_lineno.saturating_add(
-                                skipped_newlines(tokens.get(..at).unwrap_or_default()),
-                            ));
-                        if let Some(origin) = origin {
-                            warning = warning.in_file(origin.display().to_string());
-                        }
-                        warnings.warn(warning);
+                        let before = tokens.get(..at).unwrap_or_default();
+                        warn_unterminated(
+                            origin,
+                            original_lineno.saturating_add(skipped_newlines(before)),
+                            warnings,
+                        );
+                    }
+                    if level > level_true {
+                        // A disabled line is never expanded (#61): it can neither error nor cost time.
+                        original_lineno += skipped_newlines(&tokens);
+                        break 'line;
                     }
                     let stack: Vec<Definition> = Vec::new();
                     let mut mismatches: Vec<String> = Vec::new();

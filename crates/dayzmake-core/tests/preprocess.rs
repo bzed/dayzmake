@@ -104,6 +104,41 @@ fn unterminated_block_comment_is_accepted_and_warned() {
     assert_eq!(warnings.warnings().len(), 0);
 }
 
+/// An unterminated `/*` after a directive behaves like one on a token line: it runs to the end of the
+/// file, with one `unterminated-comment` warning naming the line (#103).
+#[test]
+fn unterminated_block_comment_after_a_directive_is_accepted_and_warned() {
+    for (input, expected, line) in [
+        ("#ifdef A\n#endif /* c\nx = 1;", "", 2),
+        (
+            "x = 1;\n#ifdef A\n#include \"nope.hpp\" /* c\ny = 2;",
+            "x = 1;",
+            3,
+        ),
+        ("x = 1;\n#define X 1 /* c\ny = 2;\nX", "x = 1;", 2),
+        ("#define X 1 /* c\ny = 2;", "", 1),
+        ("x = 1;\n#undef X /* c\ny = 2;", "x = 1;", 2),
+    ] {
+        let mut warnings = Warnings::new();
+        let (output, _) = preprocess(
+            input.to_string(),
+            Some(PathBuf::from("cfg.cpp")),
+            &Vec::new(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(output.trim(), expected, "{input:?}");
+        let found = warnings.warnings();
+        assert_eq!(found.len(), 1, "{input:?}: {found:?}");
+        assert_eq!(found[0].name, Some("unterminated-comment"));
+        assert_eq!(
+            found[0].location(),
+            format!("In file cfg.cpp:{line}: "),
+            "{input:?}"
+        );
+    }
+}
+
 #[test]
 fn unterminated_block_comment_in_an_include_ends_with_the_file() {
     let dir = tempdir().unwrap();
