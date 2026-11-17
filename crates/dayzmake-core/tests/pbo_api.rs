@@ -1118,6 +1118,13 @@ fn signature_hashes_the_stored_prefix_bytes_of_colliding_extensions() {
     // length, then sig2
     let name_len = signed.iter().position(|&b| b == 0).unwrap() + 1;
     let n_at = name_len + 24;
+    // the fixed offsets below only hold for a 128 byte modulus; the header ends with the bit length
+    // and the exponent, so the bit length sits 8 bytes before n
+    let bit_len = u32::from_le_bytes(signed[n_at - 8..n_at - 4].try_into().unwrap());
+    assert_eq!(
+        bit_len, 1024,
+        "the armk fixture key must have a 1024-bit (128 byte) modulus for the fixed BISign offsets"
+    );
     let sig2_at = n_at + 128 + 4 + 128 + 8;
     let n = BigUint::from_bytes_le(&signed[n_at..n_at + 128]);
     let sig2 = BigUint::from_bytes_le(&signed[sig2_at..sig2_at + 128]);

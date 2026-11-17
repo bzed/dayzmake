@@ -6,11 +6,19 @@
 //! A few knobs let a test corrupt one thing at a time.
 
 #![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
     clippy::similar_names,
     reason = "test helper building a small model from constants"
 )]
+
+/// A size or offset of the small synthetic model as `u32`; the model is far below the limit.
+fn u32_of(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// A small number as `u16`; the callers pass values below 4.
+fn u16_of(n: usize) -> u16 {
+    u16::try_from(n).unwrap_or(u16::MAX)
+}
 
 /// Number of `u16` entries of the compressed arrays in LOD 1 (1200 bytes, above the 1024 byte threshold).
 pub const BIG_ARRAY: usize = 600;
@@ -97,7 +105,7 @@ impl Out {
         self.0.len()
     }
     pub fn patch_u32(&mut self, at: usize, v: u32) {
-        self.0[at..at + 4].copy_from_slice(&v.to_le_bytes());
+        self.0.splice(at..at + 4, v.to_le_bytes());
     }
 
     /// A compressed array: the element count is written by the caller, this writes the bytes. They are LZO
@@ -112,7 +120,7 @@ impl Out {
     }
     /// `u32 count` + a compressed array of `u16`.
     pub fn index_array(&mut self, values: &[u16]) {
-        self.u32(u32::try_from(values.len()).unwrap());
+        self.u32(u32_of(values.len()));
         let mut raw = Vec::new();
         for v in values {
             raw.extend_from_slice(&v.to_le_bytes());
@@ -208,7 +216,7 @@ fn animations(o: &mut Out, lods: usize) {
             o.f32(0.01); // hide_value
         }
     }
-    o.i32(i32::try_from(lods).unwrap()); // res_count == lod_count
+    o.i32(i32::try_from(lods).unwrap_or(i32::MAX)); // res_count == lod_count
     for _ in 0..lods {
         // bones to animations: 2 bones; bone 0 has animation 0
         o.u32(2);
@@ -386,9 +394,7 @@ fn lod1(o: &mut Out, knobs: Knobs) {
     // one selection with big arrays
     o.u32(1);
     o.cstr("big");
-    let big: Vec<u16> = (0..BIG_ARRAY)
-        .map(|i| u16::try_from(i % 4).unwrap())
-        .collect();
+    let big: Vec<u16> = (0..BIG_ARRAY).map(|i| u16_of(i % 4)).collect();
     if let Some(count) = knobs.huge_array {
         o.u32(count);
     } else if knobs.lzo_short {
@@ -397,7 +403,7 @@ fn lod1(o: &mut Out, knobs: Knobs) {
             raw.extend_from_slice(&v.to_le_bytes());
         }
         let stream = lzo1x::compress(&raw, lzo1x::CompressLevel::default());
-        o.u32(u32::try_from(BIG_ARRAY).unwrap());
+        o.u32(u32_of(BIG_ARRAY));
         o.bytes(&stream);
     } else if knobs.lzo_overrun {
         // the declared count is smaller than the stream decompresses to
@@ -406,7 +412,7 @@ fn lod1(o: &mut Out, knobs: Knobs) {
             raw.extend_from_slice(&v.to_le_bytes());
         }
         let stream = lzo1x::compress(&raw, lzo1x::CompressLevel::default());
-        o.u32(u32::try_from(BIG_ARRAY).unwrap());
+        o.u32(u32_of(BIG_ARRAY));
         o.bytes(&stream);
     } else {
         o.index_array(&big);
@@ -456,7 +462,7 @@ pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
     let end0 = o.pos();
     lod1(&mut o, knobs);
     let end1 = o.pos();
-    let patch = |o: &mut Out, at: usize, v: usize| o.patch_u32(at, u32::try_from(v).unwrap());
+    let patch = |o: &mut Out, at: usize, v: usize| o.patch_u32(at, u32_of(v));
     patch(&mut o, starts, start0);
     patch(
         &mut o,
@@ -475,7 +481,7 @@ fn build_repeated(knobs: Knobs, n: usize) -> (Vec<u8>, usize) {
     let mut o = Out::default();
     o.bytes(b"ODOL");
     o.u32(56);
-    o.u32(u32::try_from(n).unwrap());
+    o.u32(u32_of(n));
     for _ in 0..n {
         o.f32(1.0);
     }
@@ -490,9 +496,9 @@ fn build_repeated(knobs: Knobs, n: usize) -> (Vec<u8>, usize) {
     for _ in 0..n {
         o.bytes(&lod.0);
     }
-    let eof = u32::try_from(o.pos()).unwrap();
+    let eof = u32_of(o.pos());
     for i in 0..n {
-        let start = u32::try_from(first + i * lod.0.len()).unwrap();
+        let start = u32_of(first + i * lod.0.len());
         o.patch_u32(starts + 4 * i, start);
         o.patch_u32(starts + 4 * n + 4 * i, eof);
     }

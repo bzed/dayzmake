@@ -651,10 +651,6 @@ fn read_material<R: Read + Seek>(rd: &mut Rd<'_, R>) -> Result<OdolMaterial, Err
 
 /// The synthetic model of the integration tests, for a test of the private limit.
 #[cfg(test)]
-#[allow(
-    unfulfilled_lint_expectations,
-    reason = "the helper expects lints that unit tests allow through clippy.toml, but integration tests do not"
-)]
 #[path = "../tests/support/odol_builder.rs"]
 mod odol_builder;
 
