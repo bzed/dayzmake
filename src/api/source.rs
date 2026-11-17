@@ -547,7 +547,7 @@ pub struct InstalledMod {
 
 /// Whether any `addons/*.pbo` of `dir` lists a `.c` entry, and whether any lists a config, as
 /// `(has_scripts, has_config)`. Only the PBO headers are read; an unreadable PBO is a warning.
-fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> (bool, bool) {
+fn dir_contents(dir: &Path, warnings: &mut dyn WarningSink) -> (bool, bool) {
     let Some(addons) = child_ignore_case(dir, "addons").filter(|a| a.is_dir()) else {
         return (false, false);
     };
@@ -637,7 +637,7 @@ pub fn installed_mods(
         let dir_name = dir
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        let (has_scripts, has_config) = dir_has_scripts(&dir, warnings);
+        let (has_scripts, has_config) = dir_contents(&dir, warnings);
         found.push(InstalledMod {
             id,
             name: meta_name(&dir).unwrap_or_else(|| if is_link { entry.clone() } else { dir_name }),

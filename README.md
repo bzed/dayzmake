@@ -486,8 +486,8 @@ dayzmake api update                           # rebuild the cache now
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`: or a config) (the first
-  run indexes each mod once, which can take a while; later runs use the cache). A mod contributes the
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts. `api config` also counts a mod that has only a config. The
+  first run indexes each mod once, which can take a while; later runs use the cache. A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.
 - **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as
