@@ -111,3 +111,41 @@ fn include_cycles_and_total_size_are_bounded() {
     let err = run("x", &[("b.hpp", &big)], "config.cpp", &input).expect_err("too much");
     assert!(err.contains("bytes"), "{err}");
 }
+
+#[test]
+fn the_prefix_form_needs_a_prefix_and_a_valid_path() {
+    // a PBO without a prefix has no `\prefix\...` form
+    let err = run(
+        "",
+        &[("a.hpp", "a = 1;\n")],
+        "config.cpp",
+        "#include \"\\a.hpp\"\n",
+    )
+    .expect_err("no prefix");
+    assert!(err.contains("not found"), "{err}");
+    let err = run(
+        "x",
+        &[("b.hpp", "b = 1;\n")],
+        "config.cpp",
+        "#include \"\\x\\a\\..\\b.hpp\"\n",
+    )
+    .expect_err("invalid path");
+    assert!(err.contains("not allowed"), "{err}");
+}
+
+#[test]
+fn an_include_that_is_not_utf8_is_an_error() {
+    let folders = IncludeFolders::new(Vec::new()).with_memory(MemoryIncludes::new(
+        "x",
+        vec![("bad.hpp".to_string(), vec![0xff, 0xfe])],
+    ));
+    let err = preprocess_in(
+        "#include \"bad.hpp\"\n".to_string(),
+        Some(PathBuf::from("config.cpp")),
+        &folders,
+        &mut Warnings::new(),
+    )
+    .expect_err("not UTF-8")
+    .to_string();
+    assert!(err.contains("UTF-8"), "{err}");
+}

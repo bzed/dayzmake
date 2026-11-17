@@ -670,3 +670,230 @@ fn includes_come_from_the_pbo_only() {
     let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
     assert!(out.contains("found = 7"), "{out}{err}");
 }
+
+/// A game folder (a `World`'s) gets one more config PBO that requires `B_Patch`.
+fn add_addon(w: &World, file: &str, patch: &str, body: &str) {
+    write(
+        &w.game.join(format!("Addons/{file}.pbo")),
+        &config_pbo(
+            &format!(
+                "class CfgPatches {{ class {patch} {{ requiredAddons[] = {{\"B_Patch\"}}; }}; }};\n{body}"
+            ),
+            true,
+        ),
+    );
+}
+
+#[test]
+fn a_failed_lookup_suggests_similar_classes_or_names_the_deepest_one() {
+    let w = World::new();
+    let (code, _, err) = w.run(&["api", "config", "CfgVehicles/atch"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("similar in CfgVehicles: Hatch"), "{err}");
+    let (code, _, err) = w.run(&["api", "config", "CfgVehicles/Hatch/Nope/Deeper"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("the deepest class found is"), "{err}");
+    let (code, _, err) = w.run(&["api", "config", "Nothing"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no config class"), "{err}");
+}
+
+#[test]
+fn an_inheritance_chain_that_is_too_long_is_an_error() {
+    let w = World::new();
+    let mut body = String::from("class CfgVehicles {\nclass Link0 { v = 0; };\n");
+    body.extend((1..300).map(|i| format!("class Link{i}: Link{} {{ }};\n", i - 1)));
+    body.push_str("};\n");
+    add_addon(&w, "chain", "Chain_Patch", &body);
+    let (code, _, err) = w.run(&["api", "config", "CfgVehicles/Link299"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("longer than"), "{err}");
+}
+
+#[test]
+fn values_of_every_kind_are_shown_and_long_ones_are_cut() {
+    let w = World::new();
+    let long_string = "s".repeat(500);
+    let words: Vec<String> = (0..400).map(|i| format!("\"word{i}\"")).collect();
+    let mut nested = String::new();
+    for _ in 0..40 {
+        nested.push('{');
+    }
+    for _ in 0..40 {
+        nested.push('}');
+    }
+    let body = format!(
+        "class CfgVehicles {{\n\
+         class Scalar {{ tags = \"plain\"; ratio = 0.5; mixed[] = {{1, 2.5, \"x\", {{3}}}}; }};\n\
+         class Derived: Scalar {{ tags[] += {{\"added\"}}; }};\n\
+         class Long {{ text = \"{long_string}\"; words[] = {{{}}}; deep[] = {nested}; }};\n\
+         }};",
+        words.join(",")
+    );
+    write(&w.game.join("Addons/values.pbo"), &config_pbo(&body, false));
+    // a `+=` onto something that is no array replaces it
+    let v = json(&w, "CfgVehicles/Derived", &[]);
+    assert_eq!(prop(&v, "tags")["value"], serde_json::json!(["added"]));
+    let v = json(&w, "CfgVehicles/Scalar", &[]);
+    assert_eq!(prop(&v, "ratio")["value"], 0.5);
+    assert_eq!(
+        prop(&v, "mixed")["value"],
+        serde_json::json!([1, 2.5, "x", [3]])
+    );
+    let (code, out, err) = w.run(&["api", "config", "--max", "1000", "CfgVehicles/Long"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains(" ..."), "cut values end in an ellipsis: {out}");
+    assert!(!out.contains(&long_string), "{out}");
+    assert!(out.contains("word0"), "{out}");
+    let (code, out, err) = w.run(&["api", "config", "-v", "CfgVehicles/Scalar"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("# config vanilla: "), "{out}");
+}
+
+#[test]
+fn delete_removes_nested_classes_and_a_redefinition_starts_fresh() {
+    let w = World::new();
+    add_addon(
+        &w,
+        "holder",
+        "Holder_Patch",
+        "class CfgVehicles { class Holder { keep = 1; class Kid { k = 1; }; }; class Gone { g = 1; }; class Phoenix { old = 1; }; };",
+    );
+    write(
+        &w.game.join("Addons/holder2.pbo"),
+        &config_pbo(
+            "class CfgPatches { class H2_Patch { requiredAddons[] = {\"Holder_Patch\"}; }; };\n\
+             class CfgVehicles { delete Holder; delete Phoenix; class Phoenix { born = 2; }; };",
+            true,
+        ),
+    );
+    let (code, _, err) = w.run(&["api", "config", "CfgVehicles/Holder"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no config class"), "{err}");
+    let (code, _, _) = w.run(&["api", "config", "CfgVehicles/Holder/Kid"]);
+    assert_eq!(code, 1);
+    let v = json(&w, "CfgVehicles/Phoenix", &[]);
+    assert_eq!(prop(&v, "born")["value"], 2);
+    assert!(
+        v["properties"]
+            .as_array()
+            .expect("properties")
+            .iter()
+            .all(|p| p["name"] != "old")
+    );
+    // a mod deletes and revives classes of the game
+    let dir = w.home.join("@Del");
+    write(
+        &dir.join("addons/del.pbo"),
+        &config_pbo(
+            "class CfgPatches { class D_Patch { requiredAddons[] = {\"B_Patch\"}; }; };\n\
+             class CfgVehicles { delete Other; delete Newcar; class Newcar { reborn = 1; }; };",
+            true,
+        ),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let (code, _, _) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Other"]);
+    assert_eq!(code, 1);
+    let v = json(&w, "CfgVehicles/Newcar", &["-m", &m]);
+    assert_eq!(prop(&v, "reborn")["value"], 1);
+    assert!(
+        v["properties"]
+            .as_array()
+            .expect("properties")
+            .iter()
+            .all(|p| p["name"] != "scope")
+    );
+    assert_eq!(v["chain"].as_array().expect("chain").len(), 1);
+}
+
+#[test]
+fn a_config_bin_wins_over_a_config_cpp_of_the_same_folder() {
+    let w = World::new();
+    let cpp = "class CfgVehicles { class Dup { from = \"cpp\"; }; };";
+    let bin = Config::from_string(
+        "class CfgVehicles { class Dup { from = \"bin\"; }; };".to_string(),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .expect("config")
+    .to_cursor()
+    .expect("rapify")
+    .into_inner();
+    write(
+        &w.game.join("Addons/both.pbo"),
+        &support::raw_pbo(
+            &[("config.cpp", cpp.as_bytes()), ("config.bin", &bin)],
+            &[("prefix", "both")],
+        ),
+    );
+    let v = json(&w, "CfgVehicles/Dup", &[]);
+    assert_eq!(prop(&v, "from")["value"], "bin");
+}
+
+#[test]
+fn a_requiredaddons_ring_of_many_configs_is_named_with_an_ellipsis() {
+    let w = World::new();
+    for i in 0..7 {
+        let next = (i + 1) % 7;
+        write(
+            &w.game.join(format!("Addons/ring{i}.pbo")),
+            &config_pbo(
+                &format!(
+                    "class CfgPatches {{ class Ring{i} {{ requiredAddons[] = {{\"Ring{next}\"}}; }}; }};\n\
+                     class CfgVehicles {{ class RingCar{i} {{ n = {i}; }}; }};"
+                ),
+                true,
+            ),
+        );
+    }
+    let (code, _, err) = w.run(&["api", "config", "CfgVehicles/RingCar6"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("api-config-order") && err.contains(", ..."),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_file_that_is_no_pbo_is_a_warning_and_a_game_with_only_dta_works() {
+    let w = World::new();
+    write(&w.game.join("Addons/garbage.pbo"), b"this is not a pbo");
+    let (code, out, err) = w.run(&["api", "config", "CfgVehicles/Hatch"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Hatch"), "{out}");
+    assert!(
+        err.contains("api-bad-config") && err.contains("garbage.pbo"),
+        "{err}"
+    );
+    // a game folder with a dta folder and no addons folder
+    let only = w.home.join("onlydta");
+    write(
+        &only.join("dta/scripts.pbo"),
+        &support::raw_pbo(
+            &[("3_Game/a.c", b"class Base\n{\n}\n")],
+            &[("prefix", "scripts")],
+        ),
+    );
+    write(
+        &only.join("dta/cfg.pbo"),
+        &config_pbo("class CfgVehicles { class OnlyDta { v = 7; }; };", true),
+    );
+    let (code, out, err) = w.run(&[
+        "api",
+        "config",
+        "--dayz",
+        &only.to_string_lossy(),
+        "CfgVehicles/OnlyDta",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("v = 7"), "{out}");
+}
+
+#[test]
+fn a_game_folder_without_pbos_has_no_config_index() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::create_dir_all(tmp.path().join("dta")).expect("mkdir");
+    let err = dayzmake::api::config_index::vanilla_config_pbos(tmp.path()).expect_err("no PBOs");
+    assert!(err.to_string().contains("no PBOs found"), "{err}");
+}

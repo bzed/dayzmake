@@ -627,3 +627,169 @@ fn a_backslash_in_the_pbo_path_is_escaped_in_the_map() {
         b"p\twe\\\\nird.pbo\n"
     );
 }
+
+#[test]
+fn a_compressed_entry_with_a_huge_original_size_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("h.pbo");
+    let packed = support::lzss_literals(b"x");
+    fs::write(
+        &pbo,
+        support::raw_pbo_with_headers(
+            &[("huge.txt", &packed, support::CPRS, 0x3000_0000)],
+            &[("prefix", "p")],
+        ),
+    )
+    .unwrap();
+    let out = tmp.path().join("out");
+    let err = extract(&pbo, &out, &ExtractOptions::default(), &mut Warnings::new()).unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
+    assert!(!out.exists());
+}
+
+#[test]
+fn a_compressed_rapified_bin_is_derapified_and_tiny_bins_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("d.pbo");
+    let config = rapified("class CfgPatches { class A { units[] = {}; }; };");
+    let packed = support::lzss_literals(&config);
+    let original = u32::try_from(config.len()).unwrap();
+    fs::write(
+        &pbo,
+        support::raw_pbo_with_headers(
+            &[
+                ("config.bin", &packed, support::CPRS, original),
+                ("tiny.bin", b"ab", 0, 2),
+            ],
+            &[("prefix", "p")],
+        ),
+    )
+    .unwrap();
+    let mut options = ExtractOptions::default();
+    options.derapify = true;
+    let out = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&pbo, &out, &options, &mut warnings).unwrap();
+    assert!(warnings.warnings().is_empty(), "{:?}", warnings.warnings());
+    assert_eq!(
+        files_below(&out),
+        ["p/config.cpp", "p/tiny.bin", "pbo-map.tsv"]
+    );
+    let text = fs::read_to_string(out.join("p/config.cpp")).unwrap();
+    assert!(text.contains("class CfgPatches"), "{text}");
+    assert_eq!(fs::read(out.join("p/tiny.bin")).unwrap(), b"ab");
+}
+
+#[test]
+fn a_repeated_entry_of_one_pbo_is_skipped_and_a_leading_separator_is_stripped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("r.pbo");
+    write_pbo(
+        &pbo,
+        "p",
+        &[
+            ("x.txt", b"first"),
+            ("X.TXT", b"second"),
+            ("\\lead.txt", b"l"),
+        ],
+    );
+    let out = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    let summary = extract(&pbo, &out, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(summary.files(), 2);
+    assert_eq!(fs::read(out.join("p/x.txt")).unwrap(), b"first");
+    assert_eq!(fs::read(out.join("p/lead.txt")).unwrap(), b"l");
+    let got = names(&warnings);
+    assert!(got.contains(&"duplicate-entry"), "{got:?}");
+    assert!(got.len() >= 2, "a leading separator warns too: {got:?}");
+}
+
+#[test]
+fn a_target_without_a_folder_name_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a.pbo");
+    write_pbo(&pbo, "p", &[("x.txt", b"x")]);
+    let target = tmp.path().join("missing").join("..");
+    let err = extract(
+        &pbo,
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Invalid target"), "{err}");
+}
+
+#[test]
+fn a_target_below_a_file_is_an_error_and_a_taken_staging_name_is_skipped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a.pbo");
+    write_pbo(&pbo, "p", &[("x.txt", b"x")]);
+    let file = tmp.path().join("file");
+    fs::write(&file, b"f").unwrap();
+    assert!(
+        extract(
+            &pbo,
+            &file.join("out"),
+            &ExtractOptions::default(),
+            &mut Warnings::new()
+        )
+        .is_err()
+    );
+    // the first staging name is taken by a folder: the next one is used
+    let taken = tmp
+        .path()
+        .join(format!(".out.extract-{}-0", std::process::id()));
+    fs::create_dir(&taken).unwrap();
+    let out = tmp.path().join("out");
+    extract(&pbo, &out, &ExtractOptions::default(), &mut Warnings::new()).unwrap();
+    assert!(out.join("p/x.txt").is_file());
+    assert!(taken.is_dir(), "the foreign folder is left alone");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_map_escapes_a_newline_of_the_pbo_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a\nb.pbo");
+    write_pbo(&pbo, "p", &[("ok.txt", b"o")]);
+    let out = tmp.path().join("out");
+    extract(&pbo, &out, &ExtractOptions::default(), &mut Warnings::new()).unwrap();
+    assert_eq!(
+        fs::read(out.join("pbo-map.tsv")).unwrap(),
+        b"p\ta\\nb.pbo\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_old_tree_that_cannot_be_removed_is_a_warning() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let pbo = tmp.path().join("a.pbo");
+    write_pbo(&pbo, "p", &[("x.txt", b"x")]);
+    let out = tmp.path().join("out");
+    extract(&pbo, &out, &ExtractOptions::default(), &mut Warnings::new()).unwrap();
+    // a read-only folder with a file in it cannot be removed
+    let locked = out.join("locked");
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("f"), b"f").unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let blocked = fs::remove_file(locked.join("f")).is_err();
+    let mut options = ExtractOptions::default();
+    options.force = true;
+    let mut warnings = Warnings::new();
+    let result = extract(&pbo, &out, &options, &mut warnings);
+    // let the temp dir clean up
+    for entry in fs::read_dir(tmp.path()).unwrap() {
+        let path = entry.unwrap().path().join("locked");
+        if path.is_dir() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    result.unwrap();
+    if blocked {
+        assert_eq!(names(&warnings), ["old-tree-left"]);
+        assert!(out.join("p/x.txt").is_file());
+    }
+}

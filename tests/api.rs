@@ -2920,4 +2920,76 @@ mod from_pbo {
         assert_eq!(mods[0]["has_scripts"], true);
         assert_eq!(mods[2]["has_scripts"], false);
     }
+
+    #[test]
+    fn dayz_option_names_the_install_and_reports_a_missing_scripts_pbo() {
+        let w = World::new();
+        let game = w.root.join("steamapps/common/DayZ");
+        let (code, out, err) = w.run(&["api", "class", "Base", "--dayz", &game.to_string_lossy()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"), "{out}");
+        let (code, out, _) = w.run(&[
+            "api",
+            "class",
+            "Base",
+            "-v",
+            "--dayz",
+            &game.to_string_lossy(),
+        ]);
+        assert_eq!(code, 0);
+        assert!(out.contains("stable build unknown"), "{out}");
+        let empty = w.home.join("nogame");
+        fs::create_dir_all(&empty).expect("mkdir");
+        let (code, _, err) = w.run(&["api", "class", "Base", "--dayz", &empty.to_string_lossy()]);
+        assert_eq!(code, 1);
+        assert!(err.contains("not found (--dayz)"), "{err}");
+    }
+
+    #[test]
+    fn a_corrupt_scripts_pbo_is_an_error() {
+        let w = World::new();
+        fs::write(w.stable_pbo(), b"not a pbo at all").expect("write");
+        let (code, _, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 1);
+        assert_ne!(err, "");
+    }
+
+    #[test]
+    fn api_src_of_an_unknown_name_is_an_error_and_a_file_without_a_final_newline_gets_one() {
+        let w = World::new();
+        let (code, _, err) = w.run(&["api", "src", "NoSuchThing", "--cat"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("no class or enum named"), "{err}");
+        make_pbo(
+            &fixture("vanilla/scripts"),
+            &[("3_Game/NoNl.c", "class NoNl {}")],
+            None,
+            &w.stable_pbo(),
+        );
+        let (code, out, err) = w.run(&["api", "src", "NoNl", "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.ends_with("class NoNl {}\n"), "{out:?}");
+    }
+
+    #[test]
+    fn grep_skips_an_unreadable_mod_pbo_and_a_mod_pbo_without_scripts() {
+        let w = World::new();
+        let dir = w.home.join("@Odd");
+        fs::create_dir_all(dir.join("addons")).expect("mkdir");
+        fs::write(dir.join("addons/bad.pbo"), b"garbage").expect("write");
+        fs::write(
+            dir.join("addons/conf.pbo"),
+            raw_pbo(
+                &[("config.cpp", b"class CfgPatches {};")],
+                &[("prefix", "odd")],
+            ),
+        )
+        .expect("write");
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "grep", "zzz_not_there", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(err.contains("api-bad-pbo"), "{err}");
+        // searched vanilla and a mod: no hint to add mods
+        assert_eq!(out.trim(), "no match");
+    }
 }

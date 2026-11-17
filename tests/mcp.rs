@@ -1122,3 +1122,197 @@ fn extract_tool_unpacks_an_install_and_replaces_with_force() {
         b"p\tdta/a.pbo\n"
     );
 }
+
+/// The fake install plus `dta/cfg.pbo`, which holds a text config.
+fn fake_steam_with_config() -> FakeSteam {
+    let w = fake_steam();
+    let cfg = make_pbo(&[(
+        "config.cpp",
+        b"class CfgVehicles { class Base { a = 1; }; class Kid: Base { b = 2; }; };",
+    )]);
+    fs::write(w.root.join("steamapps/common/DayZ/dta/cfg.pbo"), cfg).expect("write");
+    w
+}
+
+fn api_env(w: &FakeSteam) -> [(&'static str, &Path); 3] {
+    [
+        ("STEAM_ROOT", &w.root),
+        ("DAYZMAKE_CACHE", &w.cache),
+        ("HOME", &w.home),
+    ]
+}
+
+#[test]
+fn mcp_every_api_tool_maps_its_arguments() {
+    let w = fake_steam_with_config();
+    let r = run_raw(
+        lines(&[
+            call(
+                1,
+                "api_class",
+                &json!({"name":"Base","inherited":true,"mods_only":false}),
+            ),
+            call(2, "api_find", &json!({"regex":"Secret","class":"Base"})),
+            call(3, "api_subclasses", &json!({"name":"Base","all":true})),
+            call(4, "api_enum", &json!({"name":"AIStatus"})),
+            call(5, "api_chain", &json!({"name":"Variant"})),
+            call(6, "api_defines", &json!({"regex":"DAYZ"})),
+            call(7, "api_config", &json!({"path":"CfgVehicles/Kid"})),
+            call(
+                8,
+                "api_config",
+                &json!({"path":"CfgVehicles/Kid","json":true}),
+            ),
+            call(9, "api_config", &json!({"path":"CfgVehicles/Nope"})),
+        ]),
+        &api_env(&w),
+        &w.home,
+    );
+    for reply in &r.replies[..8] {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    assert!(
+        text(&r.replies[6]).contains("Kid : Base"),
+        "{}",
+        text(&r.replies[6])
+    );
+    assert!(
+        text(&r.replies[6]).contains("a = 1"),
+        "{}",
+        text(&r.replies[6])
+    );
+    let j: Value = serde_json::from_str(text(&r.replies[7])).expect("json text");
+    assert_eq!(j["name"], "Kid");
+    assert!(is_error(&r.replies[8]));
+}
+
+#[test]
+fn mcp_api_source_argument_errors_windows_and_target() {
+    let w = fake_steam();
+    let target = w.home.join("base.c.txt");
+    let r = run_raw(
+        lines(&[
+            call(1, "api_source", &json!({"name":"Base","context":"x"})),
+            call(2, "api_source", &json!({"name":"Base","offset":-1})),
+            call(
+                3,
+                "api_source",
+                &json!({"name":"Base","cat":true,"offset":999_999}),
+            ),
+            call(
+                4,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target)}),
+            ),
+            call(
+                5,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target)}),
+            ),
+            call(
+                6,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target),"force":true}),
+            ),
+        ]),
+        &api_env(&w),
+        &w.home,
+    );
+    assert!(is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("context"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(is_error(&r.replies[1]), "{}", text(&r.replies[1]));
+    assert!(
+        text(&r.replies[1]).contains("offset"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(
+        text(&r.replies[2]).contains("past the end"),
+        "{}",
+        text(&r.replies[2])
+    );
+    assert!(!is_error(&r.replies[3]), "{}", text(&r.replies[3]));
+    assert!(
+        fs::read_to_string(&target)
+            .expect("read")
+            .contains("class Base")
+    );
+    assert!(is_error(&r.replies[4]), "an existing target needs force");
+    assert!(!is_error(&r.replies[5]), "{}", text(&r.replies[5]));
+}
+
+#[test]
+fn mcp_rejects_malformed_requests_and_arguments() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let mut input = lines(&[
+        json!({"jsonrpc":"2.0","id":[1],"method":"ping"}),
+        json!({"jsonrpc":"2.0","id":2,"result":{}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"pbo_inspect","arguments":5}}),
+        call(
+            4,
+            "pbo_unpack",
+            &json!({"pbo":"a.pbo","target":"o","exclude":"x"}),
+        ),
+        call(
+            5,
+            "pbo_unpack",
+            &json!({"pbo":"a.pbo","target":"o","exclude":[1]}),
+        ),
+    ]);
+    // an overlong last line without a newline
+    input.extend(std::iter::repeat_n(b'x', (16 << 20) + 10));
+    let r = run_raw(input, &[], tmp.path());
+    assert_eq!(r.replies[0]["error"]["code"], -32600);
+    // the response to nothing gets no reply: the next reply is the one for id 3
+    assert_eq!(r.replies[1]["id"], 3);
+    assert_eq!(r.replies[1]["error"]["code"], -32602);
+    for reply in &r.replies[2..4] {
+        assert!(is_error(reply), "{}", text(reply));
+        assert!(text(reply).contains("array of strings"), "{}", text(reply));
+    }
+    assert_eq!(r.replies.len(), 5, "{}", r.stdout);
+    assert_eq!(r.replies[4]["error"]["code"], -32600);
+}
+
+#[test]
+fn mcp_config_tools_write_targets_and_sign_v2() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    fs::write(p.join("c.cpp"), "class A { x = 1; };\n").expect("write");
+    let sign = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
+    fs::copy(sign.join("testsig.pbo"), p.join("t.pbo")).expect("copy");
+    let r = run(
+        &[
+            call(
+                1,
+                "config_rapify",
+                &json!({"source":"c.cpp","target":"c.bin"}),
+            ),
+            call(
+                2,
+                "config_derapify",
+                &json!({"source":"c.bin","target":"back.cpp"}),
+            ),
+            call(3, "config_preprocess", &json!({"source":"c.cpp"})),
+            call(
+                4,
+                "pbo_sign",
+                &json!({"private_key":s(&sign.join("armk.biprivatekey")),"pbo":"t.pbo","v2":true}),
+            ),
+        ],
+        p,
+    );
+    for reply in &r.replies {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    assert!(
+        fs::read_to_string(p.join("back.cpp"))
+            .expect("read")
+            .contains("x = 1;")
+    );
+    assert_eq!(text(&r.replies[3]), "signed");
+}
