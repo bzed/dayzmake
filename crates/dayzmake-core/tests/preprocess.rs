@@ -50,6 +50,128 @@ versionAr [] = {3,5, 0, 0};
     );
 }
 
+/// A `//` comment ends at the end of the input as well as at a line end; so does an unterminated `/*`
+/// (`CfgConvert` accepts both, #103).
+#[test]
+fn comment_at_the_end_of_the_input_is_stripped() {
+    for (input, expected) in [
+        ("x = 1\n// c", "x = 1"),
+        ("x = 1;\n// c", "x = 1;"),
+        ("x = 1;\n/* c */", "x = 1;"),
+        ("x = 1; // c", "x = 1;"),
+        ("// c", ""),
+    ] {
+        let (output, _) =
+            preprocess(input.to_string(), None, &Vec::new(), &mut Warnings::new()).unwrap();
+        assert_eq!(output.trim(), expected, "{input:?}");
+    }
+}
+
+/// An unterminated `/*` runs to the end of the file, as in `CfgConvert` (which is silent about it), but
+/// dayzmake warns `unterminated-comment` with the file and the line of the `/*`. In an included file the
+/// comment ends with that file.
+#[test]
+fn unterminated_block_comment_is_accepted_and_warned() {
+    for (input, expected) in [
+        ("x = 1;\n/* c", "x = 1;"),
+        ("x = 1;\n/* c\ny = 2;\nz = 3;", "x = 1;"),
+        ("x = 1;\n/* c\n#include \"nope.hpp\"\nz = 3;", "x = 1;"),
+    ] {
+        let mut warnings = Warnings::new();
+        let (output, _) = preprocess(
+            input.to_string(),
+            Some(PathBuf::from("cfg.cpp")),
+            &Vec::new(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(output.trim(), expected, "{input:?}");
+        let found = warnings.warnings();
+        assert_eq!(found.len(), 1, "{input:?}: {found:?}");
+        assert_eq!(found[0].name, Some("unterminated-comment"));
+        assert!(found[0].message.contains("/*"), "{found:?}");
+        assert_eq!(found[0].location(), "In file cfg.cpp:2: ");
+    }
+    // terminated comments and comments in strings stay silent
+    let mut warnings = Warnings::new();
+    preprocess(
+        "x = \"/*\";\n/* c */\ny = 2;".to_string(),
+        None,
+        &Vec::new(),
+        &mut warnings,
+    )
+    .unwrap();
+    assert_eq!(warnings.warnings().len(), 0);
+}
+
+/// An unterminated `/*` after a directive behaves like one on a token line: it runs to the end of the
+/// file, with one `unterminated-comment` warning naming the line (#103).
+#[test]
+fn unterminated_block_comment_after_a_directive_is_accepted_and_warned() {
+    for (input, expected, line) in [
+        ("#ifdef A\n#endif /* c\nx = 1;", "", 2),
+        (
+            "x = 1;\n#ifdef A\n#include \"nope.hpp\" /* c\ny = 2;",
+            "x = 1;",
+            3,
+        ),
+        ("x = 1;\n#define X 1 /* c\ny = 2;\nX", "x = 1;", 2),
+        ("#define X 1 /* c\ny = 2;", "", 1),
+        ("x = 1;\n#undef X /* c\ny = 2;", "x = 1;", 2),
+    ] {
+        let mut warnings = Warnings::new();
+        let (output, _) = preprocess(
+            input.to_string(),
+            Some(PathBuf::from("cfg.cpp")),
+            &Vec::new(),
+            &mut warnings,
+        )
+        .unwrap();
+        assert_eq!(output.trim(), expected, "{input:?}");
+        let found = warnings.warnings();
+        assert_eq!(found.len(), 1, "{input:?}: {found:?}");
+        assert_eq!(found[0].name, Some("unterminated-comment"));
+        assert_eq!(
+            found[0].location(),
+            format!("In file cfg.cpp:{line}: "),
+            "{input:?}"
+        );
+    }
+}
+
+#[test]
+fn unterminated_block_comment_in_an_include_ends_with_the_file() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("inc.hpp"), "a = 1;\n/* open\nb = 2;").unwrap();
+    let main = dir.path().join("m.cpp");
+    std::fs::write(&main, "").unwrap();
+    let mut warnings = Warnings::new();
+    let (output, _) = preprocess(
+        "#include \"inc.hpp\"\nc = 3;\n".to_string(),
+        Some(main),
+        &[dir.path().to_path_buf()],
+        &mut warnings,
+    )
+    .unwrap();
+    assert_eq!(
+        output.split_whitespace().collect::<Vec<_>>(),
+        ["a", "=", "1;", "c", "=", "3;"]
+    );
+    let found = warnings.warnings();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].location().ends_with("inc.hpp:2: "), "{found:?}");
+}
+
+/// A `/*` inside a macro argument that is re-tokenised stays as it was: only the end of a file ends a
+/// comment there.
+#[test]
+fn block_comment_opener_in_a_macro_argument_is_kept() {
+    let mut warnings = Warnings::new();
+    let (output, _) =
+        preprocess("Z(1 /*)\n".to_string(), None, &Vec::new(), &mut warnings).unwrap();
+    assert_eq!(output.trim(), "Z(1 /*)");
+}
+
 #[test]
 fn test_preprocess_ifdef() {
     let input = String::from(
@@ -588,4 +710,23 @@ fn macro_work_is_capped_per_file() {
 #[test]
 fn macro_work_below_the_file_cap_is_accepted() {
     preprocess(empty_steps_file(14, 1), None, &[], &mut Warnings::new()).unwrap();
+}
+
+/// The line of an output line stays inside the file even when an unterminated `/*` swallows the file's
+/// final line end (the 3-line file below has no line 4).
+#[test]
+fn line_origins_after_an_open_comment_stay_inside_the_file() {
+    let input = String::from("x = 1;\nx = a /* c\ny = 2;\n");
+    let (_, info) = preprocess(
+        input,
+        Some(PathBuf::from("b.cpp")),
+        &Vec::new(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(
+        info.line_origins().iter().all(|(line, _)| *line <= 3),
+        "{:?}",
+        info.line_origins()
+    );
 }

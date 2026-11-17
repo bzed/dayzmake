@@ -537,18 +537,22 @@ pub struct InstalledMod {
     pub dir: PathBuf,
     /// Whether one of its PBOs has a `.c` entry.
     pub has_scripts: bool,
+    /// Whether one of its PBOs has a `config.bin` or `config.cpp` entry. Not part of the JSON listing; `-m all`
+    /// of `api config` selects the mods that have scripts or a config.
+    #[serde(skip)]
+    pub has_config: bool,
     /// The name of the `@` directory in the game install that links to it, when there is one.
     pub link: Option<String>,
 }
 
-/// Whether any `addons/*.pbo` of `dir` lists a `.c` entry. Only the PBO headers are read; an unreadable PBO
-/// is a warning.
-fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> bool {
+/// Whether any `addons/*.pbo` of `dir` lists a `.c` entry, and whether any lists a config, as
+/// `(has_scripts, has_config)`. Only the PBO headers are read; an unreadable PBO is a warning.
+fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> (bool, bool) {
     let Some(addons) = child_ignore_case(dir, "addons").filter(|a| a.is_dir()) else {
-        return false;
+        return (false, false);
     };
     let Ok(rd) = fs::read_dir(addons) else {
-        return false;
+        return (false, false);
     };
     let mut pbos: Vec<PathBuf> = rd
         .filter_map(Result::ok)
@@ -556,14 +560,19 @@ fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> bool {
         .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pbo")))
         .collect();
     pbos.sort();
+    let (mut scripts, mut config) = (false, false);
     for path in pbos {
         match pbo_entry_names(&path) {
             Ok(names) => {
-                if names
+                scripts |= names
                     .iter()
-                    .any(|n| entry_extension(n).is_some_and(|e| e.eq_ignore_ascii_case("c")))
-                {
-                    return true;
+                    .any(|n| entry_extension(n).is_some_and(|e| e.eq_ignore_ascii_case("c")));
+                // the config index reads `config.*` in folders too
+                config |= names
+                    .iter()
+                    .any(|n| n.rsplit(['/', '\\']).next().is_some_and(is_config));
+                if scripts && config {
+                    break;
                 }
             }
             Err(e) => warnings.warn(
@@ -575,7 +584,7 @@ fn dir_has_scripts(dir: &Path, warnings: &mut dyn WarningSink) -> bool {
             ),
         }
     }
-    false
+    (scripts, config)
 }
 
 /// Every mod in the branch's workshop content directory plus every `@*` directory of the game install (the
@@ -628,10 +637,12 @@ pub fn installed_mods(
         let dir_name = dir
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let (has_scripts, has_config) = dir_has_scripts(&dir, warnings);
         found.push(InstalledMod {
             id,
             name: meta_name(&dir).unwrap_or_else(|| if is_link { entry.clone() } else { dir_name }),
-            has_scripts: dir_has_scripts(&dir, warnings),
+            has_scripts,
+            has_config,
             link: is_link.then_some(entry),
             dir,
         });

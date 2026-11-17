@@ -41,7 +41,7 @@ Options:
 
 An `enum { A, B = 5, C };` block is accepted at any class level. It is no class entry: its names go, lowercase and
 in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
-one, as in C.
+one, as in C. A name that occurs twice is accepted without a warning, like CfgConvert; the last value counts.
 
 Behaviour:
 
@@ -53,6 +53,12 @@ Behaviour:
 - A source that is already rapified is copied unchanged with the `prerapified-file` warning.
 - Syntax errors name the line and the token that was expected. Values that are not quoted are accepted with the
   `unquoted-string` warning and an entry without a value with `empty-value`.
+- A value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
+  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is an error, as with `;`. An entry on the last line of a file
+  that has no line end after it is a syntax error, because CfgConvert rejects it too.
+- A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
+  (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
+  the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.
 - `delete`, `class X: Y`, forward declarations and `+=` array appends are supported.
 
 Examples:
@@ -133,7 +139,8 @@ Behaviour:
   directives leave blank lines behind.
 - `__EVAL` is not evaluated here; it is evaluated when the config is parsed by `rapify`.
 - The `include-case` warning is raised when an include only matches ignoring case, and `macro-arg-count` when
-  a macro is called with the wrong number of arguments.
+  a macro is called with the wrong number of arguments. A `//` comment may end at the end of the file without a line
+  end, and an unterminated `/*` runs to the end of the file, as in CfgConvert, with the warning `unterminated-comment`.
 
 Example:
 

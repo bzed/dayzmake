@@ -31,11 +31,22 @@ is maintained here.
 
 ### Unreleased
 
+- `api config`: the warning `api-config-limit` of a merge is raised once and names the PBO where the merge stopped; `api-config-order` names only the PBOs of the cycle, each as `[<source>] <pbo>`, and, like `api-config-base-changed` across PBOs, is raised on every query.
+- `api config` reads the includable text entries of a PBO only when it has a text `config.cpp`, skips a truncated or undecodable one with the new warning `api-config-include-unreadable` (the configs of the PBO still load, and an include of it names the read error), reads at most 64 MiB of them per PBO (new warning `api-config-includes-capped`), and resolves `..` inside the PBO: `#include "..\macros.hpp"` from `sub\config.cpp` finds `macros.hpp`; a path that leaves the PBO's root is still refused (#99).
+- `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
+- `api config` sorts the config PBOs of the game and of all selected mods together by `requiredAddons`, as the engine does (a game addon that requires a mod addon loads after it); ties go to the source (game, then the mods in `-m` order) and then to the path. `-m all` includes mods that have only a config. The `api-config-base-changed` warning shows the class path as written (`CfgVehicles/Car_Base`), the game is recognised by a flag and no longer by the name `vanilla`, and an infinite float is shown as `1e999` / `-1e999` as derapify writes it (a string in `--json`) (part of #98).
+- `extract` refuses a new target folder inside the source also without `-f`, before it creates anything (it used to write into the mod folder, and the `-f` re-run was then refused). A file/folder clash across PBOs (`p/a` in one, `p/a/b` in another) no longer fails the extract: the first entry in the sorted PBO order is written, the later one is skipped with the new warning `extract-path-clash` (part of #98).
+- `api grep` prints at most the first 512 bytes of a matching line (counted before escaping), cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
+- `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
+- A config value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95). An integer literal that overflows at a line end is an error, as it is before a `;`; before this change it became a string with a warning.
+- The preprocessor strips a `//` comment at the very end of the input, with no line end after it, as CfgConvert does; before, `x = 1;` followed by `// c` without a final newline was a syntax error. An unterminated `/*` runs to the end of the file, also as in CfgConvert (silently there), and raises the new warning `unterminated-comment` with file and line; an included file's comment ends with that file. When the last line of a config is picked out to decide whether its entry may end at the end of the file, a lone CR now counts as a line break; CfgConvert rejects `x = 1\r#define Y 1` and `x = 1\r// c`, dayzmake accepts them (#103).
+- A config float literal that overflows f32 (`1e999`, `-1e39`) is rapified as an infinity, no longer an error, as CfgConvert does; a literal that underflows is 0. `derapify` writes an infinity as `1e999` / `-1e999`, so derapify then rapify keeps the bits (#102).
+- Config errors raised while parsing a value (`Invalid integer`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
-  ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
-  `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
+  ones in folders of a PBO) and of the `-m` mods, loads the PBOs of all sources by
+  `CfgPatches` `requiredAddons` (ties: vanilla, the mods in order, sorted path), and merges like the engine: a class defined again extends the
   earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by [<source>] <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
   output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
   error. An `#include` in a mod `config.cpp` is resolved from the entries of the same PBO only, never from the file system (#97). The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
@@ -64,7 +75,7 @@ is maintained here.
   spelling would otherwise swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
-  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  A float that does not fit an f32 (`1e999`, `-1e39`) becomes an f32 infinity, as in CfgConvert (#102); followed by text
   (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
   entry may end at a closing brace without a semicolon.
 - `inspect` and `pbo_inspect` list ODOL v56 models (#84): skeleton, bounding box, LODs with vertex and face counts,
@@ -470,7 +481,7 @@ dayzmake api update                           # rebuild the cache now
   server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
 - **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
   workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (the first
+  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`: or a config) (the first
   run indexes each mod once, which can take a while; later runs use the cache). A mod contributes the
   scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
   Results from several indexes are tagged with the index name.

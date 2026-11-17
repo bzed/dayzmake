@@ -15,7 +15,7 @@ Each section lists the commands that can raise the warning, what triggers it and
 
 Raised by: `api`, `mcp`.
 
-A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` component or a file that is not in the PBO makes the config unreadable, and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
+A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` that would leave the PBO's root or a file that is not in the PBO makes the config unreadable (`..` inside the PBO is resolved against the folder of the including entry), and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
 
 ```text
 In file …/badmod/addons/entry.pbo: warning: cannot read config.bin: failed to fill whole buffer [api-bad-config]
@@ -65,10 +65,30 @@ warning: cannot create the cache directory /proc/nope/x: No such file or directo
 
 Raised by: `api config`, `mcp`.
 
-A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. Only a change made by a mod (a `-m` source) is warned about, when the index of the mod is built and whenever it is merged over the game; the game changes some bases on purpose, and the lookup shows those changes without a warning.
+A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. Only a change made by a mod (a `-m` source) is warned about, whenever its PBO is merged over what loaded before it; the game changes some bases on purpose, and the lookup shows those changes without a warning.
 
 ```text
-In file …/mod/addons/rebase.pbo: warning: class cfgvehicles/hatch changes its base class: Base -> (none) [api-config-base-changed]
+In file …/mod/addons/rebase.pbo: warning: class CfgVehicles/Hatch changes its base class: Base -> (none) [api-config-base-changed]
+```
+
+## api-config-include-unreadable
+
+Raised by: `api config`, `mcp`.
+
+A text `config.cpp` is indexed, and a text entry of the same PBO that it could include (`.hpp`, `.h`, `.inc`, `.txt`, `.cfg` and so on) is truncated or cannot be decompressed. The entry is skipped and the configs of the PBO still load. A config that includes the entry fails with the same reason (`api-bad-config`), not with "not found". PBOs with only a `config.bin` read no such entries.
+
+```text
+In file …/mod/addons/entry.pbo: warning: cannot read the includable zz_readme.txt: PBO entry "zz_readme.txt" is truncated (its data ends past the end of the file).; it is skipped [api-config-include-unreadable]
+```
+
+## api-config-includes-capped
+
+Raised by: `api config`, `mcp`.
+
+The includable text entries of one PBO add up to more than 64 MiB. The entries past that total are not read, once per PBO; a config that includes one of them fails with `api-bad-config`.
+
+```text
+In file …/mod/addons/huge.pbo: warning: the includable files of this PBO are more than 67108864 bytes; the rest is skipped [api-config-includes-capped]   (the message format; no synthetic file in this manual triggers it)
 ```
 
 ## api-config-limit
@@ -85,10 +105,10 @@ In file …/mod/addons/huge.pbo: warning: the config of mod is too large (more t
 
 Raised by: `api config`, `mcp`.
 
-The `requiredAddons` of the `CfgPatches` of some PBOs of one source depend on each other in a cycle, so no order satisfies them. The PBOs of the cycle load after the others, in path order.
+The `requiredAddons` of the `CfgPatches` of some PBOs depend on each other in a cycle (the PBOs can belong to different sources), so no order satisfies them. The PBOs of the cycle, and the PBOs that depend on them, load after the others, in the global tie-break order: the source (the game first, then the mods in `-m` order), then the path. Only the PBOs that really are in the cycle are named and counted, each as `[<source>] <pbo>`. The warning is raised on every query, not only when the index is built, because the merge runs for every query; the same holds for `api-config-base-changed` of a change across PBOs.
 
 ```text
-warning: requiredAddons form a cycle between 2 configs (Addons/c1.pbo, Addons/c2.pbo); they load in path order [api-config-order]
+warning: requiredAddons form a cycle between 2 configs ([vanilla] Addons/c1.pbo, [vanilla] Addons/c2.pbo); they and the configs that depend on them load last, in source and path order [api-config-order]
 ```
 
 ## api-unsafe-entry
@@ -159,6 +179,16 @@ A config entry has no value (`z = ;`, or a macro that expanded to nothing). It i
 
 ```text
 In file warn.cpp:1: warning: Entry "z" has no value; it is stored as an empty string. [empty-value]
+```
+
+## extract-path-clash
+
+Raised by: `extract`, and the MCP tool `extract`.
+
+An entry would be a file where an earlier entry of the same extract has a folder, or a folder where it has a file (`p/a` in one PBO, `p/a/b` in another). The first one in the sorted PBO order is written; the later entry is skipped and is not part of the tree. The warning names both PBOs and the path.
+
+```text
+warning: Skipping "p/x/y.txt" of addons/b.pbo: it is a file where addons/a.pbo has a folder, or a folder where it has a file ("p/x"); keeping the first. [extract-path-clash]
 ```
 
 ## include-case
@@ -321,3 +351,12 @@ A file in the source folder is a FIFO, a device or a socket. It is skipped; dayz
 In file data/pipe: warning: Skipping a file that is not a regular file (FIFO, device or socket). [unsupported-file]
 ```
 
+## unterminated-comment
+
+Raised by: `rapify`, `preprocess`, `build`, `api config`, `mcp`.
+
+A `/*` comment is never closed. Like CfgConvert, which says nothing about it, dayzmake takes the rest of the file as the comment, so every line after it is ignored, also an `#include` (which is then not even looked up). In an included file the comment ends with that file. The warning names the file and the line of the `/*`; it is not raised for `/*` inside a string. It also covers a comment that opens after a directive (`#endif /* c`, `#define X 1 /* c`), and one in a disabled `#ifdef` branch.
+
+```text
+In file open.cpp:2: warning: A /* comment is never closed; the rest of the file is ignored. [unterminated-comment]
+```

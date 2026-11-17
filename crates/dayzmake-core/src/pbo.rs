@@ -300,6 +300,7 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
 pub struct SelectedEntry {
     name: String,
     data: Result<Vec<u8>, Error>,
+    over_limit: bool,
 }
 
 impl SelectedEntry {
@@ -316,6 +317,22 @@ impl SelectedEntry {
     /// Returns the error that kept the entry from being decompressed.
     pub fn data(&self) -> Result<&[u8], &Error> {
         self.data.as_ref().map(Vec::as_slice)
+    }
+
+    /// The decompressed data of the entry, moved out without a copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error that kept the entry from being decompressed.
+    pub fn into_data(self) -> Result<Vec<u8>, Error> {
+        self.data
+    }
+
+    /// Whether [`PBO::read_entries_tolerant`] left the entry unread because the byte limit was reached
+    /// (its [`data`](Self::data) is then an error).
+    #[must_use]
+    pub fn is_over_limit(&self) -> bool {
+        self.over_limit
     }
 }
 
@@ -339,6 +356,12 @@ impl PboSelection {
     #[must_use]
     pub fn entries(&self) -> &[SelectedEntry] {
         &self.entries
+    }
+
+    /// The selected entries, moved out of the selection.
+    #[must_use]
+    pub fn into_entries(self) -> Vec<SelectedEntry> {
+        self.entries
     }
 
     /// The value of a header extension (the prefix is the key `prefix`).
@@ -470,6 +493,22 @@ fn file_allowed(name: &str, exclude_patterns: &[String]) -> bool {
     }
 
     true
+}
+
+/// The bounds of [`PBO::read_entries_tolerant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TolerantRead {
+    /// The most bytes of decompressed entry data the selection reads in total.
+    pub max_bytes: u64,
+}
+
+impl TolerantRead {
+    /// Bounds the selection to `max_bytes` of decompressed entry data.
+    #[must_use]
+    pub fn new(max_bytes: u64) -> Self {
+        TolerantRead { max_bytes }
+    }
 }
 
 /// What [`PBO::from_directory`] does with a folder.
@@ -693,6 +732,8 @@ impl PBO {
             return Err(error!("Unsafe PBO entry name \"{}\".", printable(&name)));
         }
         self.modified(&name);
+        // the new name is stored as the UTF-8 it was given in, not as the bytes of the entry it replaces
+        self.raw_names.remove(&name);
         self.files
             .insert(name, Cursor::new(data.into_boxed_slice()));
         Ok(())
@@ -955,28 +996,104 @@ impl PBO {
         input: &mut I,
         wanted: impl Fn(&str) -> bool,
     ) -> Result<PboSelection, Error> {
+        Self::read_selected(input, wanted, None)
+    }
+
+    /// Like [`PBO::read_entries`], but a damaged entry does not fail the whole selection, and the
+    /// selection is bounded.
+    ///
+    /// A selected entry whose data is truncated or cannot be decompressed is an error of its own
+    /// ([`SelectedEntry::data`]). The decompressed sizes of the selected entries are added up in file
+    /// order; the first entry that would take the total past [`TolerantRead::max_bytes`] is not read, and neither is any
+    /// selected entry after it (a smaller later one included); each reports [`SelectedEntry::is_over_limit`]. A malformed header
+    /// block is still an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the header block is malformed or exceeds the limits, or the entry sizes
+    /// overflow.
+    pub fn read_entries_tolerant<I: Read + Seek>(
+        input: &mut I,
+        wanted: impl Fn(&str) -> bool,
+        options: &TolerantRead,
+    ) -> Result<PboSelection, Error> {
+        Self::read_selected(input, wanted, Some(options.max_bytes))
+    }
+
+    /// `limit` set means the tolerant mode.
+    fn read_selected<I: Read + Seek>(
+        input: &mut I,
+        wanted: impl Fn(&str) -> bool,
+        limit: Option<u64>,
+    ) -> Result<PboSelection, Error> {
         let len = input.seek(SeekFrom::End(0))?;
         input.seek(SeekFrom::Start(0))?;
         let mut reader = BufReader::new(&mut *input);
         let block = read_header_block(&mut reader)?;
         let mut offset = reader.stream_position()?;
         let mut entries = Vec::new();
+        let mut total: u64 = 0;
+        let mut exhausted = false;
         for h in &block.headers {
             let size = u64::from(h.data_size);
             let end = offset
                 .checked_add(size)
                 .ok_or_else(|| error!("PBO entry sizes overflow."))?;
             if wanted(&h.filename) {
+                let compressed = h.packing_method == PACKING_COMPRESSED;
+                let unpacked = if compressed {
+                    u64::from(h.original_size)
+                } else {
+                    size
+                };
+                let failed = |why: Error, over_limit: bool| SelectedEntry {
+                    name: h.filename.clone(),
+                    data: Err(why),
+                    over_limit,
+                };
                 if end > len {
-                    return Err(error!(
+                    let why = error!(
                         "PBO entry \"{}\" is truncated (its data ends past the end of the file).",
                         printable(&h.filename)
-                    ));
+                    );
+                    if limit.is_none() {
+                        return Err(why);
+                    }
+                    entries.push(failed(why, false));
+                    offset = end;
+                    continue;
+                }
+                if let Some(max) = limit {
+                    if exhausted {
+                        entries.push(failed(
+                            error!(
+                                "PBO entry \"{}\" is left unread (the byte limit is reached).",
+                                printable(&h.filename)
+                            ),
+                            true,
+                        ));
+                        offset = end;
+                        continue;
+                    }
+                    let new_total = total.saturating_add(unpacked);
+                    if new_total > max {
+                        exhausted = true;
+                        entries.push(failed(
+                            error!(
+                                "PBO entry \"{}\" is left unread (the byte limit is reached).",
+                                printable(&h.filename)
+                            ),
+                            true,
+                        ));
+                        offset = end;
+                        continue;
+                    }
+                    total = new_total;
                 }
                 reader.seek(SeekFrom::Start(offset))?;
                 let mut data: Vec<u8> = Vec::new();
                 (&mut reader).take(size).read_to_end(&mut data)?;
-                let data = if h.packing_method == PACKING_COMPRESSED {
+                let data = if compressed {
                     lzss_decompress(&data, h.original_size as usize).prepend_error(format!(
                         "Failed to decompress \"{}\":",
                         printable(&h.filename)
@@ -987,6 +1104,7 @@ impl PBO {
                 entries.push(SelectedEntry {
                     name: h.filename.clone(),
                     data,
+                    over_limit: false,
                 });
             }
             offset = end;

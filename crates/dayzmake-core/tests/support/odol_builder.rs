@@ -40,6 +40,14 @@ pub struct Knobs {
     pub control_char_name: bool,
     /// The material in LOD 0 has an empty name (a built-in material).
     pub empty_material_name: bool,
+    /// The material in LOD 0 is listed twice.
+    pub repeat_material: bool,
+    /// The model has no skeleton (an empty name, no bones).
+    pub no_skeleton: bool,
+    /// The property class and damage strings are empty.
+    pub empty_class_damage: bool,
+    /// No animations, and the LODs have no proxies, textures, materials, selections or properties.
+    pub bare: bool,
     /// Writes this many LODs, all copies of LOD 0 one after the other, each declaring its end as the end of the file.
     pub repeat_lod0_to_eof: Option<usize>,
 }
@@ -144,14 +152,18 @@ fn model_info(o: &mut Out, knobs: Knobs) {
     o.f32(0.0); // shadow_offset
     o.u8(1); // animated
     // skeleton
-    o.cstr("Skel");
-    o.u8(1); // is_discrete
-    o.u32(2); // bone_count
-    o.cstr("bone_a");
-    o.cstr("");
-    o.cstr("bone_b");
-    o.cstr("bone_a");
-    o.cstr(""); // pivots_name
+    if knobs.no_skeleton {
+        o.cstr(""); // no more skeleton fields after an empty name
+    } else {
+        o.cstr("Skel");
+        o.u8(1); // is_discrete
+        o.u32(2); // bone_count
+        o.cstr("bone_a");
+        o.cstr("");
+        o.cstr("bone_b");
+        o.cstr("bone_a");
+        o.cstr(""); // pivots_name
+    }
     o.u8(0); // map_type
     o.u32(0); // mass array: count 0
     o.f32(12.5); // mass
@@ -167,8 +179,13 @@ fn model_info(o: &mut Out, knobs: Knobs) {
         o.bytes(b"ClassName");
         return;
     }
-    o.cstr("ClassName"); // property_class
-    o.cstr("DamageName"); // property_damage
+    let (class, damage) = if knobs.empty_class_damage {
+        ("", "")
+    } else {
+        ("ClassName", "DamageName")
+    };
+    o.cstr(class); // property_class
+    o.cstr(damage); // property_damage
     o.u8(0); // property_frequent
     o.u32(0); // n
     o.u8(0); // unknown flag
@@ -208,7 +225,27 @@ fn animations(o: &mut Out, lods: usize) {
     }
 }
 
+/// LOD 0 without proxies, textures, materials, selections and properties.
+fn lod0_bare(o: &mut Out) {
+    o.u32(0); // proxies
+    o.u32(0); // items
+    o.u32(0); // bone links
+    common_head(o, 3);
+    o.u32(0); // textures
+    o.u32(0); // materials
+    o.index_array(&[]);
+    o.index_array(&[]);
+    faces(o, 1);
+    o.u32(0); // sections
+    o.u32(0); // selections
+    o.u32(0); // properties
+    tail(o);
+}
+
 fn lod0(o: &mut Out, knobs: Knobs) {
+    if knobs.bare {
+        return lod0_bare(o);
+    }
     o.u32(1); // proxy_count
     o.cstr("\\dz\\proxy\\thing.p3d");
     o.matrix();
@@ -221,35 +258,11 @@ fn lod0(o: &mut Out, knobs: Knobs) {
     o.u32(2); // textures
     o.cstr("\\dz\\tex_a_co.paa");
     o.cstr("\\dz\\tex_b_co.paa");
-    o.u32(1); // materials
-    o.cstr(if knobs.empty_material_name {
-        ""
-    } else {
-        "\\dz\\mat.rvmat"
-    });
-    o.u32(20); // mat_version
-    o.zeros(200); // colors and lighting values
-    o.f32(10.0); // specular_power
-    for v in [1, 2, 3, 4] {
-        o.i32(v); // pixel_shader, vertex_shader, main_light, fog_mode
+    o.u32(if knobs.repeat_material { 2 } else { 1 }); // materials
+    material(o, knobs);
+    if knobs.repeat_material {
+        material(o, knobs);
     }
-    o.cstr("\\dz\\surface.bisurf");
-    o.u32(1); // render_flag_count
-    o.u32(0); // render_flags
-    o.u32(1); // stage_count
-    o.u32(1); // transform_count
-    stage(
-        o,
-        if knobs.repeat_texture {
-            "\\dz\\tex_a_co.paa"
-        } else {
-            "\\dz\\stage_co.paa"
-        },
-        0,
-    );
-    o.u32(0); // uv_source
-    o.matrix();
-    stage(o, "", 0); // the dummy stage after the transforms
     o.index_array(&[]); // edges
     o.index_array(&[]);
     faces(o, 1);
@@ -283,6 +296,37 @@ fn lod0(o: &mut Out, knobs: Knobs) {
     o.cstr("class");
     o.cstr("house");
     tail(o);
+}
+
+fn material(o: &mut Out, knobs: Knobs) {
+    o.cstr(if knobs.empty_material_name {
+        ""
+    } else {
+        "\\dz\\mat.rvmat"
+    });
+    o.u32(20); // mat_version
+    o.zeros(200); // colors and lighting values
+    o.f32(10.0); // specular_power
+    for v in [1, 2, 3, 4] {
+        o.i32(v); // pixel_shader, vertex_shader, main_light, fog_mode
+    }
+    o.cstr("\\dz\\surface.bisurf");
+    o.u32(1); // render_flag_count
+    o.u32(0); // render_flags
+    o.u32(1); // stage_count
+    o.u32(1); // transform_count
+    stage(
+        o,
+        if knobs.repeat_texture {
+            "\\dz\\tex_a_co.paa"
+        } else {
+            "\\dz\\stage_co.paa"
+        },
+        0,
+    );
+    o.u32(0); // uv_source
+    o.matrix();
+    stage(o, "", 0); // the dummy stage after the transforms
 }
 
 fn stage(o: &mut Out, texture: &str, id: u32) {
@@ -334,6 +378,11 @@ fn lod1(o: &mut Out, knobs: Knobs) {
     o.index_array(&[]);
     faces(o, 2);
     o.u32(0); // sections
+    if knobs.bare {
+        o.u32(0); // selections
+        o.u32(0); // properties
+        return tail(o);
+    }
     // one selection with big arrays
     o.u32(1);
     o.cstr("big");
@@ -392,8 +441,12 @@ pub fn build_parts(knobs: Knobs) -> (Vec<u8>, usize) {
         let n = o.pos();
         return (o.0, n);
     }
-    o.u8(1); // has_animations
-    animations(&mut o, 2);
+    if knobs.bare {
+        o.u8(0); // has_animations
+    } else {
+        o.u8(1); // has_animations
+        animations(&mut o, 2);
+    }
     let starts = o.pos();
     o.zeros(16); // lod_start x2, lod_end x2
     o.u8(0);

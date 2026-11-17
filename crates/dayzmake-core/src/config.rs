@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::error;
-use crate::error::{ConfigParseErrorExt, ErrorExt, printable};
+use crate::error::{ConfigParseErrorExt, ErrorExt, located_error, printable};
 use crate::eval::{EvalValue, eval, exec};
 use crate::io::{ReadExt, WriteExt, compressed_int_len};
 use crate::preprocess::{IncludeFolders, MAX_NESTING_DEPTH, nesting_error, preprocess_in};
@@ -31,7 +31,8 @@ fn text_name(name: &str, what: &str) -> Result<(), Error> {
 #[derive(Default)]
 pub(crate) struct EvalCtx {
     vars: std::collections::HashMap<String, EvalValue>,
-    error: Option<Error>,
+    /// The first error raised from a grammar action, with the byte offset of the token it belongs to.
+    error: Option<(usize, Error)>,
 }
 
 impl From<EvalValue> for ConfigEntry {
@@ -94,41 +95,45 @@ peg::parser! {
 
         rule exponent() = ['e' | 'E'] ['-' | '+']? ['0'..='9']+
 
-        rule float_text() -> &'input str = $((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent())))
+        rule float_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) { (p, t) }
 
-        /// A float followed by the end of an entry. The terminator is checked before the value is,
-        /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
-        rule float_entry() -> f32 = f:float_text() &(whitespace()? [';' | '}']) v:float_value(f) { v }
+        /// The end of an entry: `;`, the `}` of the class, or (for the last entry of a block or file,
+        /// as CfgConvert reads it) the end of the line.
+        rule entry_end() = whitespace()? [';' | '}'] / [' ' | '\t']* ['\r' | '\n']
+
+        /// A float followed by the end of an entry.
+        rule float_entry() -> f32 = f:float_text() &entry_end() v:float_value(f) { v }
 
         /// A float followed by the end of an array element.
         rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }
 
-        rule float_value(f: &str) -> f32 = {?
-            // `parse` gives infinity on overflow; that would not survive a derapify/rapify round trip
+        /// An overflowing literal (`1e999`) is an infinity, as `CfgConvert` writes it; derapify writes
+        /// `1e999` / `-1e999` for it, which reads back to the same value.
+        rule float_value(at: (usize, &str)) -> f32 = {?
+            let (pos, f) = at;
+            // `float_text` only matches what `f32::from_str` accepts, and overflow is an infinity, so the
+            // error cannot fire; it stays as a guard against a grammar change.
             f.parse::<f32>()
-                .map_err(|e| { ctx.error.get_or_insert(error!("Invalid float \"{f}\": {e}")); "a valid float" })
-                .and_then(|v| if v.is_finite() { Ok(v) } else {
-                    ctx.error.get_or_insert(error!("Invalid float \"{f}\": out of range"));
-                    Err("a float in range")
-                })
+                .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
         }
 
-        rule integer_text() -> &'input str = $((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+))
+        rule integer_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? (("0x" ['0'..='9' | 'a'..='f' | 'A'..='F']+) / ['0'..='9']+)) { (p, t) }
 
         /// An integer followed by the end of an entry; the terminator is checked first, like for floats
         /// (`99999999999x` stays an unquoted string).
-        rule integer_entry() -> i32 = i:integer_text() &(whitespace()? [';' | '}']) v:integer_value(i) { v }
+        rule integer_entry() -> i32 = i:integer_text() &entry_end() v:integer_value(i) { v }
 
         /// An integer followed by the end of an array element.
         rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
 
-        rule integer_value(i: &str) -> i32 = {?
+        rule integer_value(at: (usize, &str)) -> i32 = {?
+            let (pos, i) = at;
             if i.contains("0x") {
                 i32::from_str_radix(&i.replace("0x", ""), 16)
-                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
             } else {
                 i.parse::<i32>()
-                    .map_err(|e| { ctx.error.get_or_insert(error!("Invalid integer \"{i}\": {e}")); "a valid integer" })
+                    .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid integer \"{i}\": {e}"))); "a valid integer" })
             }
         }
 
@@ -160,9 +165,9 @@ peg::parser! {
         }
 
         /// Fails (and records the error) when `d` levels of classes, arrays or parentheses are exceeded.
-        rule nesting_ok(d: usize) = {?
+        rule nesting_ok(d: usize) = pos:position!() {?
             if d >= MAX_NESTING_DEPTH {
-                ctx.error.get_or_insert(nesting_error());
+                ctx.error.get_or_insert((pos, nesting_error()));
                 Err("nesting within the limit")
             } else {
                 Ok(())
@@ -171,17 +176,17 @@ peg::parser! {
 
         rule eval_body(d: usize) = ("(" nesting_ok(d) eval_body(d + 1) ")" / "\"" (!"\"" [_])* "\"" / !['(' | ')'] [_])*
 
-        rule eval_value(d: usize) -> EvalValue = "__EVAL" whitespace()? "(" b:$(eval_body(d)) ")" {?
+        rule eval_value(d: usize) -> EvalValue = pos:position!() "__EVAL" whitespace()? "(" b:$(eval_body(d)) ")" {?
             match eval(b, &mut ctx.vars) {
                 Ok(v) => Ok(v),
-                Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EVAL expression") }
+                Err(e) => { ctx.error.get_or_insert((pos, e)); Err("a supported __EVAL expression") }
             }
         }
 
-        rule exec_entry(d: usize) = "__EXEC" whitespace()? "(" b:$(eval_body(d)) ")" whitespace()? ";" {?
+        rule exec_entry(d: usize) = pos:position!() "__EXEC" whitespace()? "(" b:$(eval_body(d)) ")" whitespace()? ";" {?
             match exec(b, &mut ctx.vars) {
                 Ok(()) => Ok(()),
-                Err(e) => { ctx.error.get_or_insert(e); Err("a supported __EXEC statement") }
+                Err(e) => { ctx.error.get_or_insert((pos, e)); Err("a supported __EXEC statement") }
             }
         }
 
@@ -250,12 +255,17 @@ peg::parser! {
             Ok(out)
         }
 
-        rule plain_entry(d: usize) -> Item =
-            e:(array_entry(d) / array_expansion_entry(d) / var_entry(d)) { Item::Entry(e.0, e.1, Vec::new()) }
+        rule array_item(d: usize) -> Item =
+            e:(array_entry(d) / array_expansion_entry(d)) whitespace()? (";" / &"}") { Item::Entry(e.0, e.1, Vec::new()) }
+
+        /// A value entry; the last one of a block or file may end at the line end instead of `;`.
+        rule var_item(d: usize) -> Item =
+            e:var_entry(d) (whitespace()? (";" / &"}") / [' ' | '\t']* &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
         rule entry(d: usize) -> Item =
             e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
-            e:(class(d) / plain_entry(d)) whitespace()? (";" / &"}") { e } /
+            e:class(d) whitespace()? (";" / &"}") { e } /
+            e:(array_item(d) / var_item(d)) { e } /
             e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
         rule entry_or_exec(d: usize) -> Item = exec_entry(d) { Item::Nothing } / entry(d)
@@ -323,6 +333,21 @@ peg::parser! {
                 enums: e.1,
             }
         }
+    }
+}
+
+/// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
+/// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
+fn float_literal(f: f32) -> String {
+    if f.is_infinite() {
+        if f.is_sign_positive() {
+            "1e999"
+        } else {
+            "-1e999"
+        }
+        .to_string()
+    } else {
+        format!("{f:?}")
     }
 }
 
@@ -540,7 +565,7 @@ impl ConfigArray {
                     )?;
                 }
                 ConfigArrayElement::FloatElement(f) => {
-                    output.write_all(format!("{f:?}").as_bytes())?;
+                    output.write_all(float_literal(*f).as_bytes())?;
                 }
                 ConfigArrayElement::IntElement(i) => {
                     output.write_all(format!("{i}").as_bytes())?;
@@ -766,7 +791,7 @@ impl ConfigClass {
                         )?;
                     }
                     ConfigEntry::FloatEntry(f) => {
-                        output.write_all(format!("{key} = {f:?};\n").as_bytes())?;
+                        output.write_all(format!("{key} = {};\n", float_literal(*f)).as_bytes())?;
                     }
                     ConfigEntry::IntEntry(i) => {
                         output.write_all(format!("{key} = {i};\n").as_bytes())?;
@@ -1248,9 +1273,16 @@ impl Config {
         }
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
-
         let (preprocessed, info) = preprocess_in(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;
+
+        // The preprocessor ends its output with a line end. A file whose last source line is an entry
+        // (not empty, a directive, a comment or inside an unterminated comment) has no line end of its own there, so that entry ends at the end of the file, which CfgConvert
+        // rejects unless it is closed by `;` or `}`.
+        let preprocessed = match preprocessed.strip_suffix('\n') {
+            Some(text) if info.ends_in_entry => text.to_string(),
+            _ => preprocessed,
+        };
 
         let mut found = ConfigWarnings(Vec::new());
 
@@ -1258,7 +1290,7 @@ impl Config {
         let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
         let result = match ctx.error.take() {
             // the warnings were raised by the fallback rules tried after the failed __EVAL/__EXEC
-            Some(e) => return Err(e),
+            Some((pos, e)) => return Err(located_error(&info, &preprocessed, pos, &e)),
             _ => ConfigParseErrorExt::format_error(parsed, &info, &preprocessed),
         };
 

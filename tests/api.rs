@@ -2203,6 +2203,74 @@ mod from_pbo {
         }
     }
 
+    /// A mod `@Long` whose only script has the given lines (prefix `lg`).
+    fn long_line_mod(w: &World, body: &str) -> String {
+        let dir = w.home.join("@Long");
+        let empty = tempfile::tempdir().expect("tmp");
+        make_pbo(
+            empty.path(),
+            &[("a.c", body)],
+            Some("lg"),
+            &dir.join("addons/lg.pbo"),
+        );
+        dir.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn api_grep_caps_a_long_line() {
+        let w = World::new();
+        let m = long_line_mod(&w, &format!("HIT{}\nHIT short\n", "x".repeat(100_000)));
+        let (code, out, err) = w.run(&["api", "grep", "^HIT", "-m", &m, "--max", "5"]);
+        assert_eq!(code, 0, "{err}");
+        let long = out
+            .lines()
+            .find(|l| l.contains("lg\\a.c:1: "))
+            .expect("long");
+        let text = long.split_once("lg\\a.c:1: ").expect("sep").1;
+        assert!(text.ends_with(" [\u{2026}]"), "{text}");
+        let cut = text.strip_suffix(" [\u{2026}]").expect("marker");
+        assert_eq!(cut.len(), 512);
+        assert!(
+            out.contains("lg\\a.c:2: HIT short\n"),
+            "short line unchanged"
+        );
+        let (code, out, err) = w.run(&["api", "grep", "--json", "^HIT", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let hits: Vec<&serde_json::Value> = v
+            .as_array()
+            .expect("array")
+            .iter()
+            .filter(|h| h["source"] == "_Long")
+            .collect();
+        assert_eq!(hits[0]["text"].as_str().map(str::len), Some(512));
+        assert_eq!(hits[0]["truncated"], true);
+        assert_eq!(hits[1]["text"], "HIT short");
+        assert!(hits[1].get("truncated").is_none(), "{}", hits[1]);
+    }
+
+    #[test]
+    fn api_grep_cut_backs_up_to_a_character_boundary() {
+        let w = World::new();
+        // byte 512 falls inside the 2-byte character that starts at byte 511
+        let m = long_line_mod(&w, &format!("HIT{}\n", "\u{e9}".repeat(1000)));
+        let (code, out, err) = w.run(&["api", "grep", "--json", "^HIT", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let hit = v
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|h| h["source"] == "_Long")
+            .expect("hit");
+        // "HIT" is 3 bytes, so characters start at odd offsets: 511 is a start, 512 is inside
+        assert_eq!(hit["text"].as_str().map(str::len), Some(511));
+        assert_eq!(hit["truncated"], true);
+        let (code, out, err) = w.run(&["api", "grep", "^HIT", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("\u{e9} [\u{2026}]\n"), "{err}");
+    }
+
     #[test]
     fn api_grep_invalid_regex_is_a_clear_error() {
         let w = World::new();

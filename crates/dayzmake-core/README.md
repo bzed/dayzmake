@@ -32,7 +32,15 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
-- New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute, drive and `..` paths are errors and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
+- New `PBO::read_entries_tolerant(input, wanted, &TolerantRead)` (a truncated or undecodable selected entry is an error of its own, and the selection is bounded by the byte limit of the new `#[non_exhaustive]` options struct `TolerantRead::new(max_bytes)`), `SelectedEntry::into_data`, `SelectedEntry::is_over_limit` and `PboSelection::into_entries`; `read_entries` is unchanged (#99).
+- New `MemoryIncludes::with_unreadable` and `MemoryIncludes::get`: an include of an entry that could not be read fails with the reason instead of "not found". `MemoryIncludes` resolves `..` inside the PBO, against the folder of the including entry; a path that leaves the PBO's root is still an error (#99).
+- `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
+- `extract`: a new target inside the source is refused without `force` too, before anything is created; a file/folder clash across entries skips the later entry with the warning `extract-path-clash` instead of failing (part of #98).
+- `Config::read`/`from_string`: a config value entry (not an array or a class) may end at the line end instead of `;` and keeps its value type (CfgConvert does the same) instead of becoming a string; the last entry of a file without a line end after it is a parse error (#95).
+- `Config::read`/`from_string`: a float literal that overflows f32 (`1e999`, `-1e39`) is an infinity, not an error (CfgConvert does the same); `Config::to_string` writes an infinity as `1e999` / `-1e999`, which reads back to the same f32 (#102).
+- `preprocess`: a `//` comment at the very end of the input (no line end after it) is stripped, and an unterminated `/*` runs to the end of the file (an include's ends with the include), as in CfgConvert, with a new warning `unterminated-comment`; before, the comment text reached the grammar (#103).
+- Config errors raised from a grammar action (`Invalid integer`, a failing `__EVAL`/`__EXEC`, nesting too deep) start with `In line <file>:<line>:` like a parse error (#94).
+- New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute and drive paths are errors (and `..` in the `\prefix\path` form; in the relative form `..` is resolved inside the PBO since #99) and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
 - `extract`: the `pbo-map.tsv` prefix is written with `/` instead of `\`, and `\` is escaped as `\\` in both columns (#87).
 - New module `extract`: `extract(source, target, &ExtractOptions, warnings)` unpacks an install, a mod or a PBO into one tree by prefix, with `ExtractOptions` (`force`, `derapify`, `only`, `exclude`), a `pbo-map.tsv` and an atomic swap; it streams entries, fails on I/O and decompression errors, and returns an `ExtractSummary` with `pbos()` and `files()` (#87). `force` only replaces an empty folder or an earlier extract result, never a folder that contains or lies inside the source.
 - `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::EntryFilter::new(only, exclude)` and `matches(name)` apply them; `exclude` wins (#86).
@@ -40,7 +48,7 @@ need to be GPL-2.0-or-later compatible.
 - `PBO::write` and signing use the stored bytes of each header extension by position, so a UTF-8 and a windows-1252 spelling of one string no longer swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
-  A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
+  A float that does not fit an f32 (`1e999`, `-1e39`) becomes an f32 infinity, as in CfgConvert (#102); followed by text
   (`1e999x`) it stays an unquoted string, like an integer that does not fit (`99999999999x`, #93), and a float
   entry may end at a closing brace without a semicolon.
 - `odol::Odol::read` reads binarized ODOL v56 models (#84): model properties, skeleton, animation classes and, per

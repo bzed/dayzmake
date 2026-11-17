@@ -90,6 +90,16 @@ pub fn mods_text(
 }
 
 fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, Error> {
+    locate_mods(ctx, false, warnings)
+}
+
+/// Like [`locate`]; with `configs`, `-m all` also selects the mods that have a config but no scripts (the
+/// config index reads those, the script index has nothing to take from them).
+fn locate_mods(
+    ctx: &ApiContext,
+    configs: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Located, Error> {
     let libs = libraries(&steam_roots());
     let (scripts_pbo, build, game) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
@@ -146,7 +156,10 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
         for spec in specs {
             match &spec {
                 ModSpec::All => {
-                    for m in installed.iter().filter(|m| m.has_scripts) {
+                    for m in installed
+                        .iter()
+                        .filter(|m| m.has_scripts || (configs && m.has_config))
+                    {
                         add(installed_source(m)?);
                     }
                 }
@@ -477,8 +490,29 @@ pub struct GrepHit {
     pub path: String,
     /// 1-based line.
     pub line: u32,
-    /// The raw line, lossily decoded.
+    /// The raw line, lossily decoded; at most [`GREP_LINE_MAX`] bytes (see `truncated`).
     pub text: String,
+    /// Whether `text` was cut at [`GREP_LINE_MAX`] bytes (on a character boundary).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+/// The most bytes of a matching line `api grep` returns.
+pub const GREP_LINE_MAX: usize = 512;
+
+/// Marker the text output of `api grep` puts after a cut line.
+const GREP_CUT_MARKER: &str = " [\u{2026}]";
+
+/// `line` cut to [`GREP_LINE_MAX`] bytes at the previous character boundary, and whether it was cut.
+fn cap_line(line: &str) -> (&str, bool) {
+    if line.len() <= GREP_LINE_MAX {
+        return (line, false);
+    }
+    let mut end = GREP_LINE_MAX;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    (line.get(..end).unwrap_or(""), true)
 }
 
 /// What `api grep` found: the first `max` hits in order and how many more there were.
@@ -568,11 +602,13 @@ pub fn grep(
                     let path = shown
                         .get_or_insert_with(|| format!("{prefix}\\{entry}"))
                         .clone();
+                    let (text, truncated) = cap_line(line);
                     kept.push(GrepHit {
                         source: name.to_string(),
                         path,
                         line: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                        text: line.to_string(),
+                        text: text.to_string(),
+                        truncated,
                     });
                 }
             }
@@ -588,7 +624,7 @@ pub fn grep(
     Ok(result)
 }
 
-/// The output of `api grep`: JSON (an array of `{source, path, line, text}`, cut to `max`) or text lines
+/// The output of `api grep`: JSON (an array of `{source, path, line, text}` plus `truncated` on cut lines, cut to `max`; lines are cut to [`GREP_LINE_MAX`] bytes) or text lines
 /// (`[<source>] <path>:<line>: <text>`, the tag only when mods are selected), then the `... N more lines`
 /// note.
 ///
@@ -619,7 +655,11 @@ pub fn grep_lines(
                 String::new()
             };
             // paths and text come from files the user did not write
-            printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text))
+            let mut line = printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text));
+            if h.truncated {
+                line.push_str(GREP_CUT_MARKER);
+            }
+            line
         })
         .collect();
     if out.is_empty() && r.more == 0 {
@@ -854,7 +894,8 @@ pub fn src_cat(
     }
 }
 
-/// The merged config index: vanilla first, then the selected mods in order, each source cached on its own.
+/// The merged config index. The config PBOs of vanilla and of the selected mods are sorted together by
+/// `requiredAddons` (ties: vanilla, then the mods in order, then the path); each source is cached on its own.
 /// With `lines`, one `# config <source>: <n> classes, <build>` line per source is added for `-v`.
 ///
 /// # Errors
@@ -866,18 +907,19 @@ pub fn load_config(
     lines: &mut Vec<String>,
     warnings: &mut dyn WarningSink,
 ) -> Result<config_index::ConfigLayer, Error> {
-    let found = locate(ctx, warnings)?;
+    let found = locate_mods(ctx, true, warnings)?;
     let pbos = config_index::vanilla_config_pbos(&found.game)?;
     let inputs: Vec<PathBuf> = pbos.iter().map(|(p, _)| p.clone()).collect();
     let key = format!("config-vanilla-{}", ctx.branch.name());
-    let mut merged = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
-        config_index::build_layer("vanilla", &found.build, &pbos, w)
+    let vanilla = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+        config_index::build_source("vanilla", &found.build, true, &pbos, w)
     })?;
     lines.push(format!(
         "# config vanilla: {} classes, {}",
-        merged.class_count(),
-        merged.build
+        vanilla.class_count(),
+        vanilla.build
     ));
+    let mut sources = vec![vanilla];
     for m in &found.mods {
         let mod_pbos: Vec<(PathBuf, String)> = m
             .pbos
@@ -895,28 +937,17 @@ pub fn load_config(
             .collect();
         let inputs: Vec<PathBuf> = mod_pbos.iter().map(|(p, _)| p.clone()).collect();
         let key = format!("config-{}", mod_key(m, ctx.branch));
-        let layer = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
-            config_index::build_layer(&m.name, ctx.branch.name(), &mod_pbos, w)
+        let source = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+            config_index::build_source(&m.name, ctx.branch.name(), false, &mod_pbos, w)
         });
-        match layer {
-            Ok(layer) => {
+        match source {
+            Ok(source) => {
                 lines.push(format!(
                     "# config {}: {} classes",
-                    printable(&layer.name),
-                    layer.class_count()
+                    printable(&source.name),
+                    source.class_count()
                 ));
-                if !merged.merge(layer, warnings) {
-                    warnings.warn(
-                        Warning::new(
-                            Some("api-config-limit"),
-                            format!(
-                                "the merged config is too large; the rest of {} is skipped",
-                                printable(&m.name)
-                            ),
-                        )
-                        .in_file(m.dir.display().to_string()),
-                    );
-                }
+                sources.push(source);
             }
             Err(e) => warnings.warn(
                 Warning::new(
@@ -927,7 +958,8 @@ pub fn load_config(
             ),
         }
     }
-    Ok(merged)
+    let build = found.build.clone();
+    Ok(config_index::merge_sources(sources, &build, warnings))
 }
 
 /// `dayzmake api config`: the class at `path` with its inheritance chain, resolved properties, subclasses and

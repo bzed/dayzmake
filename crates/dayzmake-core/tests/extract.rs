@@ -501,11 +501,12 @@ fn a_corrupt_compressed_entry_fails_and_keeps_the_old_tree() {
 fn a_write_failure_fails_and_keeps_the_old_tree() {
     let tmp = install();
     let (target, before) = previous_tree(tmp.path());
-    // "a" is a file, so "a/b" cannot be written
+    // a file name longer than any file system allows cannot be written
+    let too_long = "n".repeat(300);
     write_pbo(
         &tmp.path().join("install/dta/z.pbo"),
         "z",
-        &[("a", b"1"), ("a\\b", b"2")],
+        &[("a", b"1"), (too_long.as_str(), b"2")],
     );
     let mut options = ExtractOptions::default();
     options.force = true;
@@ -820,4 +821,155 @@ fn an_old_tree_that_cannot_be_removed_is_a_warning() {
         assert_eq!(names(&warnings), ["old-tree-left"]);
         assert!(out.join("p/x.txt").is_file());
     }
+}
+
+/// Every file below `dir` with its bytes would differ if anything was created or changed.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    files_below(dir)
+        .into_iter()
+        .map(|f| {
+            let bytes = fs::read(dir.join(&f)).unwrap();
+            (f, bytes)
+        })
+        .collect()
+}
+
+#[test]
+fn a_new_target_inside_the_source_is_refused_without_force_and_nothing_is_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    let before = listing(&src);
+    for rel in ["out", "addons/out", "out/deeper", "addons/../out"] {
+        let target = src.join(rel);
+        let err = extract(
+            &src,
+            &target,
+            &ExtractOptions::default(),
+            &mut Warnings::new(),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("is inside the source"),
+            "{rel}: {err}"
+        );
+        assert!(!target.exists(), "{rel}: the target was created");
+        assert_eq!(listing(&src), before, "{rel}");
+        let mut dirs: Vec<_> = fs::read_dir(&src)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        dirs.sort();
+        assert_eq!(
+            dirs,
+            ["addons"],
+            "{rel}: something was created in the source"
+        );
+    }
+}
+
+/// A `..` after a folder that does not exist cannot be resolved by name: the error says so.
+#[test]
+fn a_target_with_dotdot_after_a_missing_folder_is_refused_with_the_reason() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    let target = tmp.path().join("elsewhere/missing/../x");
+    let err = extract(
+        &src,
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("Invalid target folder \""), "{err}");
+    assert!(
+        err.contains("cannot resolve \"..\" after a folder that does not exist."),
+        "{err}"
+    );
+    assert!(!tmp.path().join("elsewhere").exists());
+}
+
+/// A target below a symbolic link to the source is inside the source: refused, and nothing is created.
+#[cfg(unix)]
+#[test]
+fn a_target_below_a_symlink_to_the_source_is_refused_and_nothing_is_created() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("mod");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    std::os::unix::fs::symlink(&src, tmp.path().join("link")).unwrap();
+    let before = listing(&src);
+    let target = tmp.path().join("link/out");
+    let err = extract(
+        &tmp.path().join("mod"),
+        &target,
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("is inside the source"), "{err}");
+    assert!(!src.join("out").exists());
+    assert_eq!(listing(&src), before);
+}
+
+#[test]
+fn a_new_target_beside_the_source_is_still_accepted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", &[("x.txt", b"x")]);
+    extract(
+        &src,
+        &tmp.path().join("m-out"),
+        &ExtractOptions::default(),
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert!(tmp.path().join("m-out/p/x.txt").exists());
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+/// `a.pbo` and `b.pbo` of prefix `p`: `a` has `entries_a`, `b` has `entries_b`.
+fn clash_source(
+    entries_a: &[(&str, &[u8])],
+    entries_b: &[(&str, &[u8])],
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("m");
+    write_pbo(&src.join("addons/a.pbo"), "p", entries_a);
+    write_pbo(&src.join("addons/b.pbo"), "p", entries_b);
+    (tmp, src)
+}
+
+#[test]
+fn a_file_and_folder_clash_across_pbos_skips_the_later_entry() {
+    // the file comes first, the folder entry is skipped
+    let (tmp, src) = clash_source(&[("x", b"file")], &[("x\\y.txt", b"deep"), ("z.txt", b"z")]);
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(names(&warnings), ["extract-path-clash"]);
+    let text = &warnings.warnings()[0].message;
+    assert!(
+        text.contains("addons/a.pbo") && text.contains("addons/b.pbo"),
+        "{text}"
+    );
+    assert!(
+        text.contains("p/x/y.txt") || text.contains("p\\x\\y.txt"),
+        "{text}"
+    );
+    assert_eq!(files_below(&target), ["p/x", "p/z.txt", "pbo-map.tsv"]);
+    assert_eq!(fs::read(target.join("p/x")).unwrap(), b"file");
+
+    // the folder comes first, the file entry is skipped
+    let (tmp, src) = clash_source(&[("x\\y.txt", b"deep")], &[("x", b"file"), ("z.txt", b"z")]);
+    let target = tmp.path().join("out");
+    let mut warnings = Warnings::new();
+    extract(&src, &target, &ExtractOptions::default(), &mut warnings).unwrap();
+    assert_eq!(names(&warnings), ["extract-path-clash"]);
+    assert_eq!(
+        files_below(&target),
+        ["p/x/y.txt", "p/z.txt", "pbo-map.tsv"]
+    );
 }

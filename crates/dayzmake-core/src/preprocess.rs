@@ -15,7 +15,7 @@ use crate::warning::{Warning, WarningSink};
 peg::parser! {
     /// PEG grammar for the preprocessor: directives, macros, comments and tokens. `deep` is set when
     /// macro argument parentheses nest deeper than [`MAX_NESTING_DEPTH`]; the caller turns that into an error.
-    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>) for str {
+    pub(crate) grammar preprocess_grammar(deep: &Cell<bool>, file_end: bool) for str {
         rule newline() = "\r\n" / "\n"
 
         rule name() -> String = n:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) {
@@ -99,7 +99,8 @@ peg::parser! {
 
         rule concat_token() = "##"
 
-        rule sl_comment() -> u32 = "//" (!newline() [_])* &newline() {
+        /// A `//` comment ends at a line end or at the end of the input (without one `CfgConvert` accepts it too).
+        rule sl_comment() -> u32 = "//" (!newline() [_])* &(newline() / ![_]) {
             0
         }
 
@@ -107,10 +108,23 @@ peg::parser! {
             u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX)
         }
 
+        /// An unterminated `/*` runs to the end of the file, as in `CfgConvert`. Only the parse of a whole
+        /// file (`file_end`) allows it, not the re-tokenised substrings of macro arguments.
+        rule open_comment() -> u32 = [' ' | '\t']* "/*" content:$([_]*) ![_] {?
+            if file_end {
+                // The file's final line end does not start another line: a diagnostic stays inside the file.
+                let content = content.strip_suffix('\n').unwrap_or(content);
+                Ok(u32::try_from(content.chars().filter(|c| c == &'\n').count()).unwrap_or(u32::MAX))
+            } else {
+                Err("a terminated comment")
+            }
+        }
+
         rule comment_token() -> u32 = sl_comment() / ml_comment()
 
         rule token() -> Token =
             c:comment_token() { Token::CommentToken(c) } /
+            c:open_comment() { Token::OpenCommentToken(c) } /
             sn:string_token() { Token::NewlineToken(sn.0, sn.1) } /
             concat_token() { Token::ConcatToken } /
             m:macro_token() { Token::MacroToken(m) } /
@@ -122,8 +136,8 @@ peg::parser! {
         }
 
         rule line() -> Line =
-            [' ' | '\t']* d:directive() cmts:(([' ' | '\t']* c:comment_token() { c })*) [' ' | '\t']* {
-                Line::DirectiveLine(d, cmts.iter().sum())
+            [' ' | '\t']* d:directive() cmts:(([' ' | '\t']* c:comment_token() { c })*) open:([' ' | '\t']* c:open_comment() { c })? [' ' | '\t']* {
+                Line::DirectiveLine(d, cmts.iter().sum::<u32>().saturating_add(open.unwrap_or(0)), open.is_some())
             } /
             [' ' | '\t']* t:tokens() { Line::TokenLine(t) }
 
@@ -190,6 +204,8 @@ pub(crate) enum Token {
     MacroToken(Macro),
     /// Comment token containing a number of newlines
     CommentToken(u32),
+    /// Unterminated `/*` comment (to the end of the file) containing a number of newlines
+    OpenCommentToken(u32),
     /// Token for the concatenation operator (`##`)
     ConcatToken,
 }
@@ -198,7 +214,7 @@ pub(crate) enum Token {
 #[derive(Debug)]
 pub(crate) enum Line {
     /// Directive line
-    DirectiveLine(Directive, u32),
+    DirectiveLine(Directive, u32, bool),
     /// Non-directive line of tokens
     TokenLine(Vec<Token>),
 }
@@ -228,8 +244,9 @@ pub struct IncludeFolders {
 ///
 /// `origin` of the preprocessed input is the name of the including entry, and an include is resolved
 /// relative to the folder of that entry, or, in the engine's `\prefix\path` form, when it points into
-/// `prefix`. Absolute paths, drive letters and `..` components are errors, as are empty components and
-/// control characters (see [`crate::pbo::safe_relative_path`]). Names compare ignoring case. The files
+/// `prefix`. Absolute paths and drive letters are errors, as are empty components and control characters
+/// (see [`crate::pbo::safe_relative_path`]). In the relative form a `..` component is resolved inside the PBO and one that would leave
+/// the PBO's root is an error; in the `\prefix\path` form `..` is always an error. Names compare ignoring case. The files
 /// an `#include` pulls in count against a total of 64 MiB per preprocess call.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -237,6 +254,8 @@ pub struct MemoryIncludes {
     prefix: String,
     /// lowercase `/`-separated name -> (name as given, content)
     files: std::collections::BTreeMap<String, (String, Vec<u8>)>,
+    /// lowercase `/`-separated name -> why the entry is not available
+    unreadable: std::collections::BTreeMap<String, String>,
 }
 
 impl MemoryIncludes {
@@ -252,7 +271,28 @@ impl MemoryIncludes {
         MemoryIncludes {
             prefix: prefix.replace('\\', "/").trim_matches('/').to_lowercase(),
             files: map,
+            unreadable: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Adds entries (name, reason) that exist in the archive but could not be read. An `#include` of one of
+    /// them fails with the reason instead of "not found". A name that is also a readable file stays readable.
+    #[must_use]
+    pub fn with_unreadable(mut self, entries: Vec<(String, String)>) -> Self {
+        for (name, reason) in entries {
+            self.unreadable
+                .entry(name.replace('\\', "/").to_lowercase())
+                .or_insert(reason);
+        }
+        self
+    }
+
+    /// The content of the entry `name` (ignoring case and separator), if it was read.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&[u8]> {
+        self.files
+            .get(&name.replace('\\', "/").to_lowercase())
+            .map(|(_, content)| content.as_slice())
     }
 
     /// The file `include_path` names when included from the entry `origin` (an entry name, or `None` for
@@ -285,24 +325,47 @@ impl MemoryIncludes {
             }
             below.to_string()
         } else {
-            if include_path.starts_with('/')
-                || crate::pbo::safe_relative_path(include_path).is_none()
-            {
-                return Err(bad("absolute, drive, `..` or invalid path"));
-            }
-            let rel = include_path.replace('\\', "/").to_lowercase();
             let folder = origin
                 .map(|o| o.to_string_lossy().replace('\\', "/").to_lowercase())
                 .and_then(|o| o.rsplit_once('/').map(|(f, _)| f.to_string()));
-            match folder {
-                Some(f) => format!("{f}/{rel}"),
-                None => rel,
+            let mut parts: Vec<String> = folder
+                .iter()
+                .flat_map(|f| f.split('/'))
+                .map(str::to_string)
+                .collect();
+            if include_path.starts_with('/') {
+                return Err(bad("absolute, drive or invalid path"));
             }
+            for component in include_path.replace('\\', "/").to_lowercase().split('/') {
+                if component == ".." {
+                    if parts.pop().is_none() {
+                        return Err(bad("`..` leaves the PBO"));
+                    }
+                } else if crate::pbo::safe_relative_path(component).is_some() {
+                    parts.push(component.to_string());
+                } else {
+                    return Err(bad("absolute, drive or invalid path"));
+                }
+            }
+            parts.join("/")
         };
-        self.files
-            .get(&key)
-            .map(|(name, content)| (name.as_str(), content.as_slice()))
-            .ok_or_else(|| include_not_found(include_path, origin, line))
+        if let Some((name, content)) = self.files.get(&key) {
+            return Ok((name.as_str(), content.as_slice()));
+        }
+        if let Some(reason) = self.unreadable.get(&key) {
+            return Err(match origin {
+                Some(o) => error!(
+                    "Include \"{}\" (from \"{}:{line}\") cannot be read: {reason}",
+                    printable(include_path),
+                    printable(&o.display().to_string())
+                ),
+                None => error!(
+                    "Include \"{}\" (line {line}) cannot be read: {reason}",
+                    printable(include_path)
+                ),
+            });
+        }
+        Err(include_not_found(include_path, origin, line))
     }
 }
 
@@ -353,6 +416,9 @@ pub struct PreprocessInfo {
     includes: usize,
     /// Bytes of the in-memory includes read so far.
     include_bytes: usize,
+    /// Whether the last source line of the file is an entry line (not empty, a directive, a comment or
+    /// inside an unterminated comment), so that the line end the preprocessor adds is not one of the source.
+    pub(crate) ends_in_entry: bool,
 }
 
 impl PreprocessInfo {
@@ -477,7 +543,7 @@ fn token_bytes(token: &Token) -> usize {
     match token {
         Token::RegularToken(s) | Token::NewlineToken(s, _) => s.len().max(1),
         Token::MacroToken(m) => m.original.len().max(1),
-        Token::CommentToken(_) | Token::ConcatToken => 1,
+        Token::CommentToken(_) | Token::OpenCommentToken(_) | Token::ConcatToken => 1,
     }
 }
 
@@ -502,7 +568,7 @@ fn identity(path: &Path, memory: bool) -> PathBuf {
 
 fn parse_macro(input: &str) -> Result<Macro, Error> {
     let without_original = parse_checked(
-        |deep| preprocess_grammar::macro_proper(input, deep),
+        |deep| preprocess_grammar::macro_proper(input, deep, false),
         |e| error!("Failed to parse macro invocation \"{input}\": {e}"),
     )?;
 
@@ -530,6 +596,7 @@ impl Clone for Token {
             Token::NewlineToken(s, n) => Token::NewlineToken(s.clone(), *n),
             Token::MacroToken(m) => Token::MacroToken(m.clone()),
             Token::CommentToken(n) => Token::CommentToken(*n),
+            Token::OpenCommentToken(n) => Token::OpenCommentToken(*n),
             Token::ConcatToken => Token::ConcatToken,
         }
     }
@@ -576,7 +643,7 @@ impl Definition {
             // @todo: handle these errors properly
             for (param, arg) in params.iter().zip(args.iter()) {
                 let mut tokens = parse_checked(
-                    |deep| preprocess_grammar::tokens(arg, deep),
+                    |deep| preprocess_grammar::tokens(arg, deep, false),
                     |e| error!("Failed to parse macro argument: {e}"),
                 )?;
                 let stack: Vec<Definition> = Vec::new();
@@ -619,7 +686,7 @@ impl Macro {
 
         let (_, without_name) = self.original.split_at(self.name.len());
         let mut arg_tokens = parse_checked(
-            |deep| preprocess_grammar::tokens(without_name, deep),
+            |deep| preprocess_grammar::tokens(without_name, deep, false),
             |e| error!("Failed to parse macro arguments: {e}"),
         )?;
 
@@ -659,7 +726,7 @@ impl Macro {
                             .unwrap_or_default();
                         let (_, rest) = self.original.split_at(self.name.len());
                         let mut rest_tokens = parse_checked(
-                            |deep| preprocess_grammar::tokens(rest, deep),
+                            |deep| preprocess_grammar::tokens(rest, deep, false),
                             |e| error!("Failed to parse macro arguments: {e}"),
                         )?;
                         rest_tokens = Macro::resolve_all(
@@ -788,7 +855,7 @@ impl Token {
                 Token::MacroToken(m) => {
                     output += &m.original;
                 }
-                Token::CommentToken(n) => {
+                Token::CommentToken(n) | Token::OpenCommentToken(n) => {
                     newlines += n;
                 }
                 Token::ConcatToken => {}
@@ -806,7 +873,7 @@ fn source_newlines(tokens: &[Token]) -> (u32, u32) {
     let (mut inline, mut continuations) = (0u32, 0u32);
     for token in tokens {
         match token {
-            Token::NewlineToken(_, n) | Token::CommentToken(n) => {
+            Token::NewlineToken(_, n) | Token::CommentToken(n) | Token::OpenCommentToken(n) => {
                 inline = inline.saturating_add(*n);
             }
             Token::MacroToken(m) => {
@@ -1202,6 +1269,19 @@ fn find_include_file(
     }
 }
 
+/// The warning for a `/*` that is never closed (`line` is where the comment starts).
+fn warn_unterminated(origin: Option<&Path>, line: u32, warnings: &mut dyn WarningSink) {
+    let mut warning = Warning::new(
+        Some("unterminated-comment"),
+        "A /* comment is never closed; the rest of the file is ignored.",
+    )
+    .at_line(line);
+    if let Some(origin) = origin {
+        warning = warning.in_file(origin.display().to_string());
+    }
+    warnings.warn(warning);
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "one branch per directive keeps the preprocessor loop readable"
@@ -1217,7 +1297,7 @@ fn preprocess_rec(
     // CRLF and classic Mac (lone CR) newlines
     let input = input.replace("\r\n", "\n").replace('\r', "\n");
     let deep = Cell::new(false);
-    let parsed = preprocess_grammar::file(&input, &deep);
+    let parsed = preprocess_grammar::file(&input, &deep, true);
     if deep.get() {
         return Err(nesting_error());
     }
@@ -1226,12 +1306,17 @@ fn preprocess_rec(
     let mut original_lineno = 1;
     let mut level = 0;
     let mut level_true = 0;
+    let mut last_is_entry = false;
 
     for line in lines {
+        last_is_entry = false;
         // Every path leaves this block (never `continue`), so the line counter below always runs (#63).
         'line: {
             match line {
-                Line::DirectiveLine(dir, newlines) => {
+                Line::DirectiveLine(dir, newlines, open) => {
+                    if open {
+                        warn_unterminated(origin, original_lineno, warnings);
+                    }
                     original_lineno += newlines;
 
                     match dir {
@@ -1328,6 +1413,18 @@ fn preprocess_rec(
                             output += &result;
                         }
                         Directive::DefineDirective(def) => {
+                            if let Some(at) = def
+                                .value
+                                .iter()
+                                .position(|t| matches!(t, Token::OpenCommentToken(_)))
+                            {
+                                let before = def.value.get(..at).unwrap_or_default();
+                                warn_unterminated(
+                                    origin,
+                                    original_lineno.saturating_add(skipped_newlines(before)),
+                                    warnings,
+                                );
+                            }
                             original_lineno += skipped_newlines(&def.value);
 
                             if level > level_true {
@@ -1378,11 +1475,32 @@ fn preprocess_rec(
                     }
                 }
                 Line::TokenLine(tokens) => {
+                    // Found after the parse, so a backtracked path never warns; also in a disabled branch,
+                    // because the comment swallows the rest of the file there too.
+                    if let Some(at) = tokens
+                        .iter()
+                        .position(|t| matches!(t, Token::OpenCommentToken(_)))
+                    {
+                        let before = tokens.get(..at).unwrap_or_default();
+                        warn_unterminated(
+                            origin,
+                            original_lineno.saturating_add(skipped_newlines(before)),
+                            warnings,
+                        );
+                    }
                     if level > level_true {
                         // A disabled line is never expanded (#61): it can neither error nor cost time.
                         original_lineno += skipped_newlines(&tokens);
                         break 'line;
                     }
+                    last_is_entry = !tokens
+                        .iter()
+                        .any(|t| matches!(t, Token::OpenCommentToken(_)))
+                        && tokens.iter().any(|t| match t {
+                            Token::RegularToken(s) => !s.trim().is_empty(),
+                            Token::NewlineToken(..) | Token::MacroToken(_) => true,
+                            _ => false,
+                        });
                     let stack: Vec<Definition> = Vec::new();
                     let mut mismatches: Vec<String> = Vec::new();
                     let mut budget = Budget::new(info.steps);
@@ -1439,6 +1557,7 @@ fn preprocess_rec(
         }
     }
 
+    info.ends_in_entry = last_is_entry;
     Ok(output)
 }
 
@@ -1526,6 +1645,7 @@ pub fn preprocess_in(
         steps: 0,
         includes: 0,
         include_bytes: 0,
+        ends_in_entry: false,
     };
 
     if let Some(ref path) = origin {

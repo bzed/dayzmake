@@ -1,8 +1,9 @@
 //! The config index: the classes of every `config.bin` and `config.cpp` of the game and of mods, merged the way
 //! the engine merges them.
 //!
-//! One [`ConfigLayer`](crate::api::config_index::ConfigLayer) is built per source (vanilla, each mod) and cached as JSON; the layers are merged in load
-//! order at query time. All input is untrusted: PBO bytes are read through the bounded PBO and config readers,
+//! One [`ConfigSource`](crate::api::config_index::ConfigSource) is built per source (vanilla, each mod) and cached
+//! as JSON; it holds one [`ConfigLayer`](crate::api::config_index::ConfigLayer) per config PBO. The layers of all
+//! selected sources are merged in load order at query time. All input is untrusted: PBO bytes are read through the bounded PBO and config readers,
 //! nothing is allocated from a length field, nesting and the number of classes and properties are limited, and no
 //! file system path is built from config content.
 //!
@@ -10,9 +11,10 @@
 //!
 //! A class defined again extends the earlier definition (its parent is replaced only when the new definition names
 //! one); properties are overwritten; `x[] += {..}` appends to the array; `delete X;` removes the class with
-//! everything below it; `class X;` (an external declaration) creates nothing. Inside a source the config files are
-//! applied in the order of their `CfgPatches.*.requiredAddons` (sorted path order breaks ties); vanilla comes
-//! first, then the mods in the order they were selected.
+//! everything below it; `class X;` (an external declaration) creates nothing. The config PBOs of all selected
+//! sources are sorted together by their `CfgPatches.*.requiredAddons`, as the engine does, so a game addon that
+//! requires a mod addon loads after it. Ties are broken by the source (vanilla first, then the mods in the order
+//! they were selected) and then by the sorted path.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
@@ -23,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 
 use super::cache::Cacheable;
+use super::config_query::display_path;
 use super::model::InputStamp;
 use super::source::child_ignore_case;
 use dayzmake_core::config::{
@@ -30,13 +33,13 @@ use dayzmake_core::config::{
 };
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
-use dayzmake_core::pbo::{EntryFilter, PBO};
+use dayzmake_core::pbo::{EntryFilter, PBO, SelectedEntry, TolerantRead};
 use dayzmake_core::preprocess::{IncludeFolders, MemoryIncludes};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 
 /// Version of the config index layout. Bump it on every change of the model; the cache treats other values as
 /// stale.
-pub const CONFIG_FORMAT: u32 = 2;
+pub const CONFIG_FORMAT: u32 = 3;
 
 /// Most classes one layer holds; the rest of a hostile config is skipped with a warning.
 const MAX_CLASSES: usize = 2_000_000;
@@ -119,6 +122,9 @@ pub struct ConfigLayer {
     pub version: String,
     /// `vanilla` or the mod name.
     pub name: String,
+    /// The layer is made of the game's own configs: its base class changes are not warned about.
+    #[serde(default)]
+    pub is_vanilla: bool,
     /// Build or version the layer was made from.
     pub build: String,
     /// Files the layer was built from.
@@ -132,7 +138,63 @@ pub struct ConfigLayer {
     pub prop_count: usize,
 }
 
-impl Cacheable for ConfigLayer {
+/// The addons a config PBO provides (`CfgPatches` classes) and requires (`requiredAddons`), in lowercase.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Patches {
+    /// The `CfgPatches` class names.
+    pub provides: Vec<String>,
+    /// The `requiredAddons` entries.
+    pub requires: Vec<String>,
+}
+
+/// The classes of one config PBO.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigPart {
+    /// The PBO file relative to its install or mod directory, `/`-separated.
+    pub pbo: String,
+    /// The addons the PBO provides and requires.
+    pub patches: Patches,
+    /// The classes of the PBO, with its path as the only entry of the PBO table.
+    pub layer: ConfigLayer,
+}
+
+/// The config PBOs of one source (the game or a mod), each as a layer of its own so that the PBOs of all sources
+/// can be merged in one global order. This is what the cache stores.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConfigSource {
+    /// Layout version, [`CONFIG_FORMAT`].
+    pub format: u32,
+    /// The dayzmake version that built the source; the cache treats other versions as stale.
+    #[serde(default)]
+    pub version: String,
+    /// `vanilla` or the mod name.
+    pub name: String,
+    /// The source is the game itself.
+    #[serde(default)]
+    pub is_vanilla: bool,
+    /// Build or version the source was made from.
+    pub build: String,
+    /// Files the source was built from.
+    pub inputs: Vec<InputStamp>,
+    /// The PBOs that have a config, in sorted path order.
+    pub parts: Vec<ConfigPart>,
+}
+
+impl ConfigSource {
+    /// How many distinct classes the source defines (deletions are not counted).
+    #[must_use]
+    pub fn class_count(&self) -> usize {
+        self.parts
+            .iter()
+            .flat_map(|p| p.layer.nodes.iter())
+            .filter(|(_, n)| !n.deleted)
+            .map(|(k, _)| k.as_str())
+            .collect::<BTreeSet<&str>>()
+            .len()
+    }
+}
+
+impl Cacheable for ConfigSource {
     fn is_current(&self, want: &[InputStamp]) -> bool {
         self.format == CONFIG_FORMAT
             && self.version == env!("CARGO_PKG_VERSION")
@@ -156,6 +218,7 @@ impl ConfigLayer {
             format: CONFIG_FORMAT,
             version: env!("CARGO_PKG_VERSION").to_string(),
             name: name.to_string(),
+            is_vanilla: false,
             build: build.to_string(),
             inputs: Vec::new(),
             pbos: Vec::new(),
@@ -283,7 +346,7 @@ impl ConfigLayer {
             Some("api-config-base-changed"),
             format!(
                 "class {} changes its base class: {} -> {}",
-                printable(key),
+                printable(&display_path(self, key)),
                 shown(change.from.as_ref()),
                 shown(change.to.as_ref())
             ),
@@ -342,6 +405,7 @@ impl ConfigLayer {
     /// The PBOs of `over` are added to the PBO table. A layer that reaches a size limit stops taking classes
     /// and the function returns `false`.
     pub fn merge(&mut self, over: ConfigLayer, warnings: &mut dyn WarningSink) -> bool {
+        let over_is_vanilla = over.is_vanilla;
         let map: Vec<u32> = over
             .pbos
             .iter()
@@ -382,7 +446,8 @@ impl ConfigLayer {
                 }
             }
             mine.parent = node.parent;
-            if let Some(change) = boundary {
+            // the game's own layout changes bases on purpose; only a mod's change is worth a warning
+            if let Some(change) = boundary.filter(|_| !over_is_vanilla) {
                 let warning = self.base_changed_warning(&key, &change);
                 warnings.warn(warning);
             }
@@ -413,6 +478,9 @@ fn child_key(scope: &str, name: &str) -> Option<String> {
     })
 }
 
+/// The key of the object that holds an infinite float in [`Prop::value`].
+pub const NONFINITE: &str = "nonfinite";
+
 /// A float as the shortest number that reads back as the same `f32`.
 fn float_value(f: f32) -> Value {
     if f.is_finite()
@@ -420,6 +488,17 @@ fn float_value(f: f32) -> Value {
         && let Some(n) = Number::from_f64(d)
     {
         return Value::Number(n);
+    }
+    // An infinity is kept apart from a string that reads the same: `{"nonfinite": "1e999"}` (derapify's text).
+    // The query shows it as `1e999` in the text output and as the string `"1e999"` in JSON. NaN has no literal and
+    // stays the string `NaN`.
+    if f.is_infinite() {
+        let text = if f.is_sign_positive() {
+            "1e999"
+        } else {
+            "-1e999"
+        };
+        return serde_json::json!({ NONFINITE: text });
     }
     Value::String(f.to_string())
 }
@@ -479,7 +558,7 @@ fn apply_class(
                         node.pbos.push(pbo);
                     }
                     // the game's own layout changes bases on purpose; only a mod's change is worth a warning
-                    if let Some(change) = change.filter(|_| layer.name != "vanilla") {
+                    if let Some(change) = change.filter(|_| !layer.is_vanilla) {
                         warnings.warn(
                             layer
                                 .base_changed_warning(&key, &change)
@@ -509,14 +588,6 @@ fn apply_class(
     Ok(())
 }
 
-/// What a config says about load order: the `CfgPatches` classes it defines and the addons they require, in
-/// lowercase.
-#[derive(Debug, Default)]
-struct Patches {
-    provides: Vec<String>,
-    requires: Vec<String>,
-}
-
 fn patches_of(config: &Config) -> Patches {
     let mut out = Patches::default();
     let Some(ConfigEntry::ClassEntry(patches)) = config.root().get("CfgPatches") else {
@@ -541,6 +612,10 @@ fn patches_of(config: &Config) -> Patches {
 /// A config entry of a PBO and what reading it gave.
 type ReadConfig = (String, Result<Config, Error>);
 
+/// A chosen config: entry name, whether it is a `config.bin`, and its bytes (none for a text config, whose bytes
+/// live in the include map).
+type ChosenConfig = (String, bool, Result<Option<Vec<u8>>, Error>);
+
 /// Whether a PBO entry can be the target of an `#include` of a config (a header or text file).
 fn is_includable(name: &str) -> bool {
     let lower = name.to_lowercase();
@@ -549,21 +624,92 @@ fn is_includable(name: &str) -> bool {
         .any(|e| lower.rsplit_once('.').is_some_and(|(_, x)| x == *e))
 }
 
+/// The include source of a PBO with a text config: the text configs in `files` and the other includable
+/// entries, read tolerantly (a damaged one and the ones past `cap` bytes in all are skipped with a warning).
+fn read_includes(
+    path: &Path,
+    file: &mut File,
+    filter: &EntryFilter,
+    prefix: &str,
+    mut files: Vec<(String, Vec<u8>)>,
+    cap: u64,
+    warnings: &mut dyn WarningSink,
+) -> Result<IncludeFolders, Error> {
+    let used: u64 = files.iter().map(|(_, d)| d.len() as u64).sum();
+    let rest = PBO::read_entries_tolerant(
+        file,
+        |n| is_includable(n) && !filter.matches(n),
+        &TolerantRead::new(cap.saturating_sub(used)),
+    )
+    .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+    let mut unreadable: Vec<(String, String)> = Vec::new();
+    let mut capped = false;
+    for entry in rest.into_entries() {
+        let name = entry.name().to_string();
+        let over = entry.is_over_limit();
+        match entry.into_data() {
+            Ok(data) => files.push((name, data)),
+            Err(e) if over => {
+                capped = true;
+                unreadable.push((name, e.to_string()));
+            }
+            Err(e) => {
+                warnings.warn(
+                    Warning::new(
+                        Some("api-config-include-unreadable"),
+                        format!(
+                            "cannot read the includable {}: {e}; it is skipped",
+                            printable(&name)
+                        ),
+                    )
+                    .in_file(path.display().to_string()),
+                );
+                unreadable.push((name, e.to_string()));
+            }
+        }
+    }
+    if capped {
+        warnings.warn(
+            Warning::new(
+                Some("api-config-includes-capped"),
+                format!("the includable files of this PBO are more than {cap} bytes; the rest is skipped"),
+            )
+            .in_file(path.display().to_string()),
+        );
+    }
+    Ok(IncludeFolders::new(Vec::new())
+        .with_memory(MemoryIncludes::new(prefix, files).with_unreadable(unreadable)))
+}
+
+/// Most bytes of includable entries read from one PBO; the rest are skipped with a warning.
+const MAX_INCLUDE_BYTES: u64 = 64 << 20;
+
 /// The configs of a PBO: `config.bin` (rapified) or `config.cpp` (text) of the top level and of every folder
 /// below it, `config.bin` winning where a folder has both. The top level comes first, then the folders in path
-/// order. A config that cannot be read is an `Err` in its place.
-fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Error> {
-    let mut file =
-        File::open(path).map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
-    // the configs, and the text files they may include: includes are resolved among the entries of this PBO only
-    let selection = PBO::read_entries(&mut file, |n| filter.matches(n) || is_includable(n))
-        .map_err(|e| error!("{}: {e}", printable(&path.display().to_string())))?;
+/// order. A config that cannot be read is an `Err` in its place. The text files the configs may include are
+/// read only when a text config is chosen, and a damaged one is skipped with a warning.
+fn read_configs(
+    path: &Path,
+    filter: &EntryFilter,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<ReadConfig>, Error> {
+    read_configs_capped(path, filter, MAX_INCLUDE_BYTES, warnings)
+}
+
+/// [`read_configs`] with the byte cap of the includable entries as a parameter.
+fn read_configs_capped(
+    path: &Path,
+    filter: &EntryFilter,
+    include_cap: u64,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<ReadConfig>, Error> {
+    let shown = printable(&path.display().to_string());
+    let mut file = File::open(path).map_err(|e| error!("{shown}: {e}"))?;
+    let selection =
+        PBO::read_entries(&mut file, |n| filter.matches(n)).map_err(|e| error!("{shown}: {e}"))?;
     // folder (lowercase, `/`-separated, with a trailing `/`) -> (is config.bin, entry index)
     let mut chosen: BTreeMap<String, (bool, usize)> = BTreeMap::new();
     for (i, entry) in selection.entries().iter().enumerate() {
-        if !filter.matches(entry.name()) {
-            continue;
-        }
         let name = entry.name().replace('\\', "/").to_lowercase();
         let (folder, file_name) = name
             .rsplit_once('/')
@@ -574,27 +720,66 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
             *slot = (true, i);
         }
     }
-    let includes = MemoryIncludes::new(
-        selection.header_extension("prefix").unwrap_or(""),
-        selection
-            .entries()
-            .iter()
-            .filter(|e| is_includable(e.name()))
-            .filter_map(|e| Some((e.name().to_string(), e.data().ok()?.to_vec())))
-            .collect(),
-    );
-    let folders = IncludeFolders::new(Vec::new()).with_memory(includes);
-    let mut out = Vec::new();
+    let prefix = selection
+        .header_extension("prefix")
+        .unwrap_or("")
+        .to_string();
+    let mut slots: Vec<Option<SelectedEntry>> =
+        selection.into_entries().into_iter().map(Some).collect();
+    let has_text = chosen.values().any(|(is_bin, _)| !is_bin);
+    // what each chosen config gives: its bytes (a `config.bin`), or nothing for a text config, whose bytes were
+    // moved into the include map together with the other text entries
+    let mut todo: Vec<ChosenConfig> = Vec::new();
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for (_, (is_bin, i)) in chosen {
-        let Some(entry) = selection.entries().get(i) else {
+        let Some(entry) = slots.get_mut(i).and_then(Option::take) else {
             continue;
         };
         let name = entry.name().to_string();
+        let data = if is_bin || !has_text {
+            entry.into_data().map(Some)
+        } else {
+            entry.into_data().map(|bytes| {
+                files.push((name.clone(), bytes));
+                None
+            })
+        };
+        todo.push((name, is_bin, data));
+    }
+    if has_text {
+        // a config.cpp that lost to a config.bin of its folder can still be included
+        for entry in slots.into_iter().flatten() {
+            let name = entry.name().to_string();
+            if is_includable(&name)
+                && let Ok(bytes) = entry.into_data()
+            {
+                files.push((name, bytes));
+            }
+        }
+    }
+    let folders = if has_text {
+        read_includes(
+            path,
+            &mut file,
+            filter,
+            &prefix,
+            files,
+            include_cap,
+            warnings,
+        )?
+    } else {
+        IncludeFolders::new(Vec::new())
+    };
+    let mut out = Vec::new();
+    for (name, is_bin, data) in todo {
         let kind = if is_bin { "config.bin" } else { "config.cpp" };
-        let parsed = entry
-            .data()
+        let parsed = data
             .map_err(|e| error!("cannot read {kind}: {e}"))
-            .and_then(|bytes| {
+            .and_then(|own| {
+                let bytes = own
+                    .as_deref()
+                    .or_else(|| folders.memory.as_ref().and_then(|m| m.get(&name)))
+                    .ok_or_else(|| error!("cannot read {kind}: the entry is missing"))?;
                 if is_rapified(bytes) {
                     Config::read_rapified(&mut Cursor::new(bytes))
                 } else {
@@ -614,9 +799,11 @@ fn read_configs(path: &Path, filter: &EntryFilter) -> Result<Vec<ReadConfig>, Er
 }
 
 /// The order to load `infos` in: every config after the configs that provide the addons it requires, ties and
-/// the rest in index order (the PBOs are sorted by path). `None` entries have no config and are left out.
+/// the rest in index order (the sources in selection order, each with its PBOs sorted by path). `None` entries
+/// have no config and are left out. Kahn's algorithm with the lowest ready index first, so the result does not
+/// depend on anything but the input; a cycle is reported and its members are appended in index order.
 fn load_order(
-    infos: &[Option<Patches>],
+    infos: &[Option<&Patches>],
     names: &[String],
     warnings: &mut dyn WarningSink,
 ) -> Vec<usize> {
@@ -653,8 +840,12 @@ fn load_order(
         .collect();
     let total = infos.iter().flatten().count();
     let mut order = Vec::with_capacity(total);
+    let mut done = vec![false; infos.len()];
     while let Some(next) = ready.pop_first() {
         order.push(next);
+        if let Some(d) = done.get_mut(next) {
+            *d = true;
+        }
         for d in dependents.get(next).into_iter().flatten() {
             if let Some(slot) = waiting.get_mut(*d) {
                 *slot -= 1;
@@ -668,10 +859,12 @@ fn load_order(
         let stuck: Vec<usize> = infos
             .iter()
             .enumerate()
-            .filter(|(i, info)| info.is_some() && !order.contains(i))
+            .filter(|(i, info)| info.is_some() && done.get(*i) == Some(&false))
             .map(|(i, _)| i)
             .collect();
-        let shown: Vec<String> = stuck
+        // Only the configs that really are in a cycle are named; the ones that merely depend on it are not.
+        let in_cycle = cycle_members(&stuck, &dependents);
+        let shown: Vec<String> = in_cycle
             .iter()
             .take(5)
             .filter_map(|i| names.get(*i))
@@ -680,10 +873,10 @@ fn load_order(
         warnings.warn(Warning::new(
             Some("api-config-order"),
             format!(
-                "requiredAddons form a cycle between {} configs ({}{}); they load in path order",
-                stuck.len(),
+                "requiredAddons form a cycle between {} configs ({}{}); they and the configs that depend on them load last, in source and path order",
+                in_cycle.len(),
                 shown.join(", "),
-                if stuck.len() > shown.len() {
+                if in_cycle.len() > shown.len() {
                     ", ..."
                 } else {
                     ""
@@ -695,18 +888,92 @@ fn load_order(
     order
 }
 
-/// Builds the layer of one source from its PBOs, given as (file, name relative to the source, `/`-separated).
-/// A PBO that cannot be read is skipped with a warning.
+/// The members of `nodes` that lie on a cycle of `edges` (`edges[a]` lists the nodes that follow `a`): the
+/// nodes of strongly connected components of more than one node (a node alone is no cycle: a config does not
+/// wait for itself). Tarjan's algorithm without recursion, in index order.
+fn cycle_members(nodes: &[usize], edges: &[Vec<usize>]) -> Vec<usize> {
+    let in_set: BTreeSet<usize> = nodes.iter().copied().collect();
+    let mut index: HashMap<usize, usize> = HashMap::new();
+    let mut low: HashMap<usize, usize> = HashMap::new();
+    let mut on_stack: BTreeSet<usize> = BTreeSet::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next = 0usize;
+    let mut out: BTreeSet<usize> = BTreeSet::new();
+    for &root in nodes {
+        if index.contains_key(&root) {
+            continue;
+        }
+        // (node, position of the next edge to look at)
+        let mut work: Vec<(usize, usize)> = vec![(root, 0)];
+        index.insert(root, next);
+        low.insert(root, next);
+        next += 1;
+        stack.push(root);
+        on_stack.insert(root);
+        while let Some(&(v, at)) = work.last() {
+            let succ = edges
+                .get(v)
+                .and_then(|e| e.get(at))
+                .copied()
+                .filter(|w| in_set.contains(w));
+            let has_edge = edges.get(v).is_some_and(|e| at < e.len());
+            if let Some(top) = work.last_mut() {
+                top.1 += 1;
+            }
+            if !has_edge {
+                work.pop();
+                let lv = low.get(&v).copied().unwrap_or(0);
+                if Some(lv) == index.get(&v).copied() {
+                    let mut component = Vec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack.remove(&w);
+                        component.push(w);
+                        if w == v {
+                            break;
+                        }
+                    }
+                    if component.len() > 1 {
+                        out.extend(component);
+                    }
+                }
+                if let Some(&(parent, _)) = work.last() {
+                    let lp = low.get(&parent).copied().unwrap_or(0);
+                    low.insert(parent, lp.min(lv));
+                }
+                continue;
+            }
+            let Some(w) = succ else { continue };
+            if let std::collections::hash_map::Entry::Vacant(slot) = index.entry(w) {
+                slot.insert(next);
+                low.insert(w, next);
+                next += 1;
+                stack.push(w);
+                on_stack.insert(w);
+                work.push((w, 0));
+            } else if on_stack.contains(&w) {
+                let lv = low.get(&v).copied().unwrap_or(0);
+                let iw = index.get(&w).copied().unwrap_or(0);
+                low.insert(v, lv.min(iw));
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Builds the config source from its PBOs, given as (file, name relative to the source, `/`-separated), sorted
+/// by path. A PBO that cannot be read is skipped with a warning, and so is one without a config. Each PBO becomes
+/// a layer of its own; the load order is decided across all sources by [`merge_sources`].
 ///
 /// # Errors
 ///
 /// Never fails today; the `Result` is kept so the cache can call it like the other builders.
-pub fn build_layer(
+pub fn build_source(
     name: &str,
     build: &str,
+    is_vanilla: bool,
     pbos: &[(PathBuf, String)],
     warnings: &mut dyn WarningSink,
-) -> Result<ConfigLayer, Error> {
+) -> Result<ConfigSource, Error> {
     let filter = EntryFilter::new(
         ["config.bin", "config.cpp", "*/config.bin", "*/config.cpp"]
             .map(str::to_string)
@@ -719,51 +986,35 @@ pub fn build_layer(
                 .in_file(path.display().to_string()),
         );
     };
-    // pass 1: which addons each PBO provides and requires
-    let mut infos: Vec<Option<Patches>> = Vec::with_capacity(pbos.len());
-    let mut names: Vec<String> = Vec::with_capacity(pbos.len());
-    for (path, rel) in pbos {
-        names.push(rel.clone());
-        infos.push(match read_configs(path, &filter) {
-            Ok(configs) if configs.is_empty() => None,
-            Ok(configs) => {
-                let mut all = Patches::default();
-                for (entry, parsed) in configs {
-                    match parsed {
-                        Ok(config) => {
-                            let mut one = patches_of(&config);
-                            all.provides.append(&mut one.provides);
-                            all.requires.append(&mut one.requires);
-                        }
-                        Err(e) => bad(warnings, path, &format!("{}: ", printable(&entry)), &e),
-                    }
-                }
-                Some(all)
-            }
+    let mut parts: Vec<ConfigPart> = Vec::new();
+    'pbos: for (path, rel) in pbos {
+        let configs = match read_configs(path, &filter, warnings) {
+            Ok(configs) if configs.is_empty() => continue,
+            Ok(configs) => configs,
             Err(e) => {
                 bad(warnings, path, "", &e);
-                None
+                continue;
             }
-        });
-    }
-    let order = load_order(&infos, &names, warnings);
-    // pass 2: apply them in load order, reading each config again so that no parsed config is kept; what could
-    // not be read was reported in pass 1
-    let mut layer = ConfigLayer::new(name, build);
-    'pbos: for i in order {
-        let Some((path, rel)) = pbos.get(i) else {
-            continue;
         };
-        let Ok(configs) = read_configs(path, &filter) else {
-            continue;
-        };
+        let mut layer = ConfigLayer::new(name, build);
+        layer.is_vanilla = is_vanilla;
         let pbo = layer.pbo_index(PboRef {
             source: name.to_string(),
             pbo: rel.clone(),
         });
         let origin = path.display().to_string();
-        // `.ok()`: a config that cannot be read was reported in pass 1
-        for config in configs.into_iter().filter_map(|(_, c)| c.ok()) {
+        let mut patches = Patches::default();
+        for (entry, parsed) in configs {
+            let config = match parsed {
+                Ok(config) => config,
+                Err(e) => {
+                    bad(warnings, path, &format!("{}: ", printable(&entry)), &e);
+                    continue;
+                }
+            };
+            let mut one = patches_of(&config);
+            patches.provides.append(&mut one.provides);
+            patches.requires.append(&mut one.requires);
             if apply_class(&mut layer, "", config.root(), pbo, 0, warnings, &origin).is_err() {
                 warnings.warn(
                     Warning::new(
@@ -774,11 +1025,89 @@ pub fn build_layer(
                     )
                     .in_file(origin),
                 );
+                parts.push(ConfigPart {
+                    pbo: rel.clone(),
+                    patches,
+                    layer,
+                });
                 break 'pbos;
             }
         }
+        parts.push(ConfigPart {
+            pbo: rel.clone(),
+            patches,
+            layer,
+        });
     }
-    Ok(layer)
+    Ok(ConfigSource {
+        format: CONFIG_FORMAT,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        name: name.to_string(),
+        is_vanilla,
+        build: build.to_string(),
+        inputs: Vec::new(),
+        parts,
+    })
+}
+
+/// Merges the config PBOs of all `sources` into one layer. The PBOs of all sources are sorted together by
+/// `requiredAddons` (Kahn's algorithm, lowest index first); the order of `sources` and the order of the PBOs inside a source break
+/// ties. A cycle is a warning (`api-config-order`). A merge that reaches a size limit stops taking classes
+/// (`api-config-limit`).
+#[must_use]
+pub fn merge_sources(
+    sources: Vec<ConfigSource>,
+    build: &str,
+    warnings: &mut dyn WarningSink,
+) -> ConfigLayer {
+    let mut flat: Vec<(String, Patches, Option<ConfigLayer>)> = Vec::new();
+    for source in sources {
+        for part in source.parts {
+            flat.push((source.name.clone(), part.patches, Some(part.layer)));
+        }
+    }
+    merge_flat(flat, build, warnings, ConfigLayer::merge)
+}
+
+/// The body of [`merge_sources`] with the layer merge as a parameter, so that a test can make it hit the limit
+/// without a layer of millions of classes. `flat` is (source name, patches, layer) per PBO.
+fn merge_flat(
+    mut flat: Vec<(String, Patches, Option<ConfigLayer>)>,
+    build: &str,
+    warnings: &mut dyn WarningSink,
+    mut merge: impl FnMut(&mut ConfigLayer, ConfigLayer, &mut dyn WarningSink) -> bool,
+) -> ConfigLayer {
+    let infos: Vec<Option<&Patches>> = flat.iter().map(|(_, p, _)| Some(p)).collect();
+    let names: Vec<String> = flat
+        .iter()
+        .map(|(source, _, l)| {
+            let pbo = l
+                .as_ref()
+                .and_then(|l| l.pbos.first())
+                .map_or("", |p| p.pbo.as_str());
+            format!("[{source}] {pbo}")
+        })
+        .collect();
+    let order = load_order(&infos, &names, warnings);
+    let mut merged = ConfigLayer::new("merged", build);
+    for i in order {
+        let Some((_, _, layer)) = flat.get_mut(i) else {
+            continue;
+        };
+        let Some(layer) = layer.take() else { continue };
+        if !merge(&mut merged, layer, warnings) {
+            // every later layer would hit the same limit: one warning, naming where the merge stopped
+            warnings.warn(Warning::new(
+                Some("api-config-limit"),
+                format!(
+                    "the merged config is too large; it stops at {} and the PBOs after it are skipped",
+                    printable(names.get(i).map_or("", String::as_str))
+                ),
+            ));
+            break;
+        }
+    }
+    merged
 }
 
 /// The PBOs of the game that can hold a config: every `*.pbo` of `dta` and `addons` (any case), as (file, name
@@ -823,4 +1152,179 @@ pub fn vanilla_config_pbos(game: &Path) -> Result<Vec<(PathBuf, String)>, Error>
             .then(a.1.cmp(&b.1))
     });
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A PBO file with `config.cpp` including `a.txt` and `b.txt` (60 bytes each).
+    fn capped_pbo(dir: &Path) -> (PathBuf, u64) {
+        let config = "class CfgPatches { class P { requiredAddons[] = {}; }; };\nclass X {\n#include \"a.txt\"\n#include \"b.txt\"\n};\n";
+        let mut pbo = PBO::new();
+        pbo.insert_entry("config.cpp", config.as_bytes().to_vec())
+            .unwrap();
+        pbo.insert_entry("a.txt", format!("a = 1; {}\n", " ".repeat(50)).into_bytes())
+            .unwrap();
+        pbo.insert_entry("b.txt", format!("b = 2; {}\n", " ".repeat(50)).into_bytes())
+            .unwrap();
+        let path = dir.join("c.pbo");
+        let mut bytes = Vec::new();
+        pbo.write(&mut bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        (path, config.len() as u64)
+    }
+
+    fn filter() -> EntryFilter {
+        EntryFilter::new(
+            ["config.bin", "config.cpp"].map(str::to_string).to_vec(),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn includables_past_the_cap_are_skipped_with_one_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, config_len) = capped_pbo(dir.path());
+        let mut warnings = Warnings::new();
+        let read = read_configs_capped(&path, &filter(), config_len + 70, &mut warnings).unwrap();
+        let names: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .map(|w| w.message.clone())
+            .collect();
+        assert_eq!(read.len(), 1);
+        // b.txt does not fit: its include fails with the cap as the reason, and a.txt was read
+        let err = read[0].1.as_ref().unwrap_err().to_string();
+        assert!(
+            err.contains("b.txt") && err.contains("cannot be read"),
+            "{err}"
+        );
+        assert!(!err.contains("a.txt"), "{err}");
+        let capped = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-includes-capped"))
+            .count();
+        assert_eq!(capped, 1, "{names:?}");
+    }
+
+    #[test]
+    fn includables_within_the_cap_are_all_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, _) = capped_pbo(dir.path());
+        let mut warnings = Warnings::new();
+        let read = read_configs(&path, &filter(), &mut warnings).unwrap();
+        assert!(read[0].1.is_ok());
+        assert_eq!(warnings.warnings(), []);
+    }
+
+    /// A PBO file with only the given `config.cpp`.
+    fn config_pbo(dir: &Path, file: &str, config: &str) -> (PathBuf, String) {
+        let mut pbo = PBO::new();
+        pbo.insert_entry("config.cpp", config.as_bytes().to_vec())
+            .unwrap();
+        let path = dir.join(file);
+        let mut bytes = Vec::new();
+        pbo.write(&mut bytes).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        (path, file.to_string())
+    }
+
+    fn patches(provides: &str, requires: &[&str]) -> Patches {
+        Patches {
+            provides: vec![provides.to_string()],
+            requires: requires.iter().map(|r| (*r).to_string()).collect(),
+        }
+    }
+
+    fn part(source: &str, pbo: &str, patches: Patches) -> (String, Patches, Option<ConfigLayer>) {
+        let mut layer = ConfigLayer::new(source, "b");
+        layer.pbo_index(PboRef {
+            source: source.to_string(),
+            pbo: pbo.to_string(),
+        });
+        (source.to_string(), patches, Some(layer))
+    }
+
+    /// The warning names the PBOs of the cycle with their source, and not the PBOs that merely require one.
+    #[test]
+    fn cycle_warning_counts_only_the_cycle() {
+        let flat = vec![
+            part("m", "a.pbo", patches("a", &["b"])),
+            part("m", "b.pbo", patches("b", &["a"])),
+            part("m", "c.pbo", patches("c", &["a"])),
+        ];
+        let mut warnings = Warnings::new();
+        let _ = merge_flat(flat, "b", &mut warnings, ConfigLayer::merge);
+        let found: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-order"))
+            .collect();
+        assert_eq!(found.len(), 1);
+        let message = &found[0].message;
+        assert!(message.contains("between 2 configs"), "{message}");
+        assert!(
+            message.contains("[m] a.pbo") && message.contains("[m] b.pbo"),
+            "{message}"
+        );
+        assert!(!message.contains("c.pbo"), "{message}");
+    }
+
+    /// Once the merge hits its limit the rest is skipped with one warning that names where it stopped.
+    #[test]
+    fn merge_limit_warns_once_and_names_the_pbo() {
+        let flat = vec![
+            part("one", "a.pbo", patches("a", &[])),
+            part("two", "b.pbo", patches("b", &[])),
+            part("two", "c.pbo", patches("c", &[])),
+            part("two", "d.pbo", patches("d", &[])),
+        ];
+        let mut warnings = Warnings::new();
+        let mut calls = 0;
+        let _ = merge_flat(flat, "b", &mut warnings, |_, _, _| {
+            calls += 1;
+            calls < 2
+        });
+        assert_eq!(calls, 2, "the merge stops at the first failure");
+        let found: Vec<_> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("api-config-limit"))
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("[two] b.pbo"), "{found:?}");
+    }
+
+    /// A mod that happens to be called `vanilla` is not the game: its base class change is warned about.
+    #[test]
+    fn a_source_named_vanilla_is_not_filtered_like_the_game() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = config_pbo(
+            dir.path(),
+            "base.pbo",
+            "class CfgPatches { class P1 { requiredAddons[] = {}; }; };\nclass CfgVehicles { class Base {}; class X: Base {}; };",
+        );
+        let named = config_pbo(
+            dir.path(),
+            "named.pbo",
+            "class CfgPatches { class P2 { requiredAddons[] = {\"P1\"}; }; };\nclass CfgVehicles { class X {}; };",
+        );
+        let mut warnings = Warnings::new();
+        let sources = vec![
+            build_source("base", "b", false, &[base], &mut warnings).unwrap(),
+            build_source("vanilla", "b", false, &[named], &mut warnings).unwrap(),
+        ];
+        assert!(!sources[1].is_vanilla);
+        let _ = merge_sources(sources, "b", &mut warnings);
+        assert!(
+            warnings
+                .warnings()
+                .iter()
+                .any(|w| w.name == Some("api-config-base-changed")),
+            "{:?}",
+            warnings.warnings()
+        );
+    }
 }

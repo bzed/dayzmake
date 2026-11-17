@@ -528,7 +528,7 @@ fn tools() -> Value {
                 (
                     "target",
                     's',
-                    "With cat: write the files to this file instead of returning them."
+                    "With cat: write the files to this file instead of returning them (cannot be combined with context or lines)."
                 ),
                 FORCE_ARG,
             ],
@@ -1086,6 +1086,12 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
                 ),
             };
             let cat = bool_arg(args, "cat")?;
+            if opt_path(args, "target")?.is_some()
+                && (context.is_some() || opt_str(args, "lines")?.is_some())
+            {
+                // the CLI's `api src` has no target at all; here it only belongs to cat
+                return Err(error!("target cannot be combined with context or lines"));
+            }
             if let Some(range) =
                 api::SrcRange::parse(cat, context.as_deref(), opt_str(args, "lines")?.as_deref())?
             {

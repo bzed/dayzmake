@@ -671,6 +671,135 @@ fn includes_come_from_the_pbo_only() {
     assert!(out.contains("found = 7"), "{out}{err}");
 }
 
+/// A mod PBO with `config_name` (text), then `extra` entries, the last of which loses its final bytes.
+fn damaged_mod(w: &World, config_name: &str, text: &str, extra: &[(&str, &[u8])]) -> String {
+    let dir = w.home.join("@Dmg");
+    let mut entries: Vec<(&str, &[u8])> = vec![(config_name, text.as_bytes())];
+    entries.extend_from_slice(extra);
+    let mut bytes = support::raw_pbo(&entries, &[("prefix", "dmg")]);
+    bytes.truncate(bytes.len() - 26);
+    write(&dir.join("addons/d.pbo"), &bytes);
+    dir.to_string_lossy().into_owned()
+}
+
+const PATCHES: &str = "class CfgPatches { class D_Patch { requiredAddons[] = {}; }; };\n";
+
+/// A damaged includable does not drop the PBO's configs (#99): it is skipped with a warning.
+#[test]
+fn a_damaged_includable_is_skipped_with_a_warning() {
+    let w = World::new();
+    let text = format!("{PATCHES}class Fine {{ v = 1; }};\n");
+    let m = damaged_mod(
+        &w,
+        "config.cpp",
+        &text,
+        &[(
+            "zz_readme.txt",
+            b"some long readme text, longer than the cut",
+        )],
+    );
+    let (code, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("v = 1"), "{out}{err}");
+    assert!(err.contains("api-config-include-unreadable"), "{err}");
+    assert!(
+        err.contains("zz_readme.txt") && err.contains("truncated"),
+        "{err}"
+    );
+}
+
+/// An include of a damaged entry reports the read error, not "not found".
+#[test]
+fn an_include_of_a_damaged_entry_names_the_read_error() {
+    let w = World::new();
+    let text = format!(
+        "{PATCHES}class Fine {{ v = 1; }};\nclass Leaked {{\n#include \"zz_readme.txt\"\n}};\n"
+    );
+    let m = damaged_mod(
+        &w,
+        "config.cpp",
+        &text,
+        &[(
+            "zz_readme.txt",
+            b"v = 2;\n and more text, longer than the cut",
+        )],
+    );
+    let (_, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert!(
+        err.contains("cannot be read") && err.contains("truncated"),
+        "{out}{err}"
+    );
+    assert!(!err.contains("not found"), "{err}");
+}
+
+/// A PBO with only a `config.bin` reads no includables: a truncated one does not matter, and raises no warning.
+#[test]
+fn a_config_bin_pbo_reads_no_includables() {
+    let w = World::new();
+    let config = Config::from_string(
+        format!("{PATCHES}class Fine {{ v = 1; }};\n"),
+        None,
+        &[],
+        &mut Warnings::new(),
+    )
+    .expect("config parses");
+    let bin = config.to_cursor().expect("rapify").into_inner();
+    let m = w.home.join("@Dmg").to_string_lossy().into_owned();
+    let mut bytes = support::raw_pbo(
+        &[
+            ("config.bin", &bin),
+            ("readme.txt", b"long text here, longer than the cut"),
+        ],
+        &[("prefix", "dmg")],
+    );
+    bytes.truncate(bytes.len() - 26);
+    write(&PathBuf::from(&m).join("addons/d.pbo"), &bytes);
+    let (code, out, err) = w.run(&["api", "config", "-m", &m, "Fine"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("v = 1"), "{out}{err}");
+    assert!(!err.contains("api-config-include-unreadable"), "{err}");
+}
+
+fn dotdot_mod(w: &World, config_name: &str, include: &str, extra: &[(&str, &[u8])]) -> String {
+    let dir = w.home.join("@Dots");
+    let text = format!("{PATCHES}class Leaked {{\n#include \"{include}\"\n}};\n");
+    let mut entries: Vec<(&str, &[u8])> = vec![(config_name, text.as_bytes())];
+    entries.extend_from_slice(extra);
+    write(
+        &dir.join("addons/d.pbo"),
+        &support::raw_pbo(&entries, &[("prefix", "dots")]),
+    );
+    dir.to_string_lossy().into_owned()
+}
+
+/// `..` that stays inside the PBO resolves (#99); one that leaves the root is refused.
+#[test]
+fn dotdot_inside_the_pbo_resolves_and_outside_is_refused() {
+    let w = World::new();
+    let macros: &[(&str, &[u8])] = &[("macros.hpp", b"found = 7;\n")];
+    for include in [
+        "..\\macros.hpp",
+        "../macros.hpp",
+        "..\\sub\\..\\macros.hpp",
+        "inner\\..\\../macros.hpp",
+    ] {
+        let m = dotdot_mod(&w, "sub\\config.cpp", include, macros);
+        let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+        assert!(out.contains("found = 7"), "{include}: {out}{err}");
+    }
+    for include in [
+        "..\\..\\macros.hpp",
+        "sub\\..\\..\\..\\macros.hpp",
+        "../..\\macros.hpp",
+        "a\\\\b.hpp",
+    ] {
+        let m = dotdot_mod(&w, "sub\\config.cpp", include, macros);
+        let (_, out, err) = w.run(&["api", "config", "-m", &m, "Leaked"]);
+        assert!(!out.contains("found = 7"), "{include}: {out}{err}");
+        assert!(err.contains("api-bad-config"), "{include}: {out}{err}");
+    }
+}
+
 /// A game folder (a `World`'s) gets one more config PBO that requires `B_Patch`.
 fn add_addon(w: &World, file: &str, patch: &str, body: &str) {
     write(
@@ -902,4 +1031,167 @@ fn a_game_folder_without_pbos_has_no_config_index() {
     fs::create_dir_all(tmp.path().join("dta")).expect("mkdir");
     let err = dayzmake::api::config_index::vanilla_config_pbos(tmp.path()).expect_err("no PBOs");
     assert!(err.to_string().contains("no PBOs found"), "{err}");
+}
+
+/// A config PBO that provides `patch`, requires `requires` and sets `v` of the class `Z` to `v`.
+fn z_pbo(patch: &str, requires: &str, v: i32) -> Vec<u8> {
+    config_pbo(
+        &format!(
+            "class CfgPatches {{ class {patch} {{ requiredAddons[] = {{{requires}}}; }}; }};\n\
+             class CfgVehicles {{ class Z {{ v = {v}; {patch}_set = 1; }}; }};"
+        ),
+        true,
+    )
+}
+
+fn z_value(w: &World, extra: &[&str]) -> Value {
+    let v = json(w, "CfgVehicles/Z", extra);
+    prop(&v, "v")["value"].clone()
+}
+
+#[test]
+fn mods_all_includes_a_mod_with_only_a_config_pbo() {
+    let w = World::new();
+    let dir = w.root.join("steamapps/workshop/content/221100/300");
+    write(
+        &dir.join("addons/retex.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class Retex: Hatch { displayName = \"Retexed\"; }; };",
+            true,
+        ),
+    );
+    let v = json(&w, "CfgVehicles/Retex", &["-m", "all"]);
+    assert_eq!(prop(&v, "displayName")["value"], "Retexed");
+}
+
+#[test]
+fn a_vanilla_addon_that_requires_a_mod_addon_loads_after_it() {
+    let w = World::new();
+    write(
+        &w.game.join("Addons/aa_req.pbo"),
+        &z_pbo("V_Req", "\"M_Z\"", 2),
+    );
+    let dir = w.home.join("@ZMod");
+    write(&dir.join("addons/z.pbo"), &z_pbo("M_Z", "", 1));
+    let m = dir.to_string_lossy().into_owned();
+    // without the mod the game's own value stands
+    assert_eq!(z_value(&w, &[]), 2);
+    // the vanilla addon needs the mod addon: it loads after it and wins, although vanilla comes first
+    assert_eq!(z_value(&w, &["-m", &m]), 2);
+    let v = json(&w, "CfgVehicles/Z", &["-m", &m]);
+    let order: Vec<&str> = v["pbos"]
+        .as_array()
+        .expect("pbos")
+        .iter()
+        .map(|p| p["source"].as_str().expect("source"))
+        .collect();
+    assert_eq!(order, ["_ZMod", "vanilla"], "{v}");
+}
+
+#[test]
+fn a_mod_addon_required_by_a_later_mod_loads_first() {
+    let w = World::new();
+    let a = w.home.join("@A");
+    let b = w.home.join("@B");
+    // a is named first but requires b's addon
+    write(&a.join("addons/a.pbo"), &z_pbo("A_Z", "\"B_Z\"", 1));
+    write(&b.join("addons/b.pbo"), &z_pbo("B_Z", "", 2));
+    let (a, b) = (
+        a.to_string_lossy().into_owned(),
+        b.to_string_lossy().into_owned(),
+    );
+    assert_eq!(z_value(&w, &["-m", &format!("{a},{b}")]), 1);
+}
+
+#[test]
+fn without_dependencies_the_order_is_vanilla_then_the_mods_as_selected() {
+    let w = World::new();
+    let a = w.home.join("@A");
+    let b = w.home.join("@B");
+    write(&a.join("addons/a.pbo"), &z_pbo("A_Z", "", 1));
+    write(&b.join("addons/b.pbo"), &z_pbo("B_Z", "", 2));
+    let (a, b) = (
+        a.to_string_lossy().into_owned(),
+        b.to_string_lossy().into_owned(),
+    );
+    assert_eq!(z_value(&w, &["-m", &format!("{a},{b}")]), 2);
+    assert_eq!(z_value(&w, &["-m", &format!("{b},{a}")]), 1);
+}
+
+#[test]
+fn a_mod_folder_named_vanilla_still_warns_about_a_base_change() {
+    let w = World::new();
+    let dir = w.home.join("vanilla");
+    write(
+        &dir.join("addons/o.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class P {}; class Car_Base: P {}; class Car_Base {}; };",
+            true,
+        ),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Car_Base"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("api-config-base-changed"), "{err}");
+}
+
+#[test]
+fn the_base_changed_warning_shows_the_class_path_as_written() {
+    let w = World::new();
+    let dir = w.home.join("@Own");
+    write(
+        &dir.join("addons/o.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class P {}; class Car_Base: P {}; class Car_Base {}; };",
+            true,
+        ),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Car_Base"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("class CfgVehicles/Car_Base changes its base class: P -> (none)"),
+        "{err}"
+    );
+    // and across sources
+    write(
+        &w.game.join("Addons/zz_cars.pbo"),
+        &config_pbo(
+            "class CfgPatches { class Cars { requiredAddons[] = {\"B_Patch\"}; }; };\n\
+             class CfgVehicles { class Car_Base2: Base {}; };",
+            true,
+        ),
+    );
+    let dir = w.home.join("@Own2");
+    write(
+        &dir.join("addons/o.pbo"),
+        &config_pbo("class CfgVehicles { class Car_Base2 {}; };", true),
+    );
+    let m = dir.to_string_lossy().into_owned();
+    let (code, _, err) = w.run(&["api", "config", "-m", &m, "CfgVehicles/Car_Base2"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(
+        err.contains("class CfgVehicles/Car_Base2 changes its base class: Base -> (none)"),
+        "{err}"
+    );
+}
+
+#[test]
+fn non_finite_floats_are_shown_as_derapify_writes_them() {
+    let w = World::new();
+    write(
+        &w.game.join("Addons/inf.pbo"),
+        &config_pbo(
+            "class CfgVehicles { class Wild { up = 1e999; down = -1e999; ok = 0.5; }; };",
+            false,
+        ),
+    );
+    let (code, out, err) = w.run(&["api", "config", "CfgVehicles/Wild"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("up = 1e999"), "{out}");
+    assert!(out.contains("down = -1e999"), "{out}");
+    let v = json(&w, "CfgVehicles/Wild", &[]);
+    assert_eq!(prop(&v, "up")["value"], "1e999");
+    assert_eq!(prop(&v, "down")["value"], "-1e999");
+    assert_eq!(prop(&v, "ok")["value"], 0.5);
 }

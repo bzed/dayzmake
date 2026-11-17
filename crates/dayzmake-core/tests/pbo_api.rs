@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-use dayzmake_core::pbo::{PBO, PackOptions, UnpackOptions, unpack};
+use dayzmake_core::pbo::{PBO, PackOptions, TolerantRead, UnpackOptions, unpack};
 #[cfg(feature = "sign")]
 use dayzmake_core::sign::{BIPrivateKey, BISignVersion};
 use dayzmake_core::warning::Warnings;
@@ -291,6 +291,69 @@ fn selection_gives_requested_entries() {
         sel.header_extensions().collect::<Vec<_>>(),
         [("prefix", "addon")]
     );
+}
+
+#[test]
+fn tolerant_selection_keeps_the_good_entries_next_to_a_truncated_one() {
+    let mut bytes = support::raw_pbo(
+        &[
+            ("a.txt", b"aaaa"),
+            ("b.txt", b"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ],
+        &[],
+    );
+    bytes.truncate(bytes.len() - 30);
+    assert!(PBO::read_entries(&mut Cursor::new(&bytes), |_| true).is_err());
+    let sel = PBO::read_entries_tolerant(
+        &mut Cursor::new(&bytes),
+        |_| true,
+        &TolerantRead::new(1 << 20),
+    )
+    .unwrap();
+    let entries = sel.into_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].data().unwrap(), b"aaaa");
+    let err = entries[1].data().unwrap_err().to_string();
+    assert!(err.contains("truncated"), "{err}");
+    assert!(!entries[1].is_over_limit());
+    assert_eq!(
+        entries.into_iter().next().unwrap().into_data().unwrap(),
+        b"aaaa"
+    );
+}
+
+#[test]
+fn tolerant_selection_stops_reading_at_the_byte_limit() {
+    let bytes = support::raw_pbo(
+        &[
+            ("a.txt", &[b'a'; 10]),
+            ("b.txt", &[b'b'; 10]),
+            ("c.txt", &[b'c'; 10]),
+        ],
+        &[],
+    );
+    let sel =
+        PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, &TolerantRead::new(15))
+            .unwrap();
+    let entries = sel.entries();
+    assert_eq!(entries[0].data().unwrap(), &[b'a'; 10]);
+    assert!(entries[1].is_over_limit() && entries[1].data().is_err());
+    assert!(entries[2].is_over_limit());
+    // a later entry that would fit is not read either once the limit was reached
+    let bytes = support::raw_pbo(
+        &[
+            ("a.txt", &[b'a'; 10]),
+            ("b.txt", &[b'b'; 10]),
+            ("c.txt", b"c"),
+        ],
+        &[],
+    );
+    let sel =
+        PBO::read_entries_tolerant(&mut Cursor::new(&bytes), |_| true, &TolerantRead::new(12))
+            .unwrap();
+    assert!(sel.entries()[0].data().is_ok());
+    assert!(sel.entries()[1].is_over_limit());
+    assert!(sel.entries()[2].is_over_limit() && sel.entries()[2].data().is_err());
 }
 
 #[cfg(feature = "sign")]
@@ -1030,4 +1093,60 @@ fn entry_filter_normalises_patterns_and_names() {
     assert!(!filter.matches("scripts/skip.c"));
     assert!(!filter.matches("data/a.c"));
     assert!(EntryFilter::default().matches("anything"));
+}
+
+/// #92: the prefix hash input is the prefix as stored, by position. A UTF-8 `é` prefix next to another
+/// extension holding the windows-1252 byte `e9` (both decode to `é`) must hash `c3 a9`, not `e9`. Signing
+/// and verifying with the same code cannot show that, so the expected hash is computed here.
+#[cfg(feature = "sign")]
+#[test]
+fn signature_hashes_the_stored_prefix_bytes_of_colliding_extensions() {
+    use num_bigint::BigUint;
+    use sha1::{Digest, Sha1};
+
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    // a rewrite gives a PBO with a valid SHA-1 trailer
+    let pbo = rewrite(&bytes);
+    let written = pack_bytes(&pbo);
+    assert_eq!(pbo.header_extensions_bytes()[0].1, b"\xc3\xa9");
+
+    let signed = sign_bytes(&armk(), &pbo);
+    // armk is 1024 bits: after the key name come a 24 byte header and n, a length, sig1, a version and a
+    // length, then sig2
+    let name_len = signed.iter().position(|&b| b == 0).unwrap() + 1;
+    let n_at = name_len + 24;
+    let sig2_at = n_at + 128 + 4 + 128 + 8;
+    let n = BigUint::from_bytes_le(&signed[n_at..n_at + 128]);
+    let sig2 = BigUint::from_bytes_le(&signed[sig2_at..sig2_at + 128]);
+    let block = sig2.modpow(&BigUint::from(65537u32), &n).to_bytes_be();
+
+    let mut namehash = Sha1::new();
+    namehash.update(b"a.txt");
+    let mut hash2 = Sha1::new();
+    hash2.update(&written[written.len() - 20..]);
+    hash2.update(namehash.finalize());
+    hash2.update(b"\xc3\xa9\\");
+    // the PKCS#1 block ends with the SHA-1 hash
+    assert_eq!(block[block.len() - 20..], hash2.finalize()[..]);
+}
+
+#[test]
+fn insert_entry_over_a_windows_1252_name_stores_the_new_names_bytes() {
+    let mut pbo = PBO::read(&mut fs::File::open(sign_dir().join("nonutf8.pbo")).unwrap()).unwrap();
+    let (name, _) = pbo
+        .entries()
+        .find(|(n, _)| pbo.name_bytes(n).contains(&0x97))
+        .unwrap();
+    let name = name.to_string();
+    // the lossily decoded name is valid UTF-8 now; the entry takes its bytes, not the old 0x97
+    pbo.insert_entry(name.clone(), b"new".to_vec()).unwrap();
+    assert_eq!(pbo.name_bytes(&name), name.as_bytes());
+    let again = rewrite(&pack_bytes(&pbo));
+    let headers = again.entry_headers();
+    let header = headers.iter().find(|h| h.name_bytes == name.as_bytes());
+    assert!(header.is_some(), "{headers:?}");
+    assert!(!headers.iter().any(|h| h.name_bytes.contains(&0x97)));
 }

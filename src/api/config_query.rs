@@ -16,7 +16,7 @@ use std::io::Error;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::config_index::{ConfigLayer, ConfigNode, PboRef};
+use super::config_index::{ConfigLayer, ConfigNode, NONFINITE, PboRef};
 use dayzmake_core::error;
 use dayzmake_core::error::printable;
 
@@ -190,7 +190,8 @@ pub struct ClassRef {
 pub struct ResolvedProp {
     /// The property name.
     pub name: String,
-    /// The value.
+    /// The value. An infinite float is the string `"1e999"` / `"-1e999"` in JSON, as JSON has no infinity.
+    #[serde(serialize_with = "plain_value")]
     pub value: Value,
     /// The name of the class the value comes from (the last one that set or extended it).
     pub origin: String,
@@ -235,7 +236,7 @@ pub struct ConfigAnswer {
 }
 
 /// The path of `key` with the names as written.
-fn display_path(layer: &ConfigLayer, key: &str) -> String {
+pub(super) fn display_path(layer: &ConfigLayer, key: &str) -> String {
     let mut out: Vec<&str> = Vec::new();
     let mut end = 0usize;
     for part in key.split('/') {
@@ -492,6 +493,26 @@ pub fn lookup(layer: &ConfigLayer, path: &str) -> Result<ConfigAnswer, Error> {
     })
 }
 
+/// The text of an infinite float (see [`NONFINITE`]) held by `v`.
+fn nonfinite(v: &Value) -> Option<&str> {
+    v.as_object()
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.get(NONFINITE))
+        .and_then(Value::as_str)
+}
+
+/// `value` for JSON: an infinite float becomes a string.
+fn plain(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(plain).collect()),
+        other => nonfinite(other).map_or_else(|| other.clone(), |t| Value::String(t.to_string())),
+    }
+}
+
+fn plain_value<S: serde::Serializer>(value: &Value, serializer: S) -> Result<S::Ok, S::Error> {
+    plain(value).serialize(serializer)
+}
+
 /// A value as config text: strings quoted, arrays in braces; long values are cut.
 fn value_text(value: &Value) -> String {
     fn go(v: &Value, out: &mut String) {
@@ -502,6 +523,7 @@ fn value_text(value: &Value) -> String {
                 out.push('"');
             }
             Value::Number(n) => out.push_str(&n.to_string()),
+            inf if nonfinite(inf).is_some() => out.push_str(nonfinite(inf).unwrap_or_default()),
             Value::Array(items) => {
                 out.push('{');
                 for (i, item) in items.iter().enumerate() {

@@ -753,22 +753,45 @@ fn derapified_exponent_float_roundtrips() {
     assert_eq!(first, second);
 }
 
+/// `CfgConvert` writes an f32 infinity for a literal that overflows (`float_ovf` fixtures).
 #[test]
-fn out_of_range_floats_are_errors() {
+fn overflowing_floats_become_infinity() {
     let long = format!("1{}.5", "0".repeat(45));
-    for v in ["1e999", "-1e999", "1e39", "-1e39", long.as_str()] {
-        for src in [
-            format!("class A {{ x = {v}; }};"),
-            format!("class A {{ x[] = {{1, {v}}}; }};"),
-        ] {
-            let err = Config::from_string(src.clone(), None, &[], &mut Warnings::new())
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_default();
-            assert!(err.contains("out of range"), "{src}: {err:?}");
-            assert!(err.contains("Invalid float"), "{src}: {err:?}");
-        }
+    let cases = [
+        ("1e999", f32::INFINITY),
+        ("-1e999", f32::NEG_INFINITY),
+        ("1e39", f32::INFINITY),
+        ("-1e39", f32::NEG_INFINITY),
+        ("3.5e38", f32::INFINITY),
+        (long.as_str(), f32::INFINITY),
+    ];
+    for (v, want) in cases {
+        let (config, w) = parse_a(&format!("class A {{ x = {v}; y[] = {{1, {v}}}; }};"));
+        assert!(w.warnings().is_empty(), "{v}: {:?}", w.warnings());
+        assert!(
+            matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == want.to_bits()),
+            "{v}"
+        );
+        let ConfigEntry::ArrayEntry(a) = entry_a(&config, "y") else {
+            panic!("not an array");
+        };
+        assert!(
+            matches!(a.elements(), [_, ConfigArrayElement::FloatElement(f)] if f.to_bits() == want.to_bits()),
+            "{v}"
+        );
     }
+}
+
+/// Derapify writes infinity as `1e999` / `-1e999`, which parses back to the same f32.
+#[test]
+fn infinite_floats_roundtrip_through_derapify() {
+    let bytes =
+        rapify_src("class A { a = 1e999; b = -1e39; c[] = {1e999, -1e999, 1.5}; d = -1e-999; };");
+    let text = derapify(bytes.clone());
+    assert!(text.contains("a = 1e999;"), "{text}");
+    assert!(text.contains("b = -1e999;"), "{text}");
+    assert!(text.contains("c[] = {1e999, -1e999, 1.5};"), "{text}");
+    assert_eq!(rapify_src(&text), bytes);
 }
 
 #[test]
@@ -894,16 +917,10 @@ fn floats_ending_at_a_closing_brace_stay_floats() {
     assert!(
         matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == 1e5_f32.to_bits())
     );
-    let err = Config::from_string(
-        "class A { x = 1e999 };".to_string(),
-        None,
-        &[],
-        &mut Warnings::new(),
-    )
-    .err()
-    .map(|e| e.to_string())
-    .unwrap_or_default();
-    assert!(err.contains("out of range"), "{err:?}");
+    let (config, _) = parse_a("class A { x = 1e999 };");
+    assert!(
+        matches!(entry_a(&config, "x"), ConfigEntry::FloatEntry(f) if f.to_bits() == f32::INFINITY.to_bits())
+    );
 }
 
 #[test]
@@ -919,4 +936,191 @@ fn array_floats_accept_whitespace_before_terminators() {
             .all(|e| matches!(e, ConfigArrayElement::FloatElement(_)))
     );
     assert_eq!(a.elements().len(), 3);
+}
+
+fn read_err(src: &str, path: &str) -> String {
+    Config::from_string(
+        src.to_string(),
+        Some(std::path::PathBuf::from(path)),
+        &[],
+        &mut Warnings::new(),
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default()
+}
+
+#[test]
+fn grammar_action_errors_carry_file_and_line() {
+    let cases = [
+        (
+            "class A {\n  y = 1;\n  x = 99999999999999999999;\n};",
+            "3",
+            "Invalid integer",
+        ),
+        (
+            "class A {\n  x = 99999999999999999999;\n};",
+            "2",
+            "Invalid integer",
+        ),
+        (
+            "class A {\n  y = 1;\n  z = 2;\n  x = __EVAL(1/0);\n};",
+            "4",
+            "division by zero",
+        ),
+        // CRLF line ends count the same
+        (
+            "class A {\r\n  y = 1;\r\n  x = 99999999999999999999;\r\n};",
+            "3",
+            "Invalid integer",
+        ),
+    ];
+    for (src, line, what) in cases {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.contains(&format!("In line dir/cfg.cpp:{line}:")),
+            "{src:?}: {err:?}"
+        );
+        assert!(err.contains(what), "{src:?}: {err:?}");
+    }
+    let deep = format!(
+        "class A {{\n  x[] = {}1{};\n}};",
+        "{".repeat(200),
+        "}".repeat(200)
+    );
+    let more = [
+        (deep.as_str(), "2", "Nesting is deeper"),
+        ("class A {\n  y = 1;\n  __EXEC(foo);\n};", "3", "__EXEC"),
+    ];
+    for (src, line, what) in more {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.contains(&format!("In line dir/cfg.cpp:{line}:\n\n  ")),
+            "{err:?}"
+        );
+        assert!(err.contains(what), "{err:?}");
+    }
+    // the same prefix as a PEG parse error in the same file
+    let peg = read_err("class A {\n  y = 1;\n  x = ;;\n};", "dir/cfg.cpp");
+    assert!(peg.starts_with("In line dir/cfg.cpp:3:\n\n  "), "{peg:?}");
+    for (src, line) in [(cases[0].0, 3), (more[1].0, 3)] {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.starts_with(&format!("In line dir/cfg.cpp:{line}:\n\n  ")),
+            "{err:?}"
+        );
+    }
+}
+
+/// The config as text.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn text_of(src: &str) -> String {
+    parse(src).to_string().unwrap()
+}
+
+/// A last entry that ends at a line end instead of `;` keeps its value type, as in `CfgConvert`
+/// (`tests/fixtures/bi/cfgconvert/last_*.cpp`). The same with CRLF, and inside a class.
+#[test]
+fn last_entry_without_semicolon_keeps_its_type() {
+    assert_eq!(text_of("x = 1.5\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = 1.5\r\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = 1e5\n"), "x = 100000.0;\n");
+    assert_eq!(text_of("x = 7\n"), "x = 7;\n");
+    assert_eq!(text_of("x = \"s\"\n"), "x = \"s\";\n");
+    assert_eq!(text_of("x = 1.5  \t\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = abc\n"), "x = \"abc\";\n");
+    assert_eq!(text_of("x = abc def\n"), "x = \"abc def\";\n");
+    assert_eq!(text_of("x = 1 abc\n"), "x = \"1 abc\";\n");
+    assert_eq!(
+        text_of("class A { x = 1.5\n};"),
+        "class A {\n    x = 1.5;\n};\n"
+    );
+}
+
+/// A final `//` comment, or an unterminated `/*`, without a line end after it (#103); and a file
+/// whose last line is a directive, with any line-end style (a lone CR ends a line for the preprocessor).
+#[test]
+fn comment_or_directive_on_the_last_line_without_line_end() {
+    assert_eq!(text_of("x = 1\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n/* c */"), "x = 1;\n");
+    assert_eq!(text_of("x = 1;\n/* c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r\n// c"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r#define Y 1"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\r// c"), "x = 1;\n");
+}
+
+/// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
+#[test]
+fn last_entry_without_semicolon_integer_overflow_is_an_error() {
+    for src in [
+        "y = 1;\nx = 99999999999999999999\n",
+        "y = 1;\r\nx = 99999999999999999999\r\n",
+    ] {
+        let err = read_err(src, "cfg.cpp");
+        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
+        assert!(err.contains("Invalid integer"), "{err:?}");
+    }
+}
+
+/// `CfgConvert` rejects a last entry at the very end of the file with neither `;` nor line end
+/// (`x = 1.5`, `x = abc`, `x = 1e5`); so does dayzmake, with the line.
+#[test]
+fn last_entry_at_end_of_file_without_terminator_is_an_error() {
+    for src in [
+        "y = 1;\nx = 1.5",
+        "y = 1;\nx = abc",
+        "y = 1;\nx = 1e5",
+        "y = 1;\nx = 1e999",
+    ] {
+        let err = read_err(src, "cfg.cpp");
+        assert!(
+            err.starts_with("In line cfg.cpp:2:\n\n  "),
+            "{src:?}: {err:?}"
+        );
+    }
+}
+
+/// A directive as the last line without a line end does not make the entry before it
+/// unterminated: its own line end is in the source (`CfgConvert` accepts all of these).
+#[test]
+fn last_entry_before_a_final_directive_or_comment_keeps_its_type() {
+    for src in [
+        "#ifndef X\nx = 1\n#endif",
+        "x = 1\n#define Y 1",
+        "x = 1.5\n#define Y 1",
+    ] {
+        let text = text_of(src);
+        assert!(text.starts_with("x = 1"), "{src:?}: {text:?}");
+        assert!(!text.contains('"'), "{src:?}: {text:?}");
+    }
+}
+
+/// Any entry, not only the last one, may end at the line end (`CfgConvert`, `last_mid.cpp`).
+#[test]
+fn entries_in_the_middle_may_end_at_the_line_end() {
+    assert_eq!(
+        text_of("x = 1.5\ny = \"s\"\nz = 2\nw = 3;\n"),
+        "x = 1.5;\ny = \"s\";\nz = 2;\nw = 3;\n"
+    );
+    assert_eq!(text_of("x = __EVAL(1+1)\n"), "x = 2;\n");
+}
+
+/// The last source line decides whether the entry before the preprocessor's own line end is terminated,
+/// not the raw text: a continued `#define` or an unterminated `/*` on the last lines do not make the
+/// entry before them unterminated.
+#[test]
+fn last_entry_before_a_continued_define_or_open_comment_keeps_its_type() {
+    for src in [
+        "x = 1\n#define A \\\n 2",
+        "x = 1\n#define A \\\r\n 2",
+        "z = a /* c\ny = 2;",
+        "x = 1\n/* c\ny = 2;",
+        "x = 1.5\n#define A \\\n 2",
+    ] {
+        let text = text_of(src);
+        assert!(!text.is_empty(), "{src:?}: {text:?}");
+    }
+    assert_eq!(text_of("x = 1\n#define A \\\n 2"), "x = 1;\n");
+    assert_eq!(text_of("x = 1\n/* c\ny = 2;"), "x = 1;\n");
 }
