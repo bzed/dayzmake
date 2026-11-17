@@ -1199,3 +1199,57 @@ fn parse_error_drops_stray_warnings_of_its_own_line_only() {
     // without an error every warning stays
     assert_eq!(unquoted_lines("a = abc;\nb = def;\n"), (true, vec![1, 2]));
 }
+
+/// The warning filter of a failed parse is linear: many warning lines before one error finish at once
+/// (it was quadratic, 20,000 lines took 47 s).
+#[test]
+fn parse_error_after_many_warnings_is_fast() {
+    let mut src = "a = b;\n".repeat(20_000);
+    src.push_str("c = ;;\n");
+    let start = std::time::Instant::now();
+    let (ok, lines) = unquoted_lines(&src);
+    assert!(!ok);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(lines.len() <= 20_000);
+}
+
+/// An error in an included file drops the warning of its own line and keeps the real one of the parent's
+/// earlier line; and the reverse: a warning in the include stays when the error is in the parent.
+#[test]
+fn parse_error_and_warnings_across_an_include() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let run = |parent: &str, inc: &str| {
+        std::fs::write(dir.path().join("inc.hpp"), inc).unwrap();
+        let main = dir.path().join("m.cpp");
+        std::fs::write(&main, parent).unwrap();
+        let mut warnings = Warnings::new();
+        let ok = Config::read(
+            &mut std::fs::File::open(&main).unwrap(),
+            Some(main),
+            &[],
+            &mut warnings,
+        )
+        .is_ok();
+        let msgs: Vec<String> = warnings
+            .warnings()
+            .iter()
+            .filter(|w| w.name == Some("unquoted-string"))
+            .map(|w| w.message.clone())
+            .collect();
+        (ok, msgs)
+    };
+    // error in the include, real warning (abc) in the parent before it
+    let (ok, msgs) = run("a = abc;\n#include \"inc.hpp\"\n", "x = 1 // c\ny = ;;\n");
+    assert!(!ok);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("abc"), "{msgs:?}");
+    // real warning in the include, error in the parent after it
+    let (ok, msgs) = run("#include \"inc.hpp\"\nc = ;;\n", "a = def;\n");
+    assert!(!ok);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].contains("def"), "{msgs:?}");
+}

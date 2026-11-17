@@ -99,7 +99,7 @@ error: Target file "config.bin" already exists. Use --force to overwrite.
 A syntax error:
 
 ```text
-$ dayzmake rapify bad.cpp        # contains:  class A { x = 1
+$ dayzmake rapify bad.cpp        # contains:  class A { x = 1   (no final newline)
 error: In line bad.cpp:1:
 
   class A { x = 1

@@ -133,7 +133,7 @@ $ dayzmake rapify -w unquoted-string -w empty-value warn.cpp -f w.bin
 A real syntax error stops the command:
 
 ```text
-$ dayzmake rapify bad.cpp        # class A { x = 1
+$ dayzmake rapify bad.cpp        # class A { x = 1   (no final newline)
 error: In line bad.cpp:1:
 
   class A { x = 1

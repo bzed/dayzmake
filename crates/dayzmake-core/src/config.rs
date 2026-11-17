@@ -1305,22 +1305,19 @@ impl Config {
 
         let mut ctx = EvalCtx::default();
         let parsed = config_grammar::config(&preprocessed, &mut found, &mut ctx);
-        // The first line (1-based, of the preprocessed text) the parse failed on. Warnings raised there are
-        // by the attempts that failed (`x = 1 // c` is tried as an unquoted string first), not about the
-        // input, so they are dropped; the ones from earlier lines are real and stay.
-        let line_of = |pos: usize| {
-            preprocessed
-                .get(..pos)
-                .map_or(0, |t| t.chars().filter(|c| c == &'\n').count())
-                + 1
-        };
-        let failed_line = match (&ctx.error, &parsed) {
-            (Some((pos, _)), _) => Some(line_of(*pos)),
-            (None, Err(pe)) => Some(pe.location.line),
+        // The line the parse failed on starts at `failed_line_start`. Warnings raised from there on are by
+        // the attempts that failed (`x = 1 // c` is tried as an unquoted string first), not about the
+        // input, so they are dropped; the ones from earlier lines are real and stay. One search for the
+        // line start, so the filter is linear in the number of warnings.
+        let failed_at = match (&ctx.error, &parsed) {
+            (Some((pos, _)), _) => Some(*pos),
+            (None, Err(pe)) => Some(pe.location.offset),
             (None, Ok(_)) => None,
         };
-        if let Some(line) = failed_line {
-            found.0.retain(|w| line_of(w.0) < line);
+        if let Some(at) = failed_at {
+            let before = preprocessed.get(..at).unwrap_or(&preprocessed);
+            let failed_line_start = before.rfind('\n').map_or(0, |i| i + 1);
+            found.0.retain(|w| w.0 < failed_line_start);
         }
         let result = match ctx.error.take() {
             Some((pos, e)) => Err(located_error(&info, &preprocessed, pos, &e)),
