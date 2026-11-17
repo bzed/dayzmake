@@ -126,8 +126,12 @@ fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
             odol.bone_count
         )?;
     }
-    writeln!(output, "Class:   {}", printable(&odol.property_class))?;
-    writeln!(output, "Damage:  {}", printable(&odol.property_damage))?;
+    if !odol.property_class.is_empty() {
+        writeln!(output, "Class:   {}", printable(&odol.property_class))?;
+    }
+    if !odol.property_damage.is_empty() {
+        writeln!(output, "Damage:  {}", printable(&odol.property_damage))?;
+    }
     writeln!(output, "Mass:    {}", odol.mass)?;
     writeln!(
         output,
@@ -153,68 +157,85 @@ fn write_odol<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
         )?;
     }
 
-    let (textures, materials) = count_names(odol);
-    writeln!(output)?;
-    writeln!(output, "Textures:")?;
-    for (name, count) in &textures {
-        writeln!(output, "- {} ({count} LODs)", printable(name))?;
-    }
-    writeln!(output, "Materials:")?;
-    for (name, count) in &materials {
-        // an empty name is a built-in material, not a missing line
-        let shown = if name.is_empty() {
-            "(none)".to_string()
-        } else {
-            printable(name)
-        };
-        writeln!(output, "- {shown} ({count} LODs)")?;
-    }
+    write_odol_sections(odol, output)
+}
 
-    writeln!(output)?;
-    writeln!(output, "Proxies:")?;
+/// The sections after the LOD table; one without items is left out.
+fn write_odol_sections<O: Write>(odol: &Odol, output: &mut O) -> Result<(), Error> {
+    let (textures, materials) = count_names(odol);
+    let textures: Vec<String> = textures
+        .iter()
+        .map(|(name, count)| format!("- {} ({count} LODs)", printable(name)))
+        .collect();
+    let materials: Vec<String> = materials
+        .iter()
+        .map(|(name, count)| {
+            // an empty name is a built-in material, not a missing line
+            let shown = if name.is_empty() {
+                "(none)".to_string()
+            } else {
+                printable(name)
+            };
+            format!("- {shown} ({count} LODs)")
+        })
+        .collect();
+    let mut proxies = Vec::new();
+    let mut properties = Vec::new();
+    let mut selections = Vec::new();
     for (i, lod) in odol.lods.iter().enumerate() {
         for proxy in &lod.proxies {
-            writeln!(output, "- LOD {i}: {}", printable(proxy))?;
+            proxies.push(format!("- LOD {i}: {}", printable(proxy)));
         }
-    }
-
-    writeln!(output)?;
-    writeln!(output, "Properties:")?;
-    for (i, lod) in odol.lods.iter().enumerate() {
         for (name, value) in &lod.properties {
-            writeln!(
-                output,
+            properties.push(format!(
                 "- LOD {i}: {} = {}",
                 printable(name),
                 printable(value)
-            )?;
+            ));
         }
-    }
-
-    writeln!(output)?;
-    writeln!(output, "Selections:")?;
-    for (i, lod) in odol.lods.iter().enumerate() {
         if !lod.selections.is_empty() {
-            writeln!(
-                output,
+            selections.push(format!(
                 "- LOD {} ({}): {}",
                 i,
                 printable(&lod.name()),
                 printable(&lod.selections.join(", "))
-            )?;
+            ));
         }
     }
+    let animations: Vec<String> = odol
+        .animations
+        .iter()
+        .map(|a| {
+            format!(
+                "- {} (source {}, type {})",
+                printable(&a.name),
+                printable(&a.source),
+                a.kind
+            )
+        })
+        .collect();
 
-    writeln!(output)?;
-    writeln!(output, "Animations:")?;
-    for a in &odol.animations {
-        writeln!(
-            output,
-            "- {} (source {}, type {})",
-            printable(&a.name),
-            printable(&a.source),
-            a.kind
-        )?;
+    // Sections without items are left out. The materials follow the textures directly.
+    let mut glue = false;
+    for (header, lines, joined) in [
+        ("Textures:", &textures, false),
+        ("Materials:", &materials, true),
+        ("Proxies:", &proxies, false),
+        ("Properties:", &properties, false),
+        ("Selections:", &selections, false),
+        ("Animations:", &animations, false),
+    ] {
+        if lines.is_empty() {
+            continue;
+        }
+        if !(joined && glue) {
+            writeln!(output)?;
+        }
+        writeln!(output, "{header}")?;
+        for line in lines {
+            writeln!(output, "{line}")?;
+        }
+        glue = header == "Textures:";
     }
     Ok(())
 }

@@ -202,6 +202,67 @@ fn inspect_odol_v56_names_an_empty_material() {
     assert!(out.contains("Materials:\n- (none) (1 LODs)\n"), "{out}");
 }
 
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn inspect_knobs(knobs: odol_builder::Knobs) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
+    let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    out
+}
+
+#[test]
+fn inspect_odol_v56_without_skeleton() {
+    let out = inspect_knobs(odol_builder::Knobs {
+        no_skeleton: true,
+        ..Default::default()
+    });
+    assert!(out.contains("\nSkeleton: none\n"), "{out}");
+}
+
+#[test]
+fn inspect_odol_v56_lists_a_repeated_material_once_per_lod() {
+    let out = inspect_knobs(odol_builder::Knobs {
+        repeat_material: true,
+        ..Default::default()
+    });
+    assert!(
+        out.contains("Materials:\n- \\dz\\mat.rvmat (1 LODs)\n\n"),
+        "{out}"
+    );
+}
+
+#[test]
+fn inspect_odol_v56_leaves_out_empty_class_and_damage() {
+    let out = inspect_knobs(odol_builder::Knobs {
+        empty_class_damage: true,
+        ..Default::default()
+    });
+    assert!(!out.contains("Class:"), "{out}");
+    assert!(!out.contains("Damage:"), "{out}");
+    assert!(out.contains("\nMass:    12.5\n"), "{out}");
+}
+
+#[test]
+fn inspect_odol_v56_leaves_out_empty_sections() {
+    let out = inspect_knobs(odol_builder::Knobs {
+        bare: true,
+        ..Default::default()
+    });
+    for section in [
+        "Textures:",
+        "Materials:",
+        "Proxies:",
+        "Properties:",
+        "Selections:",
+        "Animations:",
+    ] {
+        assert!(!out.contains(section), "{section} in {out}");
+    }
+    assert!(out.contains("Faces"), "{out}");
+    assert!(!out.ends_with("\n\n"), "{out:?}");
+}
+
 #[test]
 fn inspect_odol_v56_escapes_control_characters() {
     let dir = tempfile::tempdir().unwrap();
@@ -212,7 +273,10 @@ fn inspect_odol_v56_escapes_control_characters() {
     std::fs::write(dir.path().join("m.p3d"), odol_builder::build(knobs)).unwrap();
     let (code, out, err) = dayzmake(&["inspect", "m.p3d"], dir.path());
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("body") || out.contains("bo"), "{out}");
+    assert!(
+        out.contains("\n- LOD 0 (Resolution 1): bo\\u{1b}dy\n"),
+        "{out:?}"
+    );
     assert!(!out.contains('\x1b'), "{out:?}");
 }
 
