@@ -1,7 +1,8 @@
 //! #54: deeply nested input is a parse error, never a stack overflow. Every case runs on a 768 KiB
-//! stack in a debug build: below the 1 MiB of a Windows thread, whose frames are as big as here (#108
-//! overflowed it with the deepest case needing 1016 KiB on Linux), and with 40 % headroom over what the
-//! deepest case needs now (about 530 KiB).
+//! stack in a debug build: below the 1 MiB of a Windows thread (#108 overflowed it with the deepest case
+//! needing 1016 KiB on Linux; that the Windows frames are about as big is inferred from CI passing at
+//! 1 MiB with the fix, not measured), and with 44 % headroom over what the deepest case needs now
+//! (about 530 KiB).
 
 #![expect(
     clippy::unwrap_used,

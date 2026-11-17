@@ -314,8 +314,8 @@ peg::parser! {
         rule var_item(d: usize) -> Item =
             e:var_entry(d) (whitespace()? (";" / &"}") / [' ' | '\t']* &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
-        /// The entries that are not classes. Kept out of `entry`, whose frame is on the recursive path
-        /// (class, entries, entry, class) and must stay small: a debug build gives every alternative of a
+        /// The entries that are not classes. Kept out of `entry_or_exec`, whose frame is on the recursive path
+        /// (class, entries, entry_or_exec, class) and must stay small: a debug build gives every alternative of a
         /// rule its own stack slots, and a 1 MiB stack (Windows) has to hold the deepest nesting (#108).
         rule plain_entry(d: usize) -> Item =
             e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
