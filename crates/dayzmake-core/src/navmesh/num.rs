@@ -39,3 +39,23 @@ pub(crate) fn ceil_i32(x: f32) -> i32 {
 pub(crate) fn i32_to_f32(i: i32) -> f32 {
     i as f32
 }
+
+/// C `(unsigned short)x`: truncation towards zero, saturating on out-of-range values.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "C truncation as in Detour; saturating on out-of-range values"
+)]
+pub(crate) fn trunc_u16(x: f32) -> u16 {
+    x as u16
+}
+
+/// C `(unsigned char)x`: truncation towards zero, saturating on out-of-range values.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "C truncation as in Detour; saturating on out-of-range values"
+)]
+pub(crate) fn trunc_u8(x: f32) -> u8 {
+    x as u8
+}

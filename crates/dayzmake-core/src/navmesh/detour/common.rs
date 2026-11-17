@@ -22,18 +22,26 @@
 //!
 //! Vectors are `[f32; 3]`; the arithmetic keeps the operation order of the C++ original.
 
-#![expect(
-    clippy::many_single_char_names,
-    clippy::similar_names,
-    reason = "the names of the upstream functions are kept for comparison"
-)]
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "helpers for the tile linking and query tasks that follow"
-    )
-)]
+/// `dtMin`.
+pub(crate) fn dt_min(a: f32, b: f32) -> f32 {
+    if a < b { a } else { b }
+}
+
+/// `dtMax`.
+pub(crate) fn dt_max(a: f32, b: f32) -> f32 {
+    if a > b { a } else { b }
+}
+
+/// `dtClamp`: a NaN passes through, as in C.
+pub(crate) fn dt_clamp(v: f32, mn: f32, mx: f32) -> f32 {
+    if v < mn {
+        mn
+    } else if v > mx {
+        mx
+    } else {
+        v
+    }
+}
 
 /// `dtVsub`.
 pub(crate) fn vsub(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
@@ -46,6 +54,13 @@ pub(crate) fn vadd(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
 }
 
 /// `dtVmad`: `a + b * s`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn vmad(a: &[f32; 3], b: &[f32; 3], s: f32) -> [f32; 3] {
     [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s]
 }
@@ -73,6 +88,13 @@ pub(crate) fn vdist(a: &[f32; 3], b: &[f32; 3]) -> f32 {
 }
 
 /// `dtVdist2DSqr`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn vdist_2d_sqr(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     let dx = b[0] - a[0];
     let dz = b[2] - a[2];
@@ -80,21 +102,49 @@ pub(crate) fn vdist_2d_sqr(a: &[f32; 3], b: &[f32; 3]) -> f32 {
 }
 
 /// `dtVdist2D`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn vdist_2d(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     vdist_2d_sqr(a, b).sqrt()
 }
 
 /// `dtVdot2D`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn vdot_2d(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     a[0] * b[0] + a[2] * b[2]
 }
 
 /// `dtVperp2D`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn vperp_2d(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     a[2] * b[0] - a[0] * b[2]
 }
 
 /// `dtTriArea2D`: twice the signed area of the triangle projected onto the xz plane.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn tri_area_2d(a: &[f32; 3], b: &[f32; 3], c: &[f32; 3]) -> f32 {
     let abx = b[0] - a[0];
     let abz = b[2] - a[2];
@@ -181,34 +231,45 @@ pub(crate) fn point_in_polygon(pt: &[f32; 3], verts: &[[f32; 3]]) -> bool {
 /// (from vertex `j - 1` to `j`, stored at the index of the first vertex as upstream does) the
 /// squared distance `ed[j]` and parameter `et[j]`.
 ///
-/// `ed` and `et` must have at least `verts.len()` entries; extra entries are left alone and a
-/// shorter slice stops the loop.
+/// Returns `None`, leaving `ed` and `et` untouched, when either has fewer entries than `verts`;
+/// extra entries are left alone.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the names of the upstream function are kept for comparison"
+)]
 pub(crate) fn distance_pt_poly_edges_sqr(
     pt: &[f32; 3],
     verts: &[[f32; 3]],
     ed: &mut [f32],
     et: &mut [f32],
-) -> bool {
-    let mut c = false;
+) -> Option<bool> {
     let n = verts.len();
+    if ed.len() < n || et.len() < n {
+        return None;
+    }
+    let mut c = false;
     for (i, vi) in verts.iter().enumerate() {
         let j = if i == 0 { n.saturating_sub(1) } else { i - 1 };
-        let Some(vj) = verts.get(j) else { break };
+        let vj = verts.get(j)?;
         if crossing(pt, vi, vj) {
             c = !c;
         }
         let (d, t) = distance_pt_seg_sqr_2d(pt, vj, vi);
-        let (Some(e), Some(s)) = (ed.get_mut(j), et.get_mut(j)) else {
-            break;
-        };
-        *e = d;
-        *s = t;
+        *ed.get_mut(j)? = d;
+        *et.get_mut(j)? = t;
     }
-    c
+    Some(c)
 }
 
 /// The result of [`intersect_segment_poly_2d`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) struct SegPolyHit {
     /// Entry parameter.
     pub tmin: f32,
@@ -221,6 +282,13 @@ pub(crate) struct SegPolyHit {
 }
 
 /// `dtIntersectSegmentPoly2D`: `None` when the segment misses the polygon.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn intersect_segment_poly_2d(
     p0: &[f32; 3],
     p1: &[f32; 3],
@@ -277,6 +345,17 @@ pub(crate) fn intersect_segment_poly_2d(
 
 /// `dtIntersectSegSeg2D`: the parameters `(s, t)` of the intersection of the lines `ap`-`aq` and
 /// `bp`-`bq`, or `None` when they are parallel.
+#[expect(
+    clippy::many_single_char_names,
+    reason = "the names of the upstream function are kept for comparison"
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn intersect_seg_seg_2d(
     ap: &[f32; 3],
     aq: &[f32; 3],
@@ -295,6 +374,13 @@ pub(crate) fn intersect_seg_seg_2d(
     Some((s, t))
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 fn project_poly(axis: &[f32; 3], poly: &[[f32; 3]]) -> (f32, f32) {
     let mut it = poly.iter();
     let Some(first) = it.next() else {
@@ -310,11 +396,29 @@ fn project_poly(axis: &[f32; 3], poly: &[[f32; 3]]) -> (f32, f32) {
     (rmin, rmax)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 fn overlap_range(amin: f32, amax: f32, bmin: f32, bmax: f32, eps: f32) -> bool {
     !((amin + eps) > bmax || (amax - eps) < bmin)
 }
 
 /// `dtOverlapPolyPoly2D`: separating axis test of two convex polygons in the xz plane.
+#[expect(
+    clippy::similar_names,
+    reason = "the names of the upstream function are kept for comparison"
+)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn overlap_poly_poly_2d(polya: &[[f32; 3]], polyb: &[[f32; 3]]) -> bool {
     const EPS: f32 = 1e-4;
     for poly in [polya, polyb] {
@@ -334,6 +438,13 @@ pub(crate) fn overlap_poly_poly_2d(polya: &[[f32; 3]], polyb: &[[f32; 3]]) -> bo
 }
 
 /// `dtCalcPolyCenter` over the polygon's own vertices.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "used by the polygon query and navmesh generation tasks that follow"
+    )
+)]
 pub(crate) fn calc_poly_center(verts: &[[f32; 3]]) -> [f32; 3] {
     let mut tc = [0.0_f32; 3];
     for v in verts {
@@ -371,12 +482,20 @@ mod tests {
         assert!(!point_in_polygon(&[15.0, 0.0, 5.0], &SQUARE));
         let mut ed = [0.0; 4];
         let mut et = [0.0; 4];
-        assert!(!distance_pt_poly_edges_sqr(
-            &[15.0, 0.0, 5.0],
-            &SQUARE,
-            &mut ed,
-            &mut et
-        ));
+        assert_eq!(
+            distance_pt_poly_edges_sqr(&[15.0, 0.0, 5.0], &SQUARE, &mut ed, &mut et),
+            Some(false)
+        );
+        assert_eq!(
+            distance_pt_poly_edges_sqr(&[5.0, 0.0, 5.0], &SQUARE, &mut ed, &mut et),
+            Some(true)
+        );
+        // A slice that is too short is an error, not a silently wrong answer.
+        assert_eq!(
+            distance_pt_poly_edges_sqr(&[5.0, 0.0, 5.0], &SQUARE, &mut ed[..3], &mut et),
+            None
+        );
+        distance_pt_poly_edges_sqr(&[15.0, 0.0, 5.0], &SQUARE, &mut ed, &mut et);
         // Edge 2 runs from vertex 2 to 3, at x = 10; the point is 5 away.
         assert!((ed[2] - 25.0).abs() < 1e-6);
         assert!((et[2] - 0.5).abs() < 1e-6);
