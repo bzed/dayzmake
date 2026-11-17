@@ -292,14 +292,19 @@ On Linux or macOS, in the folder with the downloaded files (the Linux archive is
 gpg --import dayzmake-release-key.asc
 gpg --fingerprint 662441B36A5785AD18FB8667DF753D99D064EB7E
 s=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null)
-grep -q '^\[GNUPG:\] GOODSIG ' <<<"$s" && grep -q '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ' <<<"$s" && echo 'signature OK'
+[ "$(grep -c '^\[GNUPG:\] NEWSIG' <<<"$s")" = 1 ] &&
+  grep -q '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ' <<<"$s" &&
+  grep -q '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ' <<<"$s" &&
+  ! grep -Eq '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ' <<<"$s" &&
+  echo 'signature OK'
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
 The check must print `signature OK`. Do not rely on the `Good signature` text or the exit status of a plain
 `gpg --verify`: gpg prints that text, and exits with 0, for a signature of a key that has expired since. Only the
 `GOODSIG` status line means that the signature is good and its key is neither expired nor revoked, and `VALIDSIG`
-names the key that made it. The warning that the key is not certified with a trusted signature is expected as long
+names the key that made it. The check also demands that the file holds exactly one signature and that no
+`EXPSIG`, `EXPKEYSIG`, `REVKEYSIG`, `BADSIG` or `ERRSIG` line appears, so a second, bad signature cannot hide behind a good one. The warning that the key is not certified with a trusted signature is expected as long
 as you have not signed it yourself, so the check ignores it; the fingerprint is what counts. `sha256sum -c --ignore-missing` checks
 the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
 `SHA512SUMS` works the same way with `sha512sum`.
@@ -309,8 +314,11 @@ hash of your download with its line in `SHA256SUMS`:
 
 ```
 gpg --import dayzmake-release-key.asc
-$s = gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null
-($null -ne (Select-String -InputObject $s -SimpleMatch '[GNUPG:] GOODSIG ')) -and ($null -ne (Select-String -InputObject $s -SimpleMatch '[GNUPG:] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E '))
+$s = @(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null)
+(@($s | Select-String -Pattern '^\[GNUPG:\] NEWSIG').Count -eq 1) -and
+  [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ') -and
+  [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ') -and
+  -not ($s | Select-String -Quiet -Pattern '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ')
 $file = 'dayzmake-v3.0.2-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()

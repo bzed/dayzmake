@@ -18,14 +18,19 @@
 # not that key.
 set -euo pipefail
 
-# verify_signature <gnupghome> <fingerprint> <signature> <file>: succeeds only when gpg reports GOODSIG and a VALIDSIG of
-# <fingerprint>. The exit status and the "Good signature" text of gpg are not enough: gpg prints both, and exits 0, for
-# a key that has expired since; only GOODSIG means a good signature of a key that is neither expired nor revoked.
+# verify_signature <gnupghome> <fingerprint> <signature> <file>: succeeds only when gpg reports exactly one signature
+# (one NEWSIG), a GOODSIG of the key id of <fingerprint> and a VALIDSIG of <fingerprint>, and none of EXPSIG, EXPKEYSIG,
+# REVKEYSIG, BADSIG or ERRSIG. The exit status and the "Good signature" text of gpg are not enough: gpg prints both, and
+# exits 0, for a key that has expired since; only GOODSIG means a good signature of a key that is neither expired nor
+# revoked. A file may hold several signatures, so every status line must belong to the one signature that is accepted.
 # gpg's own messages go to stderr.
 verify_signature() {
     local status
     status=$(gpg --homedir "$1" --batch --status-fd 1 --verify "$3" "$4") || return 1
-    grep -q '^\[GNUPG:\] GOODSIG ' <<<"$status" && grep -q "^\[GNUPG:\] VALIDSIG $2 " <<<"$status"
+    [ "$(grep -c '^\[GNUPG:\] NEWSIG' <<<"$status")" -eq 1 ] &&
+        grep -q "^\[GNUPG:\] GOODSIG ${2: -16} " <<<"$status" &&
+        grep -q "^\[GNUPG:\] VALIDSIG $2 " <<<"$status" &&
+        ! grep -Eq '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ' <<<"$status"
 }
 
 # sourced (by scripts/test-sign-release.sh): only the functions are wanted
