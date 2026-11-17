@@ -962,7 +962,31 @@ fn grammar_action_errors_carry_file_and_line() {
         );
         assert!(err.contains(what), "{src:?}: {err:?}");
     }
+    let deep = format!(
+        "class A {{\n  x[] = {}1{};\n}};",
+        "{".repeat(200),
+        "}".repeat(200)
+    );
+    let more = [
+        (deep.as_str(), "2", "Nesting is deeper"),
+        ("class A {\n  y = 1;\n  __EXEC(foo);\n};", "3", "__EXEC"),
+    ];
+    for (src, line, what) in more {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.contains(&format!("In line dir/cfg.cpp:{line}:\n\n  ")),
+            "{err:?}"
+        );
+        assert!(err.contains(what), "{err:?}");
+    }
     // the same prefix as a PEG parse error in the same file
     let peg = read_err("class A {\n  y = 1;\n  x = ;;\n};", "dir/cfg.cpp");
-    assert!(peg.contains("In line dir/cfg.cpp:3:"), "{peg:?}");
+    assert!(peg.starts_with("In line dir/cfg.cpp:3:\n\n  "), "{peg:?}");
+    for (src, line) in [(cases[0].0, 3), (more[1].0, 3)] {
+        let err = read_err(src, "dir/cfg.cpp");
+        assert!(
+            err.starts_with(&format!("In line dir/cfg.cpp:{line}:\n\n  ")),
+            "{err:?}"
+        );
+    }
 }

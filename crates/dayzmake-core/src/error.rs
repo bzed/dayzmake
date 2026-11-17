@@ -142,8 +142,12 @@ pub(crate) fn located_error(
         .map_or(0, |head| head.matches('\n').count())
         + 1;
     match source_location(info, line) {
-        Ok((file, line_number)) => error!("In line {file}{line_number}:\n\n  {message}"),
-        Err(_) => error!("{message}"),
+        Ok((file, line_number)) => Error::new(
+            message.kind(),
+            format!("In line {file}{line_number}:\n\n  {message}"),
+        ),
+        // no line origin to map to: the message is still more useful without a location than lost
+        Err(_) => Error::new(message.kind(), message.to_string()),
     }
 }
 
