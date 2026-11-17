@@ -280,7 +280,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "boolean"
         },
         "target": {
-          "description": "With cat: write the files to this file instead of returning them.",
+          "description": "With cat: write the files to this file instead of returning them (cannot be combined with context or lines).",
           "type": "string"
         }
       },

@@ -528,7 +528,7 @@ fn tools() -> Value {
                 (
                     "target",
                     's',
-                    "With cat: write the files to this file instead of returning them."
+                    "With cat: write the files to this file instead of returning them (cannot be combined with context or lines)."
                 ),
                 FORCE_ARG,
             ],

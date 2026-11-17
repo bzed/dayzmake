@@ -188,7 +188,7 @@ Files and lines that declare a class or enum; with cat the full source files, wi
 | `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
 | `offset` | integer (&ge; 0) | no | Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest. |
 | `refresh` | boolean | no | Rebuild the cached index first. |
-| `target` | string | no | With cat: write the files to this file instead of returning them. |
+| `target` | string | no | With cat: write the files to this file instead of returning them (cannot be combined with context or lines). |
 
 Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file (`target` together with `context` or `lines` is an error).
 
