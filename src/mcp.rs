@@ -18,10 +18,12 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
 use crate::cli_io::AtomicTarget;
-use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
+use dayzmake_core::extract::ExtractOptions;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::{WarningKind, WarningSink, Warnings};
@@ -362,6 +364,12 @@ const MAX_ARG: (&str, char, &str) = (
     "At most this many lines or items (default 120).",
 );
 const FORCE_ARG: (&str, char, &str) = ("force", 'b', "Overwrite existing target files.");
+/// `extract` only replaces an empty folder or an earlier result, not any existing target.
+const EXTRACT_FORCE_ARG: (&str, char, &str) = (
+    "force",
+    'b',
+    "Replace an earlier extract result or an empty folder.",
+);
 const OFFSET_ARG: (&str, char, &str) = (
     "offset",
     'i',
@@ -372,6 +380,27 @@ const LENGTH_ARG: (&str, char, &str) = (
     'i',
     "Return at most this many bytes (default and maximum 200000).",
 );
+
+/// `api_grep`: the common api arguments except `refresh` (grep reads the PBOs and builds no index).
+fn grep_tool() -> Value {
+    let mut props: Vec<(&str, char, &str)> = vec![
+        (
+            "regex",
+            's',
+            "Regular expression, matched against each line.",
+        ),
+        ("ignore_case", 'b', "Match case-insensitively."),
+    ];
+    props.extend(API_COMMON.iter().filter(|p| p.0 != "refresh"));
+    props.push(JSON_ARG);
+    props.push(MAX_ARG);
+    tool(
+        "api_grep",
+        "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
+        &props,
+        &["regex"],
+    )
+}
 
 fn api_tool(
     name: &str,
@@ -476,13 +505,23 @@ fn tools() -> Value {
         ),
         api_tool(
             "api_source",
-            "Files and lines that declare a class or enum; with cat the full source files.",
+            "Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.",
             &[
                 ("name", 's', "Class or enum name."),
                 (
                     "cat",
                     'b',
                     "Return the full source files (with json: the files as JSON)."
+                ),
+                (
+                    "context",
+                    'i',
+                    "Return n lines around each declaration, with line numbers (excludes cat and lines)."
+                ),
+                (
+                    "lines",
+                    's',
+                    "Return lines a to b of each file as \"a-b\", with line numbers (excludes cat and context)."
                 ),
                 OFFSET_ARG,
                 LENGTH_ARG,
@@ -494,6 +533,18 @@ fn tools() -> Value {
                 FORCE_ARG,
             ],
             &["name"],
+            (true, true)
+        ),
+        grep_tool(),
+        api_tool(
+            "api_config",
+            "Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it; a redefinition that changes or drops the base class (as the engine does) is reported as a base change. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.",
+            &[(
+                "path",
+                's',
+                "The class path, for example CfgVehicles/Hatchback_02 or CfgWeapons/M4A1."
+            )],
+            &["path"],
             (true, true)
         ),
         api_tool(
@@ -531,7 +582,14 @@ fn tools() -> Value {
         tool(
             "pbo_inspect",
             "List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).",
-            &[("path", 's', "PBO or P3D file.")],
+            &[
+                ("path", 's', "PBO or P3D file."),
+                (
+                    "json",
+                    'b',
+                    "PBOs only: return the header as JSON with the raw bytes of names as hex."
+                ),
+            ],
             &["path"],
         ),
         tool(
@@ -553,14 +611,53 @@ fn tools() -> Value {
         ),
         tool(
             "pbo_unpack",
-            "Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.",
+            "Unpack a PBO into a folder, all of it or the entries selected by only/exclude. Unsafe entry names are skipped with a warning.",
             &[
                 ("pbo", 's', "PBO file."),
                 ("target", 's', "Folder to extract into."),
                 FORCE_ARG,
                 ("use_prefix", 'b', "Extract into <target>/<prefix>/."),
+                (
+                    "exclude",
+                    'a',
+                    "Glob patterns of entries to leave out (case-insensitive, / separators)."
+                ),
+                (
+                    "only",
+                    'a',
+                    "Glob patterns: write only the entries that match one (exclude wins)."
+                ),
             ],
             &["pbo", "target"],
+        ),
+        tool(
+            "extract",
+            "Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree <target>/<prefix>/<entry>, optionally derapified, and write the prefix -> PBO map pbo-map.tsv. The tree replaces an existing target atomically with force.",
+            &[
+                (
+                    "source",
+                    's',
+                    "DayZ client or server folder, mod folder (dta/ and addons/ are searched) or one PBO."
+                ),
+                ("target", 's', "Folder to write the tree to."),
+                EXTRACT_FORCE_ARG,
+                (
+                    "derapify",
+                    'b',
+                    "Write every rapified .bin as a .cpp of the same name."
+                ),
+                (
+                    "exclude",
+                    'a',
+                    "Glob patterns of entries to leave out (case-insensitive, / separators)."
+                ),
+                (
+                    "only",
+                    'a',
+                    "Glob patterns: write only the entries that match one (exclude wins)."
+                ),
+            ],
+            &["source", "target"],
         ),
         tool(
             "pbo_pack",
@@ -759,20 +856,34 @@ fn include_folders(args: &Args) -> Result<IncludeFolders, Error> {
 fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
     match name {
         n if n.starts_with("api_") => api_tool_call(n, args, warnings),
-        "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?),
+        "pbo_inspect" => pbo_inspect(&path_arg(args, "path")?, bool_arg(args, "json")?),
         "pbo_cat" => pbo_cat(args),
         "pbo_unpack" => {
             let (pbo_path, target) = (path_arg(args, "pbo")?, path_arg(args, "target")?);
-            pbo::cmd_unpack(
-                &mut open(&pbo_path)?,
-                &target,
-                bool_arg(args, "force")?,
-                bool_arg(args, "use_prefix")?,
-                warnings,
-            )?;
+            let mut options = UnpackOptions::default();
+            options.force = bool_arg(args, "force")?;
+            options.use_prefix = bool_arg(args, "use_prefix")?;
+            options.exclude = strs_arg(args, "exclude")?;
+            options.only = strs_arg(args, "only")?;
+            pbo::cmd_unpack(&mut open(&pbo_path)?, &target, &options, warnings)?;
             Ok(format!(
                 "unpacked {} to {}",
                 pbo_path.display(),
+                target.display()
+            ))
+        }
+        "extract" => {
+            let (source, target) = (path_arg(args, "source")?, path_arg(args, "target")?);
+            let mut options = ExtractOptions::default();
+            options.force = bool_arg(args, "force")?;
+            options.derapify = bool_arg(args, "derapify")?;
+            options.exclude = strs_arg(args, "exclude")?;
+            options.only = strs_arg(args, "only")?;
+            let summary = extract::cmd_extract(&source, &target, &options, warnings)?;
+            Ok(format!(
+                "extracted {} files from {} PBOs to {}",
+                summary.files(),
+                summary.pbos(),
                 target.display()
             ))
         }
@@ -931,6 +1042,17 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
     }
     let ctx = api_context(args, false)?;
     let json = bool_arg(args, "json")?;
+    if name == "api_grep" {
+        return Ok(api::grep_lines(
+            &ctx,
+            &str_arg(args, "regex")?,
+            bool_arg(args, "ignore_case")?,
+            max_arg(args)?,
+            json,
+            warnings,
+        )?
+        .join("\n"));
+    }
     let query = match name {
         "api_class" => Query::Class {
             name: str_arg(args, "name")?,
@@ -953,7 +1075,23 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
         },
         "api_source" => {
             let name = str_arg(args, "name")?;
-            if bool_arg(args, "cat")? {
+            let context = match args.get("context") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .ok_or_else(|| {
+                            error!("argument \"context\" must be a non-negative integer")
+                        })?
+                        .to_string(),
+                ),
+            };
+            let cat = bool_arg(args, "cat")?;
+            if let Some(range) =
+                api::SrcRange::parse(cat, context.as_deref(), opt_str(args, "lines")?.as_deref())?
+            {
+                return api::src_range(&ctx, &name, range, json, warnings);
+            }
+            if cat {
                 let text = api::src_cat(&ctx, &name, json, warnings)?;
                 return match opt_path(args, "target")? {
                     Some(target) => {
@@ -967,16 +1105,32 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
         "api_defines" => Query::Defines {
             regex: opt_str(args, "regex")?,
         },
+        "api_config" => {
+            return Ok(api::config_answer(
+                &ctx,
+                &str_arg(args, "path")?,
+                max_arg(args)?,
+                json,
+                false,
+                warnings,
+            )?
+            .join("\n"));
+        }
         _ => return Err(error!("unknown tool \"{name}\"")),
     };
     Ok(api::answer(&ctx, &query, max_arg(args)?, json, false, warnings)?.join("\n"))
 }
 
-fn pbo_inspect(path: &Path) -> Result<String, Error> {
+fn pbo_inspect(path: &Path, json: bool) -> Result<String, Error> {
     let mut file = open(path)?;
     let mut out = Vec::new();
     if model_magic(&mut file)?.is_some() {
+        if json {
+            return Err(error!("--json is only supported for PBOs."));
+        }
         p3d::cmd_inspect(&mut file, &mut out)?;
+    } else if json {
+        pbo::cmd_inspect_json(&mut file, &mut out)?;
     } else {
         pbo::cmd_inspect(&mut file, &mut out)?;
     }

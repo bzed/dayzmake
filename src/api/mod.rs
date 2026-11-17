@@ -14,10 +14,10 @@ use dayzmake_core::error::printable;
 use dayzmake_core::pbo::{PBO, PboSelection, safe_relative_path};
 use dayzmake_core::warning::{Warning, WarningSink, Warnings};
 use model::ApiIndex;
-use query::{Query, render_json, render_text, run_query, src_files};
+use query::{Query, compile_with, render_json, render_text, run_query, src_files};
 use source::{
     InstalledMod, ModSource, ModSpec, build_mod, build_vanilla, index_entry_name, installed_mods,
-    installed_source, match_installed, parse_mods, resolve_mod,
+    installed_source, match_installed, parse_mods, resolve_mod, script_texts,
 };
 use steam::{Branch, find_game, libraries, steam_roots};
 
@@ -38,6 +38,8 @@ pub struct ApiContext {
 /// Everything `ApiContext` points at.
 struct Located {
     scripts_pbo: PathBuf,
+    /// The game directory (the one with `dta`).
+    game: PathBuf,
     build: String,
     mods: Vec<ModSource>,
 }
@@ -89,7 +91,7 @@ pub fn mods_text(
 
 fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, Error> {
     let libs = libraries(&steam_roots());
-    let (scripts_pbo, build) = if let Some(dir) = &ctx.dayz {
+    let (scripts_pbo, build, game) = if let Some(dir) = &ctx.dayz {
         let pbo = dir.join("dta/scripts.pbo");
         if !pbo.is_file() {
             return Err(error!(
@@ -97,7 +99,11 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
                 printable(&pbo.display().to_string())
             ));
         }
-        (pbo, format!("{} build unknown", ctx.branch.name()))
+        (
+            pbo,
+            format!("{} build unknown", ctx.branch.name()),
+            dir.clone(),
+        )
     } else {
         let game = find_game(ctx.branch, &libs).ok_or_else(|| {
             error!(
@@ -109,6 +115,7 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
         (
             game.dir.join("dta/scripts.pbo"),
             format!("{} build {id}", ctx.branch.name()),
+            game.dir.clone(),
         )
     };
     let mut mods: Vec<ModSource> = Vec::new();
@@ -157,6 +164,7 @@ fn locate(ctx: &ApiContext, warnings: &mut dyn WarningSink) -> Result<Located, E
     unique_names(&mut mods);
     Ok(Located {
         scripts_pbo,
+        game,
         build,
         mods,
     })
@@ -459,11 +467,186 @@ pub fn cat_sources(
     Ok(out)
 }
 
+/// One line of a script that `api grep` matched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct GrepHit {
+    /// Name of the index (`vanilla` or the mod).
+    pub source: String,
+    /// `<PBO prefix>\<entry name>`: the path part of what `api src` prints (without the PBO file).
+    pub path: String,
+    /// 1-based line.
+    pub line: u32,
+    /// The raw line, lossily decoded.
+    pub text: String,
+}
+
+/// What `api grep` found: the first `max` hits in order and how many more there were.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GrepResult {
+    /// The hits, sorted by source (vanilla first, then the mods in `-m` order), path and line.
+    pub hits: Vec<GrepHit>,
+    /// Matching lines beyond `max`, all counted.
+    pub more: usize,
+    /// Whether more than one source was searched (the text output then tags each line with its source).
+    pub multi: bool,
+}
+
+/// Searches every `.c` file of vanilla and of the selected mods, straight from the PBOs, for lines that
+/// match `regex`. Nothing is written and no index is needed. The whole input is scanned even after `max`
+/// hits, so that `more` is exact.
+///
+/// # Errors
+///
+/// Returns an error for an invalid regex, a missing install or mod, or an unreadable vanilla PBO. A mod PBO
+/// that cannot be read is skipped with a warning.
+pub fn grep(
+    ctx: &ApiContext,
+    regex: &str,
+    ignore_case: bool,
+    max: usize,
+    warnings: &mut dyn WarningSink,
+) -> Result<GrepResult, Error> {
+    let rx = compile_with(regex, ignore_case)?;
+    let found = locate(ctx, warnings)?;
+    let mut sources: Vec<(&str, bool, &[PathBuf])> =
+        vec![("vanilla", true, std::slice::from_ref(&found.scripts_pbo))];
+    sources.extend(
+        found
+            .mods
+            .iter()
+            .map(|m| (m.name.as_str(), false, m.pbos.as_slice())),
+    );
+    let multi = sources.len() > 1;
+    let mut result = GrepResult {
+        hits: Vec::new(),
+        more: 0,
+        multi,
+    };
+    for (name, vanilla, pbos) in sources {
+        // the hits of this source; cut to what is left of `max` after every PBO, the rest is only counted
+        let mut kept: Vec<GrepHit> = Vec::new();
+        let left = max.saturating_sub(result.hits.len());
+        for path in pbos {
+            let texts = if vanilla {
+                script_texts(path, true, warnings)?
+            } else {
+                match script_texts(path, false, warnings) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warnings.warn(
+                            Warning::new(
+                                Some("api-bad-pbo"),
+                                format!("skipping unreadable PBO: {e}"),
+                            )
+                            .in_file(path.display().to_string()),
+                        );
+                        continue;
+                    }
+                }
+            };
+            let mut mine = 0usize;
+            let Some((prefix, texts)) = texts else {
+                continue;
+            };
+            // Entries in path order and lines in order give this PBO's hits in output order, so only the
+            // first `left` need to be built; the others are counted. Memory follows `left`, not the matches.
+            let mut texts = texts;
+            texts.sort_by(|a, b| a.0.cmp(&b.0));
+            for (entry, text) in &texts {
+                let mut shown: Option<String> = None;
+                for (i, line) in text.lines().enumerate() {
+                    if !rx.is_match(line) {
+                        continue;
+                    }
+                    if mine >= left {
+                        result.more += 1;
+                        continue;
+                    }
+                    mine += 1;
+                    let path = shown
+                        .get_or_insert_with(|| format!("{prefix}\\{entry}"))
+                        .clone();
+                    kept.push(GrepHit {
+                        source: name.to_string(),
+                        path,
+                        line: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                        text: line.to_string(),
+                    });
+                }
+            }
+            // merge with the PBOs before: keep the first `left` overall, count the others
+            kept.sort_by(|a, b| a.path.cmp(&b.path).then(a.line.cmp(&b.line)));
+            if kept.len() > left {
+                result.more += kept.len() - left;
+                kept.truncate(left);
+            }
+        }
+        result.hits.append(&mut kept);
+    }
+    Ok(result)
+}
+
+/// The output of `api grep`: JSON (an array of `{source, path, line, text}`, cut to `max`) or text lines
+/// (`[<source>] <path>:<line>: <text>`, the tag only when mods are selected), then the `... N more lines`
+/// note.
+///
+/// # Errors
+///
+/// See [`grep`].
+pub fn grep_lines(
+    ctx: &ApiContext,
+    regex: &str,
+    ignore_case: bool,
+    max: usize,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<String>, Error> {
+    let r = grep(ctx, regex, ignore_case, max, warnings)?;
+    if json {
+        return Ok(vec![
+            serde_json::to_string(&r.hits).map_err(|e| error!("cannot serialize: {e}"))?,
+        ]);
+    }
+    let mut out: Vec<String> = r
+        .hits
+        .iter()
+        .map(|h| {
+            let tag = if r.multi {
+                format!("[{}] ", h.source)
+            } else {
+                String::new()
+            };
+            // paths and text come from files the user did not write
+            printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text))
+        })
+        .collect();
+    if out.is_empty() && r.more == 0 {
+        out.push(if r.multi {
+            "no match".to_string()
+        } else {
+            "no match  (searched vanilla only; add -m <mod> or -m all for mods)".to_string()
+        });
+    }
+    if r.more > 0 {
+        out.push(format!(
+            "... {} more lines (raise --max or narrow the query)",
+            r.more
+        ));
+    }
+    Ok(out)
+}
+
 /// Steam and DayZ install discovery.
 pub mod steam;
 
 /// The JSON cache of the indexes.
 pub mod cache;
+/// The config index: classes of every config merged the way the engine merges them.
+pub mod config_index;
+/// Lookup of one config class in the config index.
+pub mod config_query;
 /// Script sources: the PBOs of the game and of mods.
 pub mod source;
 
@@ -523,6 +706,134 @@ pub fn answer(
     Ok(lines)
 }
 
+/// A part of each source file, as `api src --context` and `--lines` select it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SrcRange {
+    /// `n` lines before and after the declaration.
+    Context(usize),
+    /// The lines `from` to `to`, both 1-based and inclusive.
+    Lines(usize, usize),
+}
+
+impl SrcRange {
+    /// The range the options ask for; `None` when neither is given. `--context` and `--lines` exclude each
+    /// other and `--cat`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a combination of the options, a value that is not a number (`--context`) or
+    /// `<from>-<to>` (`--lines`), or `from` greater than `to`.
+    pub fn parse(
+        cat: bool,
+        context: Option<&str>,
+        lines: Option<&str>,
+    ) -> Result<Option<SrcRange>, Error> {
+        if context.is_some() && lines.is_some() {
+            return Err(error!("--context and --lines exclude each other"));
+        }
+        if cat && (context.is_some() || lines.is_some()) {
+            return Err(error!("--cat excludes --context and --lines"));
+        }
+        if let Some(c) = context {
+            let n = c
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| error!("--context must be a number, not \"{}\"", printable(c)))?;
+            return Ok(Some(SrcRange::Context(n)));
+        }
+        let Some(l) = lines else { return Ok(None) };
+        let bad = || {
+            error!(
+                "--lines must be <from>-<to>, for example 10-20, not \"{}\"",
+                printable(l)
+            )
+        };
+        let (a, b) = l.split_once('-').ok_or_else(bad)?;
+        let a = a.trim().parse::<usize>().map_err(|_| bad())?;
+        let b = b.trim().parse::<usize>().map_err(|_| bad())?;
+        if a > b {
+            return Err(error!("--lines {a}-{b}: the start is after the end"));
+        }
+        Ok(Some(SrcRange::Lines(a, b)))
+    }
+
+    /// The 1-based inclusive bounds in a file of `total` lines, clamped to the file; `from > to` means
+    /// nothing is selected.
+    fn bounds(self, decl: u32, total: usize) -> (usize, usize) {
+        let (from, to) = match self {
+            SrcRange::Context(n) => {
+                let d = usize::try_from(decl).unwrap_or(usize::MAX);
+                (d.saturating_sub(n), d.saturating_add(n))
+            }
+            SrcRange::Lines(a, b) => (a, b),
+        };
+        (from.max(1), to.min(total))
+    }
+}
+
+/// `api src --context` or `--lines`: the selected lines of each file that declares `name`, as
+/// `// ==== ...` headers followed by `<line>| <text>` (the line number right-aligned to the widest in the range)
+/// or as JSON (`{"files": [{..., "lines": [{"line": n, "text": "..."}]}]}`).
+///
+/// # Errors
+///
+/// See [`src_contents`].
+pub fn src_range(
+    ctx: &ApiContext,
+    name: &str,
+    range: SrcRange,
+    json: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<String, Error> {
+    let files = src_contents(ctx, name, warnings)?;
+    let mut out = String::new();
+    let mut jfiles = Vec::new();
+    for f in &files {
+        let total = f.text.lines().count();
+        let (from, to) = range.bounds(f.line, total);
+        let picked: Vec<(usize, &str)> = if from > to {
+            Vec::new()
+        } else {
+            f.text
+                .lines()
+                .enumerate()
+                .skip(from - 1)
+                .take(to - from + 1)
+                .map(|(i, t)| (i + 1, t))
+                .collect()
+        };
+        if json {
+            let lines: Vec<serde_json::Value> = picked
+                .iter()
+                .map(|(n, t)| serde_json::json!({"line": n, "text": t}))
+                .collect();
+            jfiles.push(serde_json::json!({
+                "index": f.index, "pbo": f.pbo, "prefix": f.prefix,
+                "path": f.path, "line": f.line, "lines": lines,
+            }));
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        let _ = writeln!(
+            out,
+            "// ==== [{}] {} {}\\{}:{}",
+            f.index, f.pbo, f.prefix, f.path, f.line
+        ); // writing to a String cannot fail
+        let width = picked.last().map_or(1, |(n, _)| n.to_string().len());
+        for (n, t) in picked {
+            let _ = writeln!(out, "{n:>width$}| {t}"); // writing to a String cannot fail
+        }
+    }
+    if json {
+        return serde_json::to_string(&serde_json::json!({ "files": jfiles }))
+            .map_err(|e| error!("cannot serialize: {e}"));
+    }
+    Ok(out)
+}
+
 /// `api src --cat`: the full source files as JSON (`{"files": [...]}`) or as text.
 ///
 /// # Errors
@@ -541,4 +852,109 @@ pub fn src_cat(
     } else {
         cat_sources(ctx, name, warnings)
     }
+}
+
+/// The merged config index: vanilla first, then the selected mods in order, each source cached on its own.
+/// With `lines`, one `# config <source>: <n> classes, <build>` line per source is added for `-v`.
+///
+/// # Errors
+///
+/// Returns an error when the install or a selected mod is missing, the game has no PBOs or the cache cannot
+/// be read. A mod or PBO that cannot be read is skipped with a warning.
+pub fn load_config(
+    ctx: &ApiContext,
+    lines: &mut Vec<String>,
+    warnings: &mut dyn WarningSink,
+) -> Result<config_index::ConfigLayer, Error> {
+    let found = locate(ctx, warnings)?;
+    let pbos = config_index::vanilla_config_pbos(&found.game)?;
+    let inputs: Vec<PathBuf> = pbos.iter().map(|(p, _)| p.clone()).collect();
+    let key = format!("config-vanilla-{}", ctx.branch.name());
+    let mut merged = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+        config_index::build_layer("vanilla", &found.build, &pbos, w)
+    })?;
+    lines.push(format!(
+        "# config vanilla: {} classes, {}",
+        merged.class_count(),
+        merged.build
+    ));
+    for m in &found.mods {
+        let mod_pbos: Vec<(PathBuf, String)> = m
+            .pbos
+            .iter()
+            .map(|p| {
+                let rel = p
+                    .strip_prefix(&m.dir)
+                    .unwrap_or(p)
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                (p.clone(), rel)
+            })
+            .collect();
+        let inputs: Vec<PathBuf> = mod_pbos.iter().map(|(p, _)| p.clone()).collect();
+        let key = format!("config-{}", mod_key(m, ctx.branch));
+        let layer = cache::cached(&key, &inputs, ctx.refresh, warnings, |w| {
+            config_index::build_layer(&m.name, ctx.branch.name(), &mod_pbos, w)
+        });
+        match layer {
+            Ok(layer) => {
+                lines.push(format!(
+                    "# config {}: {} classes",
+                    printable(&layer.name),
+                    layer.class_count()
+                ));
+                if !merged.merge(layer, warnings) {
+                    warnings.warn(
+                        Warning::new(
+                            Some("api-config-limit"),
+                            format!(
+                                "the merged config is too large; the rest of {} is skipped",
+                                printable(&m.name)
+                            ),
+                        )
+                        .in_file(m.dir.display().to_string()),
+                    );
+                }
+            }
+            Err(e) => warnings.warn(
+                Warning::new(
+                    Some("api-bad-mod"),
+                    format!("skipping mod {}: {e}", printable(&m.name)),
+                )
+                .in_file(m.dir.display().to_string()),
+            ),
+        }
+    }
+    Ok(merged)
+}
+
+/// `dayzmake api config`: the class at `path` with its inheritance chain, resolved properties, subclasses and
+/// PBOs, as JSON (one line) or text (at most `max` lines, with `# config ...` lines when `verbose`).
+///
+/// # Errors
+///
+/// Returns an error when the config index cannot be loaded or the class does not exist or has an inheritance
+/// cycle.
+pub fn config_answer(
+    ctx: &ApiContext,
+    path: &str,
+    max: usize,
+    json: bool,
+    verbose: bool,
+    warnings: &mut dyn WarningSink,
+) -> Result<Vec<String>, Error> {
+    let mut header = Vec::new();
+    let layer = load_config(ctx, &mut header, warnings)?;
+    let answer = config_query::lookup(&layer, path)?;
+    if json {
+        return Ok(vec![config_query::render_json(&answer, max)?]);
+    }
+    let mut lines = Vec::new();
+    if verbose {
+        lines.extend(header);
+    }
+    lines.extend(config_query::render_text(&answer, max));
+    Ok(lines)
 }

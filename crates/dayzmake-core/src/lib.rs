@@ -4,6 +4,7 @@
 //! # Modules
 //!
 //! - [`pbo`]: read, build, pack, unpack and selectively read PBO archives ([`pbo::PBO`]).
+//! - [`extract`]: extract a whole install or mod into one tree by prefix.
 //! - [`config`], [`preprocess`]: config parsing, rapification and derapification.
 //! - [`p3d`]: MLOD model reading and inspection (ODOL is only detected there).
 //! - [`odol`]: binarized ODOL v56 models, read for what a listing needs (LODs, textures, materials, proxies).
@@ -91,6 +92,7 @@ pub mod config;
 pub mod error;
 /// Evaluator for config `__EVAL` / `__EXEC` expressions.
 pub(crate) mod eval;
+pub mod extract;
 /// File identity (the same file under different spellings).
 pub mod fileid;
 /// I/O helpers for the binary formats.

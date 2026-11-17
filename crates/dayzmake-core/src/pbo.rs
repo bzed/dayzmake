@@ -47,6 +47,10 @@ pub struct EntryHeader {
     pub original_size: u32,
     /// The size as stored in the PBO.
     pub data_size: u32,
+    /// The timestamp field of the entry header (Unix time, usually 0).
+    pub timestamp: u32,
+    /// The bytes the name is stored as in the PBO header (`name` is decoded from them).
+    pub name_bytes: Vec<u8>,
 }
 
 /// The header extensions as `(key, value)` pairs and the entry names, both in file order.
@@ -172,8 +176,9 @@ pub struct PBO {
     /// Original bytes of entry names that are not valid UTF-8, keyed by their windows-1252 decoding
     /// (the key used in `files`).
     raw_names: HashMap<String, Vec<u8>>,
-    /// Same as `raw_names`, for header extension keys and values.
-    raw_extensions: HashMap<String, Vec<u8>>,
+    /// The stored bytes of every header extension in the order of `header_extensions`; empty for a
+    /// PBO that was not read.
+    raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
     /// only defined when reading existing PBOs, for created PBOs this is calculated during writing
     /// and included in the output
@@ -230,7 +235,8 @@ impl PBOHeader {
 /// The parsed header block of a PBO: the header extensions and the entry headers.
 struct HeaderBlock {
     extensions: LinkedHashMap<String, String>,
-    raw_extensions: HashMap<String, Vec<u8>>,
+    /// The stored bytes of every extension `(key, value)`, in the order of `extensions`.
+    raw_pairs: Vec<(Vec<u8>, Vec<u8>)>,
     headers: Vec<PBOHeader>,
 }
 
@@ -243,7 +249,7 @@ struct HeaderBlock {
 fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
     let mut block = HeaderBlock {
         extensions: LinkedHashMap::new(),
-        raw_extensions: HashMap::new(),
+        raw_pairs: Vec::new(),
         headers: Vec::new(),
     };
     let mut first = true;
@@ -256,19 +262,23 @@ fn read_header_block<I: Read>(input: &mut I) -> Result<HeaderBlock, Error> {
                 return Err(error!("Duplicate version header in PBO."));
             }
             loop {
-                let (key, raw_key) = decode_name(read_bounded_cstring(input)?);
+                let key_bytes = read_bounded_cstring(input)?;
+                let (key, _) = decode_name(key_bytes.clone());
                 if key.is_empty() {
                     break;
                 }
                 if block.extensions.len() >= MAX_HEADER_EXTENSIONS {
                     return Err(error!("PBO has too many header extensions."));
                 }
-                let (value, raw_value) = decode_name(read_bounded_cstring(input)?);
-                if let Some(raw) = raw_key {
-                    block.raw_extensions.insert(key.clone(), raw);
-                }
-                if let Some(raw) = raw_value {
-                    block.raw_extensions.insert(value.clone(), raw);
+                let value_bytes = read_bounded_cstring(input)?;
+                let (value, _) = decode_name(value_bytes.clone());
+                match block.extensions.keys().position(|k| *k == key) {
+                    Some(at) => {
+                        if let Some(pair) = block.raw_pairs.get_mut(at) {
+                            pair.1 = value_bytes;
+                        }
+                    }
+                    None => block.raw_pairs.push((key_bytes, value_bytes)),
                 }
                 set_extension(&mut block.extensions, &key, value);
             }
@@ -343,6 +353,70 @@ impl PboSelection {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
+}
+
+/// Where one entry of a PBO is stored: what [`read_index`] returns, so a reader can seek to the data.
+pub(crate) struct IndexEntry {
+    pub(crate) name: String,
+    /// The stored name is not valid UTF-8 (`name` is its windows-1252 decoding).
+    pub(crate) non_utf8: bool,
+    pub(crate) offset: u64,
+    pub(crate) size: u64,
+    pub(crate) original_size: u32,
+    pub(crate) compressed: bool,
+}
+
+/// The header block of a PBO and the position of every entry's data.
+pub(crate) struct PboIndex {
+    pub(crate) prefix: Option<String>,
+    pub(crate) prefix_bytes: Option<Vec<u8>>,
+    pub(crate) entries: Vec<IndexEntry>,
+    /// The length of the file; the data of an entry may lie past it in a damaged PBO.
+    pub(crate) len: u64,
+}
+
+/// Reads the header block of a seekable PBO without reading any entry data.
+///
+/// The input is untrusted: the header block is bounded like [`PBO::read_headers`] and nothing is
+/// allocated from a size in the file; offsets use checked arithmetic.
+pub(crate) fn read_index<I: Read + Seek>(input: &mut I) -> Result<PboIndex, Error> {
+    let len = input.seek(SeekFrom::End(0))?;
+    input.seek(SeekFrom::Start(0))?;
+    let mut reader = BufReader::new(&mut *input);
+    let block = read_header_block(&mut reader)?;
+    let mut offset = reader.stream_position()?;
+    let mut entries = Vec::with_capacity(block.headers.len());
+    for h in &block.headers {
+        let size = u64::from(h.data_size);
+        entries.push(IndexEntry {
+            name: h.filename.clone(),
+            non_utf8: h.raw_filename.is_some(),
+            offset,
+            size,
+            original_size: h.original_size,
+            compressed: h.packing_method == PACKING_COMPRESSED,
+        });
+        offset = offset
+            .checked_add(size)
+            .ok_or_else(|| error!("PBO entry sizes overflow."))?;
+    }
+    let prefix_bytes = (block.raw_pairs.len() == block.extensions.len())
+        .then(|| {
+            let at = block.extensions.keys().position(|k| k == "prefix")?;
+            block.raw_pairs.get(at).map(|(_, value)| value.clone())
+        })
+        .flatten();
+    Ok(PboIndex {
+        prefix: block.extensions.get("prefix").cloned(),
+        prefix_bytes,
+        entries,
+        len,
+    })
+}
+
+/// Decompresses the stored bytes of a "Cprs" entry (see `lzss_decompress`).
+pub(crate) fn decompress_entry(data: &[u8], original_size: u32) -> Result<Vec<u8>, Error> {
+    lzss_decompress(data, original_size as usize)
 }
 
 /// Packing method of entries compressed with Bohemia's LZSS variant ("Cprs").
@@ -584,7 +658,7 @@ impl PBO {
             files: LinkedHashMap::new(),
             header_extensions: LinkedHashMap::new(),
             raw_names: HashMap::new(),
-            raw_extensions: HashMap::new(),
+            raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
             computed_checksum: None,
@@ -647,9 +721,25 @@ impl PBO {
 
     /// Sets a header extension; a repeated key keeps its position and takes the new value.
     pub fn set_header_extension(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        let (key, value) = (key.into(), value.into());
+        // the stored bytes stay in step with the extensions; the new value is stored as UTF-8
+        if self.raw_pairs.len() == self.header_extensions.len() {
+            match self.header_extensions.keys().position(|k| *k == key) {
+                Some(at) => {
+                    if let Some(pair) = self.raw_pairs.get_mut(at) {
+                        pair.1 = value.as_bytes().to_vec();
+                    }
+                }
+                None => self
+                    .raw_pairs
+                    .push((key.as_bytes().to_vec(), value.as_bytes().to_vec())),
+            }
+        } else {
+            self.raw_pairs.clear();
+        }
         self.checksum = None;
         self.computed_checksum = None;
-        set_extension(&mut self.header_extensions, &key.into(), value.into());
+        set_extension(&mut self.header_extensions, &key, value);
     }
 
     /// The PBO prefix (the header extension `prefix`).
@@ -725,6 +815,11 @@ impl PBO {
                 packing_method: h.packing_method,
                 original_size: h.original_size,
                 data_size: h.data_size,
+                timestamp: h.timestamp,
+                name_bytes: h
+                    .raw_filename
+                    .clone()
+                    .unwrap_or_else(|| h.filename.as_bytes().to_vec()),
             })
             .collect()
     }
@@ -738,12 +833,27 @@ impl PBO {
             .unwrap_or_else(|| name.as_bytes().to_vec())
     }
 
-    /// Returns the bytes a header extension key or value is stored as.
-    pub(crate) fn extension_bytes(&self, s: &str) -> Vec<u8> {
-        self.raw_extensions
-            .get(s)
-            .cloned()
-            .unwrap_or_else(|| s.as_bytes().to_vec())
+    /// The header extensions as `(key, value)` bytes, in the order of [`PBO::header_extensions`]:
+    /// what the PBO header stores for a PBO that was read (a value set since is its UTF-8 bytes),
+    /// the UTF-8 bytes of the strings otherwise. A repeated key has the bytes of its
+    /// first key and its last value.
+    #[must_use]
+    pub fn header_extensions_bytes(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        if self.raw_pairs.len() == self.header_extensions.len() {
+            return self.raw_pairs.clone();
+        }
+        self.header_extensions()
+            .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+            .collect()
+    }
+
+    /// The bytes the prefix is stored as: the value of the extension `prefix`.
+    pub(crate) fn prefix_bytes(&self) -> Option<Vec<u8>> {
+        let at = self.header_extensions.keys().position(|k| k == "prefix")?;
+        self.header_extensions_bytes()
+            .into_iter()
+            .nth(at)
+            .map(|(_, value)| value)
     }
 
     /// Reads an existing PBO from input.
@@ -759,15 +869,21 @@ impl PBO {
         let input = &mut hashing;
         let HeaderBlock {
             extensions: header_extensions,
-            raw_extensions,
+            raw_pairs,
             headers,
         } = read_header_block(input)?;
 
         let mut files: LinkedHashMap<String, Cursor<Box<[u8]>>> = LinkedHashMap::new();
         let mut raw_names: HashMap<String, Vec<u8>> = HashMap::new();
         for header in &headers {
-            if let Some(raw) = &header.raw_filename {
-                raw_names.insert(header.filename.clone(), raw.clone());
+            // two names that decode alike are one entry whose data is the last one's: keep that name's bytes
+            match &header.raw_filename {
+                Some(raw) => {
+                    raw_names.insert(header.filename.clone(), raw.clone());
+                }
+                None => {
+                    raw_names.remove(&header.filename);
+                }
             }
             // never preallocate the full length from untrusted input
             let mut buffer: Vec<u8> = Vec::new();
@@ -800,7 +916,7 @@ impl PBO {
             files,
             header_extensions,
             raw_names,
-            raw_extensions,
+            raw_pairs,
             headers,
             checksum: Some(checksum),
             computed_checksum: Some(computed_checksum),
@@ -1154,7 +1270,7 @@ impl PBO {
             files,
             header_extensions,
             raw_names: HashMap::new(),
-            raw_extensions: HashMap::new(),
+            raw_pairs: Vec::new(),
             headers: Vec::new(),
             checksum: None,
             computed_checksum: None,
@@ -1186,21 +1302,23 @@ impl PBO {
         };
         ext_header.write(&mut headers)?;
 
-        if let Some(prefix) = self.header_extensions.get("prefix") {
+        if let Some(prefix) = self.prefix_bytes() {
             headers.write_all(b"prefix\0")?;
             headers
-                .write_cstring(self.extension_bytes(prefix))
+                .write_cstring(prefix)
                 .prepend_error("Header extension \"prefix\":")?;
         }
 
-        for (key, value) in &self.header_extensions {
+        for ((key, _), (key_bytes, value_bytes)) in
+            self.header_extensions().zip(self.header_extensions_bytes())
+        {
             if key == "prefix" {
                 continue;
             }
 
             headers
-                .write_cstring(self.extension_bytes(key))
-                .and_then(|()| headers.write_cstring(self.extension_bytes(value)))
+                .write_cstring(key_bytes)
+                .and_then(|()| headers.write_cstring(value_bytes))
                 .prepend_error(format!("Header extension \"{}\":", printable(key)))?;
         }
         headers.write_cstring(String::new())?;
@@ -1455,13 +1573,13 @@ fn write_prefix_file(
 /// The relative path an unpacked entry is written to, and whether leading separators were
 /// stripped from its name (`\scripts\x.c` is written as `scripts/x.c`). Everything else
 /// [`safe_relative_path`] rejects stays rejected.
-fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
+pub(crate) fn unpack_relative(name: &str) -> Option<(PathBuf, bool)> {
     let stripped = name.trim_start_matches(['\\', '/']);
     safe_relative_path(stripped).map(|relative| (relative, stripped.len() != name.len()))
 }
 
 /// Warns that an entry name starts with a separator that was stripped.
-fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
+pub(crate) fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn WarningSink) {
     warnings.warn(Warning::new(
         Some("leading-separator"),
         format!(
@@ -1472,18 +1590,35 @@ fn warn_leading_separator(name: &str, relative: &Path, warnings: &mut dyn Warnin
     ));
 }
 
+/// The folder, relative to the output folder, a PBO with this `prefix` is unpacked into: `None` for no
+/// prefix, an empty one or one of only separators.
+///
+/// # Errors
+///
+/// Returns an error if the prefix is not a safe relative path.
+pub(crate) fn prefix_relative(prefix: Option<&str>) -> Result<Option<PathBuf>, Error> {
+    match prefix {
+        Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(None),
+        Some(prefix) => {
+            // other tools may write a trailing separator; a leading or doubled one is rejected
+            safe_relative_path(prefix.trim_end_matches(['\\', '/']))
+                .map(Some)
+                .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))
+        }
+        None => Ok(None),
+    }
+}
+
 /// The folder a PBO is unpacked into: `output`, or with `use_prefix` `<output>/<prefix>`. An empty
 /// prefix (or one of only separators) means no prefix.
 fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Error> {
     if !use_prefix {
         return Ok(output.to_path_buf());
     }
-    match pbo.header_extensions.get("prefix") {
-        Some(prefix) if prefix.split(['\\', '/']).all(str::is_empty) => Ok(output.to_path_buf()),
-        Some(prefix) => {
-            // other tools may write a trailing separator; a leading or doubled one is rejected
-            let relative = safe_relative_path(prefix.trim_end_matches(['\\', '/']))
-                .ok_or_else(|| error!("Unsafe PBO prefix {prefix:?}; refusing to unpack."))?;
+    let prefix = pbo.header_extensions.get("prefix").map(String::as_str);
+    match prefix_relative(prefix)? {
+        None => Ok(output.to_path_buf()),
+        Some(relative) => {
             if crosses_symlink(output, &relative) {
                 return Err(error!(
                     "PBO prefix {prefix:?} goes through a symlink; refusing to unpack."
@@ -1491,7 +1626,6 @@ fn unpack_base(pbo: &PBO, output: &Path, use_prefix: bool) -> Result<PathBuf, Er
             }
             Ok(output.join(relative))
         }
-        None => Ok(output.to_path_buf()),
     }
 }
 
@@ -1503,6 +1637,76 @@ pub struct UnpackOptions {
     pub force: bool,
     /// Extract into `<target>/<prefix>/` instead of `<target>/`.
     pub use_prefix: bool,
+    /// Glob patterns of entries to leave out; see [`EntryFilter`]. An entry that matches one is
+    /// never written, even when it matches `only`.
+    pub exclude: Vec<String>,
+    /// Glob patterns of the entries to write; see [`EntryFilter`]. Empty means every entry.
+    pub only: Vec<String>,
+}
+
+/// Selects PBO entries by glob pattern: an entry passes when it matches at least one `only` pattern (or
+/// `only` is empty) and no `exclude` pattern.
+///
+/// `*` stands for any run of characters, as in the `-x` patterns of `pack`. The name is matched with
+/// `/` separators (a `\` is turned into `/`), without the PBO prefix, and ignoring case, like PBO names.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct EntryFilter {
+    only: Vec<String>,
+    exclude: Vec<String>,
+}
+
+impl EntryFilter {
+    /// A filter for the `only` and `exclude` patterns. The patterns are normalised once (lowercase,
+    /// `\` turned into `/`).
+    #[must_use]
+    pub fn new(only: Vec<String>, exclude: Vec<String>) -> Self {
+        let normalise = |patterns: Vec<String>| {
+            patterns
+                .into_iter()
+                .map(|p| p.replace('\\', "/").to_lowercase())
+                .collect()
+        };
+        Self {
+            only: normalise(only),
+            exclude: normalise(exclude),
+        }
+    }
+
+    /// Whether the entry `name` passes the filter.
+    #[must_use]
+    pub fn matches(&self, name: &str) -> bool {
+        let name = name.replace('\\', "/").to_lowercase();
+        let hit = |pattern: &String| matches_glob(&name, pattern);
+        (self.only.is_empty() || self.only.iter().any(hit)) && !self.exclude.iter().any(hit)
+    }
+}
+
+/// Fails when a selected file of `pbo` (or `$PBOPREFIX$`) already exists below `base`. Runs before anything
+/// is written, so a conflict leaves the target untouched.
+fn check_unpack_conflicts(pbo: &PBO, base: &Path, filter: &EntryFilter) -> Result<(), Error> {
+    let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
+    let first = prefix
+        .into_iter()
+        .chain(
+            pbo.files
+                .keys()
+                .map(String::as_str)
+                .filter(|name| filter.matches(name)),
+        )
+        .find(|name| {
+            unpack_relative(name).is_some_and(|(relative, _)| {
+                !crosses_symlink(base, &relative) && base.join(relative).exists()
+            })
+        });
+    match first {
+        Some(name) => Err(error!(
+            "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
+            printable(&base.display().to_string()),
+            printable(name)
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Unpacks a PBO into the target folder.
@@ -1511,43 +1715,35 @@ pub struct UnpackOptions {
 /// safe relative path, that would be written through a symlink, or that collide (case-insensitively)
 /// with an entry already written in this run are skipped with a warning. Leading separators are
 /// stripped from a name (`leading-separator` warning). With `options.use_prefix`
-/// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix.
+/// the files are extracted into `<target>/<prefix>/`; an empty prefix means no prefix. `options.only` and
+/// `options.exclude` select the entries to write (`$PBOPREFIX$` is always written).
 ///
 /// # Errors
 ///
 /// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or, without
-/// `options.force`, a file of the PBO (or `$PBOPREFIX$`) already exists in the target. That check
-/// covers every file and runs before anything is written, so a conflict leaves the target untouched.
+/// `options.force`, a selected file of the PBO (or `$PBOPREFIX$`) already exists in the target. That
+/// check covers the selected entries plus `$PBOPREFIX$` and runs before anything is written, so a
+/// conflict leaves the target untouched.
 pub fn unpack<I: Read>(
     input: &mut I,
     target: &Path,
     options: &UnpackOptions,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let UnpackOptions { force, use_prefix } = *options;
+    let UnpackOptions {
+        force,
+        use_prefix,
+        ref exclude,
+        ref only,
+    } = *options;
+    let filter = EntryFilter::new(only.clone(), exclude.clone());
     let output = target;
     let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
 
     let base = unpack_base(&pbo, output, use_prefix)?;
 
     if !force {
-        // Check every target before writing anything, so a conflict leaves the folder untouched.
-        let prefix = (!pbo.header_extensions.is_empty()).then_some("$PBOPREFIX$");
-        let first = prefix
-            .into_iter()
-            .chain(pbo.files.keys().map(String::as_str))
-            .find(|name| {
-                unpack_relative(name).is_some_and(|(relative, _)| {
-                    !crosses_symlink(&base, &relative) && base.join(relative).exists()
-                })
-            });
-        if let Some(name) = first {
-            return Err(error!(
-                "Target folder \"{}\" already contains files of this PBO (first: \"{}\"). Use --force to overwrite.",
-                printable(&base.display().to_string()),
-                printable(name)
-            ));
-        }
+        check_unpack_conflicts(&pbo, &base, &filter)?;
     }
 
     create_dir_all(&base).prepend_error("Failed to create output folder:")?;
@@ -1558,6 +1754,9 @@ pub fn unpack<I: Read>(
 
     let mut written: HashSet<String> = HashSet::new();
     for file_name in pbo.files.keys() {
+        if !filter.matches(file_name) {
+            continue;
+        }
         if pbo.raw_names.contains_key(file_name) {
             warnings.warn(Warning::new(
                 Some("non-utf8-filename"),

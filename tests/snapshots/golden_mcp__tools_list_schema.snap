@@ -220,12 +220,17 @@ expression: "r.result(2)[\"tools\"]"
     "name": "api_chain"
   },
   {
-    "description": "Files and lines that declare a class or enum; with cat the full source files.",
+    "description": "Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.",
     "inputSchema": {
       "properties": {
         "cat": {
           "description": "Return the full source files (with json: the files as JSON).",
           "type": "boolean"
+        },
+        "context": {
+          "description": "Return n lines around each declaration, with line numbers (excludes cat and lines).",
+          "minimum": 0,
+          "type": "integer"
         },
         "dayz": {
           "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
@@ -247,6 +252,10 @@ expression: "r.result(2)[\"tools\"]"
           "description": "Return at most this many bytes (default and maximum 200000).",
           "minimum": 0,
           "type": "integer"
+        },
+        "lines": {
+          "description": "Return lines a to b of each file as \"a-b\", with line numbers (excludes cat and context).",
+          "type": "string"
         },
         "max": {
           "description": "At most this many lines or items (default 120).",
@@ -281,6 +290,88 @@ expression: "r.result(2)[\"tools\"]"
       "type": "object"
     },
     "name": "api_source"
+  },
+  {
+    "description": "Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "ignore_case": {
+          "description": "Match case-insensitively.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "regex": {
+          "description": "Regular expression, matched against each line.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "regex"
+      ],
+      "type": "object"
+    },
+    "name": "api_grep"
+  },
+  {
+    "description": "Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it; a redefinition that changes or drops the base class (as the engine does) is reported as a base change. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.",
+    "inputSchema": {
+      "properties": {
+        "dayz": {
+          "description": "DayZ client/server directory (uses <dir>/dta/scripts.pbo) instead of the Steam install.",
+          "type": "string"
+        },
+        "experimental": {
+          "description": "Use the experimental branch instead of stable.",
+          "type": "boolean"
+        },
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "max": {
+          "description": "At most this many lines or items (default 120).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mods": {
+          "description": "Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The class path, for example CfgVehicles/Hatchback_02 or CfgWeapons/M4A1.",
+          "type": "string"
+        },
+        "refresh": {
+          "description": "Rebuild the cached index first.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "name": "api_config"
   },
   {
     "description": "Compile-time defines of the selected indexes, optionally filtered by a regex.",
@@ -373,6 +464,10 @@ expression: "r.result(2)[\"tools\"]"
     "description": "List the entries of a PBO, or describe a model (P3D: format, LODs, textures, selections).",
     "inputSchema": {
       "properties": {
+        "json": {
+          "description": "PBOs only: return the header as JSON with the raw bytes of names as hex.",
+          "type": "boolean"
+        },
         "path": {
           "description": "PBO or P3D file.",
           "type": "string"
@@ -425,12 +520,26 @@ expression: "r.result(2)[\"tools\"]"
     "name": "pbo_cat"
   },
   {
-    "description": "Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.",
+    "description": "Unpack a PBO into a folder, all of it or the entries selected by only/exclude. Unsafe entry names are skipped with a warning.",
     "inputSchema": {
       "properties": {
+        "exclude": {
+          "description": "Glob patterns of entries to leave out (case-insensitive, / separators).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "force": {
           "description": "Overwrite existing target files.",
           "type": "boolean"
+        },
+        "only": {
+          "description": "Glob patterns: write only the entries that match one (exclude wins).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "pbo": {
           "description": "PBO file.",
@@ -452,6 +561,49 @@ expression: "r.result(2)[\"tools\"]"
       "type": "object"
     },
     "name": "pbo_unpack"
+  },
+  {
+    "description": "Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree <target>/<prefix>/<entry>, optionally derapified, and write the prefix -> PBO map pbo-map.tsv. The tree replaces an existing target atomically with force.",
+    "inputSchema": {
+      "properties": {
+        "derapify": {
+          "description": "Write every rapified .bin as a .cpp of the same name.",
+          "type": "boolean"
+        },
+        "exclude": {
+          "description": "Glob patterns of entries to leave out (case-insensitive, / separators).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "force": {
+          "description": "Replace an earlier extract result or an empty folder.",
+          "type": "boolean"
+        },
+        "only": {
+          "description": "Glob patterns: write only the entries that match one (exclude wins).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "DayZ client or server folder, mod folder (dta/ and addons/ are searched) or one PBO.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Folder to write the tree to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "extract"
   },
   {
     "description": "Pack a folder into a PBO without binarizing or rapifying.",

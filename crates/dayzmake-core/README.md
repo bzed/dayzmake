@@ -32,6 +32,12 @@ need to be GPL-2.0-or-later compatible.
 
 ### Unreleased
 
+- New `preprocess::MemoryIncludes` and `IncludeFolders::with_memory`: includes come from in-memory files only (a PBO's entries, relative to the including entry or as `\prefix\path`); absolute, drive and `..` paths are errors and the file system is never read (#97). `IncludeFolders` has a new public field `memory`.
+- `extract`: the `pbo-map.tsv` prefix is written with `/` instead of `\`, and `\` is escaped as `\\` in both columns (#87).
+- New module `extract`: `extract(source, target, &ExtractOptions, warnings)` unpacks an install, a mod or a PBO into one tree by prefix, with `ExtractOptions` (`force`, `derapify`, `only`, `exclude`), a `pbo-map.tsv` and an atomic swap; it streams entries, fails on I/O and decompression errors, and returns an `ExtractSummary` with `pbos()` and `files()` (#87). `force` only replaces an empty folder or an earlier extract result, never a folder that contains or lies inside the source.
+- `UnpackOptions` gains `exclude` and `only` (glob patterns); `pbo::EntryFilter::new(only, exclude)` and `matches(name)` apply them; `exclude` wins (#86).
+- `EntryHeader` gains `timestamp` and `name_bytes`, and `PBO::header_extensions_bytes` returns the stored bytes of the header extensions (#91).
+- `PBO::write` and signing use the stored bytes of each header extension by position, so a UTF-8 and a windows-1252 spelling of one string no longer swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
   A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text

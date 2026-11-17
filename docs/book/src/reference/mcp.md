@@ -171,17 +171,19 @@ Result: The chain, as `dayzmake api chain`.
 
 ### api_source
 
-Files and lines that declare a class or enum; with cat the full source files.
+Files and lines that declare a class or enum; with cat the full source files, with context or lines part of them.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
 | `name` | string | yes | Class or enum name. |
 | `cat` | boolean | no | Return the full source files (with json: the files as JSON). |
+| `context` | integer (&ge; 0) | no | Return n lines around each declaration, with line numbers (excludes cat and lines). |
 | `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
 | `experimental` | boolean | no | Use the experimental branch instead of stable. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `json` | boolean | no | Return JSON instead of text. |
 | `length` | integer (&ge; 0) | no | Return at most this many bytes (default and maximum 200000). |
+| `lines` | string | no | Return lines a to b of each file as "a-b", with line numbers (excludes cat and context). |
 | `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
 | `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
 | `offset` | integer (&ge; 0) | no | Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest. |
@@ -189,6 +191,38 @@ Files and lines that declare a class or enum; with cat the full source files.
 | `target` | string | no | With cat: write the files to this file instead of returning them. |
 
 Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file.
+
+### api_grep
+
+Full-text search over the script bodies (every .c file of vanilla and the selected mods, read from the PBOs). Matches raw lines, comments included.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `regex` | string | yes | Regular expression, matched against each line. |
+| `ignore_case` | boolean | no | Match case-insensitively. |
+| `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
+| `experimental` | boolean | no | Use the experimental branch instead of stable. |
+| `json` | boolean | no | Return JSON instead of text. |
+| `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
+| `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
+
+Result: The matching lines, as `dayzmake api grep`.
+
+### api_config
+
+Look up a config class (config.bin and config.cpp of the game and the selected mods, merged in load order the way the engine does): its inheritance chain, its own and inherited properties each tagged with the class they come from, its direct subclasses and the PBOs that define it; a redefinition that changes or drops the base class (as the engine does) is reported as a base change. The path is a /-separated class path such as CfgVehicles/Hatchback_02, matched ignoring case.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `path` | string | yes | The class path, for example CfgVehicles/Hatchback_02 or CfgWeapons/M4A1. |
+| `dayz` | string | no | DayZ client/server directory (uses `<dir>`/dta/scripts.pbo) instead of the Steam install. |
+| `experimental` | boolean | no | Use the experimental branch instead of stable. |
+| `json` | boolean | no | Return JSON instead of text. |
+| `max` | integer (&ge; 0) | no | At most this many lines or items (default 120). |
+| `mods` | string | no | Also query these mods, comma separated: cf, cot, dabs, expansion, aliases (those four, if installed), all (every installed mod with scripts; the first run builds the caches and can take a while, later runs are quick; api_update with mods=all warms them), a workshop id, a mod name or @dir name (see api_mods) or a mod directory. Without it only vanilla is queried. |
+| `refresh` | boolean | no | Rebuild the cached index first. |
+
+Result: The class, as `dayzmake api config`.
 
 ### api_defines
 
@@ -238,8 +272,10 @@ List the entries of a PBO, or describe a model (P3D, MLOD or ODOL v56: format, L
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
 | `path` | string | yes | PBO or P3D file. |
+| `json` | boolean | no | PBOs only: return the header as JSON with the raw bytes of names as hex. |
 
-Result: The text of `dayzmake inspect`: the PBO listing or the model description.
+Result: The text of `dayzmake inspect`: the PBO listing or the model description; with `json`, the object of
+`dayzmake inspect --json` (an error for a model).
 
 ### pbo_cat
 
@@ -258,7 +294,7 @@ Result: The entry as text when it is UTF-8, or `wrote <target> (<n> bytes)` with
 
 ### pbo_unpack
 
-Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.
+Unpack a PBO into a folder, all of it or the entries selected by `only` and `exclude`. Unsafe entry names are skipped with a warning.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
@@ -266,8 +302,25 @@ Unpack a PBO into a folder. Unsafe entry names are skipped with a warning.
 | `target` | string | yes | Folder to extract into. |
 | `force` | boolean | no | Overwrite existing target files. |
 | `use_prefix` | boolean | no | Extract into `<target>`/`<prefix>`/. |
+| `exclude` | array of strings | no | Glob patterns of entries to leave out (case-insensitive, `/` separators). |
+| `only` | array of strings | no | Glob patterns: write only the entries that match one (`exclude` wins). |
 
 Result: `unpacked <pbo> to <target>`.
+
+### extract
+
+Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree `<target>`/`<prefix>`/`<entry>`, optionally derapified, and write the prefix to PBO map `pbo-map.tsv`. The tree replaces an existing target atomically with `force`.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `source` | string | yes | DayZ client or server folder, mod folder (`dta/` and `addons/` are searched) or one PBO. |
+| `target` | string | yes | Folder to write the tree to. |
+| `force` | boolean | no | Replace an earlier extract result or an empty folder. |
+| `derapify` | boolean | no | Write every rapified `.bin` as a `.cpp` of the same name. |
+| `exclude` | array of strings | no | Glob patterns of entries to leave out (case-insensitive, `/` separators). |
+| `only` | array of strings | no | Glob patterns: write only the entries that match one (`exclude` wins). |
+
+Result: `extracted <n> files from <m> PBOs to <target>`. See [extract](pbo.md#dayzmake-extract).
 
 ### pbo_pack
 

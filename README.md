@@ -31,6 +31,37 @@ is maintained here.
 
 ### Unreleased
 
+- `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
+  inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
+  that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the
+  ones in folders of a PBO) and of the `-m` mods, loads vanilla first and then the mods in order (inside a source by
+  `CfgPatches` `requiredAddons`, then sorted path), and merges like the engine: a class defined again extends the
+  earlier one, properties overwrite, the base class becomes what the last definition names (none included; the lookup prints `Base changed: A -> (none) by [<source>] <pbo>` and a mod's change raises `api-config-base-changed`), `delete` removes, `+=` appends, `class X;` creates nothing. `--max` cuts the
+  output, `--json` prints an object, `--refresh` rebuilds the cached index of each source. An inheritance cycle is an
+  error. An `#include` in a mod `config.cpp` is resolved from the entries of the same PBO only, never from the file system (#97). The MCP tool is `api_config`; new warnings `api-config-order`, `api-config-base-changed` and `api-config-limit` (#89).
+- `extract [-f] [--derapify] [--only <pattern>]... [-x <pattern>]... <source> <targetfolder>` unpacks every PBO in the
+  `dta` and `addons` folders of a DayZ install or mod, or a single PBO, into `<targetfolder>/<prefix>/`, optionally
+  derapifying the rapified `.bin` files to `.cpp`, and writes `pbo-map.tsv` (prefix with `/` separators, TAB, PBO path; `\`, TAB, CR and LF are escaped as `\\`, `\t`, `\r`, `\n`). The tree is
+  written to a staging folder and swapped in, so a re-run drops stale files and a failure keeps the old tree; `-f`
+  only replaces an empty folder or an earlier result (one with a `pbo-map.tsv`) and never one that contains or lies
+  inside the source. Entries are streamed, not read whole, and an I/O or decompression error fails the extract. The MCP
+  tool is `extract` (#87).
+- `api grep <regex>` searches the lines of every `.c` file of vanilla and of the selected mods, straight from the
+  PBOs, and prints `[<source>] <prefix>\<path>:<line>: <text>` sorted by source, path and line. `--ignore-case`
+  matches case-insensitively, `--max` cuts the output and bounds the memory used (all further matches are still counted for the
+  `... N more lines` note) and `--json` prints an array of `{source, path, line, text}`. The MCP tool is
+  `api_grep` (#88).
+- `api src --context <n>` prints n lines around each declaration and `--lines <a-b>` lines a to b of each file, as
+  `<line>| <text>` (with `--json`: `"lines"`); the options exclude each other and `--cat`. The MCP tool `api_source`
+  takes `context` and `lines` (#90).
+- `unpack` takes `-x <pattern>` (leave entries out) and `--only <pattern>` (write only matching entries); `-x`
+  wins. The MCP tool `pbo_unpack` has the arguments `exclude` and `only`. `UnpackOptions` gains `exclude` and
+  `only`, and `dayzmake_core::pbo::EntryFilter` is the shared filter (#86).
+- `inspect --json <file.pbo>` prints the PBO header as one JSON object: the header extensions, the prefix and the
+  entries, each name next to the lowercase hex of its raw bytes, so a prefix with a control character or a byte that
+  is not UTF-8 is unambiguous. The MCP tool `pbo_inspect` takes the argument `json`. A model gives an error (#91).
+- Writing and signing a PBO keep the stored bytes of header extensions and entry names that a UTF-8 and a windows-1252
+  spelling would otherwise swap (#92).
 - Config values in exponent notation (`1e-5`, `1.5E+3`, `3.162277e-5`) are rapified as floats (#85), not as strings with an
   `unquoted-string` warning, so derapify then rapify keeps a float a float. Values such as `1e5x` or `1e` stay strings.
   A float that does not fit an f32 (`1e999`, `-1e39`) is an error, never infinity or NaN; followed by text
@@ -300,8 +331,9 @@ Usage:
     dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
+    dayzmake inspect [-v] [--json] [<source>]
+    dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
+    dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -313,8 +345,10 @@ Usage:
     dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
-    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
+    dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
@@ -333,6 +367,8 @@ Commands:
     inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL v56) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
+    extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
+                optionally derapified, with a prefix -> PBO map (pbo-map.tsv).
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
     sign        Sign a PBO with the given private key.
@@ -340,7 +376,8 @@ Commands:
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
-                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
+                config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
@@ -350,7 +387,8 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern to exclude from output folder.
+                                      For unpack and extract: pattern of entries to leave out (matched against the
+                                      entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as "key=value".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -359,6 +397,8 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
+    --only <pattern>            unpack, extract: write only the entries that match a pattern (-x wins).
+    --derapify                  extract: write every rapified .bin as a .cpp of the same name.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
@@ -373,7 +413,10 @@ Options:
     --mods-only                 api class: show only what the mods declare.
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
+    --ignore-case               api grep: match case-insensitively.
     --cat                       api src: print the full source files.
+    --context <n>               api src: print n lines around each declaration, with line numbers.
+    --lines <a-b>               api src: print lines a to b of each file, with line numbers.
     --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
@@ -415,7 +458,10 @@ dayzmake api enum EStatLevels
 dayzmake api chain PlayerBase
 dayzmake api src AIAgent                      # file and line of every declaration
 dayzmake api src AIAgent --cat                # the full source files
+dayzmake api src AIAgent --context 5          # five lines around each declaration
+dayzmake api grep 'GetGame\(\)\.GetMission\(\)'   # call sites: a text search over the script bodies
 dayzmake api defines [regex]
+dayzmake api config CfgVehicles/Hatchback_02   # a config class: chain, resolved properties, subclasses
 dayzmake api update                           # rebuild the cache now
 ```
 
@@ -448,13 +494,14 @@ claude mcp add dayzmake -- dayzmake mcp
 
 Tools:
 
-- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_defines`, `api_update`,
-  `api_mods`: the script API index (see above). The first eight take `mods`, `experimental`, `dayz` and
-  `refresh`; `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
+- `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_grep`, `api_defines`,
+  `api_config`, `api_update`, `api_mods`: the script API index (see above). All but `api_grep` and `api_mods` take
+  `mods`, `experimental`, `dayz` and `refresh`; `api_grep` takes the same without `refresh` (it reads the PBOs and
+  builds no index); `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
   `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
   tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with
   `mods=all` warms them.
-- `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
+- `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `extract`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
   commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
 

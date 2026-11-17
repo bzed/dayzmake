@@ -54,6 +54,93 @@ pub fn cmd_inspect<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(
     Ok(())
 }
 
+/// Writes the header of a PBO to the output as one JSON object (see `docs/book/src/reference/pbo.md`):
+/// the header extensions, the prefix and the entries, each name with its raw bytes as lowercase hex.
+/// Names are decoded lossily as UTF-8 and only JSON-escaped.
+///
+/// # Errors
+///
+/// Returns an error if the PBO cannot be read or the output cannot be written.
+pub fn cmd_inspect_json<I: Read, O: Write>(input: &mut I, output: &mut O) -> Result<(), Error> {
+    let pbo = PBO::read(input).prepend_error("Failed to read PBO:")?;
+    let lossy = |raw: &[u8]| (String::from_utf8_lossy(raw).into_owned(), hex(raw));
+    let raw_extensions = pbo.header_extensions_bytes();
+    let mut prefix = None;
+    let mut prefix_hex = None;
+    let mut header_extensions = Vec::new();
+    for ((key, _), (raw_key, raw_value)) in pbo.header_extensions().zip(&raw_extensions) {
+        let (value, value_hex) = lossy(raw_value);
+        if key == "prefix" {
+            prefix = Some(value.clone());
+            prefix_hex = Some(value_hex.clone());
+        }
+        let (key, key_hex) = lossy(raw_key);
+        header_extensions.push(JsonExtension {
+            key,
+            value,
+            key_hex,
+            value_hex,
+        });
+    }
+    let entries = pbo
+        .entry_headers()
+        .into_iter()
+        .map(|header| JsonEntry {
+            name: String::from_utf8_lossy(&header.name_bytes).into_owned(),
+            name_hex: hex(&header.name_bytes),
+            packing: header.packing_method,
+            original_size: header.original_size,
+            data_size: header.data_size,
+            timestamp: header.timestamp,
+        })
+        .collect();
+    let json = JsonInspect {
+        header_extensions,
+        prefix,
+        prefix_hex,
+        entries,
+    };
+    serde_json::to_writer(&mut *output, &json).map_err(Error::from)?;
+    writeln!(output)
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        // writing to a String cannot fail
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// `inspect --json`; the fields are in the order of the output.
+#[derive(serde::Serialize)]
+struct JsonInspect {
+    header_extensions: Vec<JsonExtension>,
+    prefix: Option<String>,
+    prefix_hex: Option<String>,
+    entries: Vec<JsonEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonExtension {
+    key: String,
+    value: String,
+    key_hex: String,
+    value_hex: String,
+}
+
+#[derive(serde::Serialize)]
+struct JsonEntry {
+    name: String,
+    name_hex: String,
+    packing: u32,
+    original_size: u32,
+    data_size: u32,
+    timestamp: u32,
+}
+
 /// Writes the named entry of the PBO to the output.
 ///
 /// # Errors
@@ -91,19 +178,15 @@ fn parse_header_extensions(headerext: &[String]) -> Result<Vec<(String, String)>
 ///
 /// # Errors
 ///
-/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a target
-/// file exists without `force`.
+/// Returns an error if the PBO cannot be read, the prefix is unsafe with `use_prefix`, or a selected
+/// target file exists without `options.force`.
 pub fn cmd_unpack<I: Read>(
     input: &mut I,
     output: &Path,
-    force: bool,
-    use_prefix: bool,
+    options: &UnpackOptions,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
-    let mut options = UnpackOptions::default();
-    options.force = force;
-    options.use_prefix = use_prefix;
-    unpack(input, output, &options, warnings)
+    unpack(input, output, options, warnings)
 }
 
 /// Fails with the folder's name when it cannot be read (the library error does not name it).

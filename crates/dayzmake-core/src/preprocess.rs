@@ -219,6 +219,91 @@ pub struct IncludeFolders {
     pub search: Vec<PathBuf>,
     /// Folders checked only for the include path directly below them.
     pub direct: Vec<PathBuf>,
+    /// When set, includes come from these in-memory files only and the file system is never read (the
+    /// folders above are ignored); see [`MemoryIncludes`].
+    pub memory: Option<MemoryIncludes>,
+}
+
+/// The files of one archive (a PBO) as an include source, for input that must never reach the file system.
+///
+/// `origin` of the preprocessed input is the name of the including entry, and an include is resolved
+/// relative to the folder of that entry, or, in the engine's `\prefix\path` form, when it points into
+/// `prefix`. Absolute paths, drive letters and `..` components are errors, as are empty components and
+/// control characters (see [`crate::pbo::safe_relative_path`]). Names compare ignoring case. The files
+/// an `#include` pulls in count against a total of 64 MiB per preprocess call.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct MemoryIncludes {
+    prefix: String,
+    /// lowercase `/`-separated name -> (name as given, content)
+    files: std::collections::BTreeMap<String, (String, Vec<u8>)>,
+}
+
+impl MemoryIncludes {
+    /// An include source over `files` (name, content) of an archive with the given `prefix` (may be empty).
+    /// The first of several entries with the same name (ignoring case and separator) wins.
+    #[must_use]
+    pub fn new(prefix: &str, files: Vec<(String, Vec<u8>)>) -> Self {
+        let mut map = std::collections::BTreeMap::new();
+        for (name, content) in files {
+            map.entry(name.replace('\\', "/").to_lowercase())
+                .or_insert((name, content));
+        }
+        MemoryIncludes {
+            prefix: prefix.replace('\\', "/").trim_matches('/').to_lowercase(),
+            files: map,
+        }
+    }
+
+    /// The file `include_path` names when included from the entry `origin` (an entry name, or `None` for
+    /// the top level).
+    fn find(
+        &self,
+        include_path: &str,
+        origin: Option<&Path>,
+        line: u32,
+    ) -> Result<(&str, &[u8]), Error> {
+        let bad = |why: &str| {
+            error!(
+                "Include \"{}\" is not allowed ({why}); only files of the same PBO can be included.",
+                printable(include_path)
+            )
+        };
+        let key = if let Some(rest) = include_path.strip_prefix('\\') {
+            let rest = rest.replace('\\', "/").to_lowercase();
+            let below = if self.prefix.is_empty() {
+                None
+            } else {
+                rest.strip_prefix(&self.prefix)
+                    .and_then(|r| r.strip_prefix('/'))
+            };
+            let Some(below) = below else {
+                return Err(include_not_found(include_path, origin, line));
+            };
+            if crate::pbo::safe_relative_path(below).is_none() {
+                return Err(bad("invalid path"));
+            }
+            below.to_string()
+        } else {
+            if include_path.starts_with('/')
+                || crate::pbo::safe_relative_path(include_path).is_none()
+            {
+                return Err(bad("absolute, drive, `..` or invalid path"));
+            }
+            let rel = include_path.replace('\\', "/").to_lowercase();
+            let folder = origin
+                .map(|o| o.to_string_lossy().replace('\\', "/").to_lowercase())
+                .and_then(|o| o.rsplit_once('/').map(|(f, _)| f.to_string()));
+            match folder {
+                Some(f) => format!("{f}/{rel}"),
+                None => rel,
+            }
+        };
+        self.files
+            .get(&key)
+            .map(|(name, content)| (name.as_str(), content.as_slice()))
+            .ok_or_else(|| include_not_found(include_path, origin, line))
+    }
 }
 
 impl IncludeFolders {
@@ -228,7 +313,15 @@ impl IncludeFolders {
         IncludeFolders {
             search,
             direct: Vec::new(),
+            memory: None,
         }
+    }
+
+    /// Takes the includes from `memory` only; the file system is not read.
+    #[must_use]
+    pub fn with_memory(mut self, memory: MemoryIncludes) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     /// Adds folders that are only checked directly.
@@ -258,6 +351,8 @@ pub struct PreprocessInfo {
     steps: usize,
     /// `#include`s processed so far, over the file and its includes.
     includes: usize,
+    /// Bytes of the in-memory includes read so far.
+    include_bytes: usize,
 }
 
 impl PreprocessInfo {
@@ -393,8 +488,15 @@ const MAX_INCLUDE_DEPTH: usize = 32;
 /// the same file counts). Bounds exponential include fan-out (#60), which no token budget sees.
 const MAX_INCLUDES: usize = 10_000;
 
+/// Maximum bytes of in-memory includes ([`MemoryIncludes`]) one `preprocess` call reads, every inclusion counted.
+const MAX_INCLUDE_BYTES: usize = 64 << 20;
+
 /// The file as the cycle check compares it: canonical when the file system can say, else as given.
-fn identity(path: &Path) -> PathBuf {
+fn identity(path: &Path, memory: bool) -> PathBuf {
+    if memory {
+        // an archive entry name is not a file system path
+        return PathBuf::from(path.to_string_lossy().replace('\\', "/").to_lowercase());
+    }
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
@@ -1138,16 +1240,30 @@ fn preprocess_rec(
                                 break 'line;
                             }
 
-                            let file_path = find_include_file(
-                                &path,
-                                origin,
-                                includefolders,
-                                original_lineno,
-                                warnings,
-                            )?;
+                            let memory = includefolders.memory.as_ref();
+                            let (file_path, in_memory) = if let Some(m) = memory {
+                                let (name, content) = m.find(&path, origin, original_lineno)?;
+                                (PathBuf::from(name), Some(content))
+                            } else {
+                                (
+                                    find_include_file(
+                                        &path,
+                                        origin,
+                                        includefolders,
+                                        original_lineno,
+                                        warnings,
+                                    )?,
+                                    None,
+                                )
+                            };
 
-                            let wanted = identity(&file_path);
-                            if info.import_stack.iter().any(|p| identity(p) == wanted) {
+                            let is_mem = memory.is_some();
+                            let wanted = identity(&file_path, is_mem);
+                            if info
+                                .import_stack
+                                .iter()
+                                .any(|p| identity(p, is_mem) == wanted)
+                            {
                                 let chain: Vec<String> = info
                                     .import_stack
                                     .iter()
@@ -1172,11 +1288,27 @@ fn preprocess_rec(
                                 ));
                             }
 
+                            let content = if let Some(bytes) = in_memory {
+                                info.include_bytes = info.include_bytes.saturating_add(bytes.len());
+                                if info.include_bytes > MAX_INCLUDE_BYTES {
+                                    return Err(error!(
+                                        "Include \"{}\" brings the included files past {MAX_INCLUDE_BYTES} bytes",
+                                        printable(&path)
+                                    ));
+                                }
+                                String::from_utf8(bytes.to_vec()).map_err(|e| {
+                                    error!(
+                                        "Include \"{}\" is not valid UTF-8: {e}",
+                                        printable(&path)
+                                    )
+                                })?
+                            } else {
+                                let mut content = String::new();
+                                File::open(&file_path)?.read_to_string(&mut content)?;
+                                content
+                            };
                             info.import_stack.push(file_path.clone());
                             info.include_depth += 1;
-
-                            let mut content = String::new();
-                            File::open(&file_path)?.read_to_string(&mut content)?;
                             let result = preprocess_rec(
                                 &content,
                                 Some(&file_path),
@@ -1371,7 +1503,12 @@ pub fn preprocess_in(
         input = input[3..].to_string();
     }
 
-    for folder in includefolders.search.iter().chain(&includefolders.direct) {
+    for folder in includefolders
+        .search
+        .iter()
+        .chain(&includefolders.direct)
+        .filter(|_| includefolders.memory.is_none())
+    {
         if !folder.is_dir() {
             return Err(error!(
                 "Include folder \"{}\" does not exist or is not a directory.",
@@ -1388,6 +1525,7 @@ pub fn preprocess_in(
         expanded_bytes: 0,
         steps: 0,
         includes: 0,
+        include_bytes: 0,
     };
 
     if let Some(ref path) = origin {

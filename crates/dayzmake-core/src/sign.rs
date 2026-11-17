@@ -336,8 +336,8 @@ fn generate_hashes(
     let namehash = namehash(pbo);
     // the prefix part both of the following hashes end with
     let mut suffix = Vec::new();
-    if let Some(prefix) = pbo.prefix() {
-        suffix.extend(pbo.extension_bytes(prefix));
+    if let (Some(prefix), Some(prefix_bytes)) = (pbo.prefix(), pbo.prefix_bytes()) {
+        suffix.extend(prefix_bytes);
         if !prefix.ends_with('\\') {
             suffix.push(b'\\');
         }

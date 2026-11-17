@@ -339,6 +339,7 @@ fn cli_usage_lists_api() {
         "dayzmake api sub",
         "dayzmake api enum",
         "dayzmake api chain",
+        "dayzmake api config",
         "dayzmake api src",
         "dayzmake api defines",
         "dayzmake api update",
@@ -2191,4 +2192,58 @@ fn cat_force_to_stdout_is_accepted() {
 /// A rapified config starts with a NUL byte followed by `raP`.
 fn is_rapified_bytes(bytes: &[u8]) -> bool {
     bytes.starts_with(b"\0raP")
+}
+
+#[test]
+fn extract_unpacks_an_install_by_prefix_with_a_map() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), "a/$PBOPREFIX$", "a");
+    write(dir.path(), "a/x.txt", "x");
+    write(
+        dir.path(),
+        "a/config.cpp",
+        "class CfgPatches { class A {}; };",
+    );
+    write(dir.path(), "b/$PBOPREFIX$", "b\\sub");
+    write(dir.path(), "b/y.txt", "y");
+    std::fs::create_dir_all(dir.path().join("install/dta")).unwrap();
+    std::fs::create_dir_all(dir.path().join("install/Addons")).unwrap();
+    let (code, _, err) = dayzmake(&["pack", "a", "install/dta/a.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    let (code, _, err) = dayzmake(&["build", "b", "install/Addons/b.pbo"], dir.path());
+    assert_eq!(code, 0, "{err}");
+
+    let (code, out, err) = dayzmake(&["extract", "-v", "install", "out"], dir.path());
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "extracted 3 files from 2 PBOs to out\n");
+    assert_eq!(
+        std::fs::read(dir.path().join("out/pbo-map.tsv")).unwrap(),
+        b"a\tdta/a.pbo\nb/sub\tAddons/b.pbo\n"
+    );
+    assert!(dir.path().join("out/a/x.txt").is_file());
+    assert!(dir.path().join("out/b/sub/y.txt").is_file());
+
+    // an existing target needs -f
+    let (code, _, err) = dayzmake(&["extract", "install", "out"], dir.path());
+    assert_eq!(code, 1);
+    assert!(err.contains("--force"), "{err}");
+
+    // --derapify, --only
+    let (code, _, err) = dayzmake(
+        &[
+            "extract",
+            "-f",
+            "--derapify",
+            "--only",
+            "*.cpp",
+            "--only",
+            "*.bin",
+            "install",
+            "out",
+        ],
+        dir.path(),
+    );
+    assert_eq!(code, 0, "{err}");
+    assert!(dir.path().join("out/a/config.cpp").is_file());
+    assert!(!dir.path().join("out/a/x.txt").exists());
 }

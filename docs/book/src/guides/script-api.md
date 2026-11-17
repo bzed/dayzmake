@@ -9,6 +9,35 @@ The examples use a tiny stand-in game so that the output is short and reproducib
 `PlayerBase` and `Apple`, the enum `EStatTypes`, and the stand-in is selected with `--dayz dz`. With your real
 Steam install leave `--dayz` out: dayzmake finds the game itself (see [Environment and files](../reference/environment.md)).
 
+## Who calls this?
+
+`api find` matches declarations only. To find call sites and other usages, search the script bodies with
+`api grep`; the lines are matched as they are in the source, comments included:
+
+```text
+$ dayzmake api grep 'GetGame\(\)\.GetMission\(\)' --max 2
+scripts\3_Game\Sandstorm.c:95: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStart(continuedSession);
+scripts\3_Game\Sandstorm.c:115: \t\t\tGetGame().GetMission().GetWorldData().WeatherSandstormStop(calledByWeather);
+... 4 more lines (raise --max or narrow the query)
+```
+
+Add `--ignore-case` for a case-insensitive match and `-m cf` to search a mod's scripts too. See
+[api grep](../reference/api.md#dayzmake-api-grep).
+
+## Reading the game sources
+
+For everything the index does not answer, extract the sources once and use your editor and `grep`. `extract` unpacks
+every PBO of an install under its prefix and derapifies the configs, so `dz\scripts` ends up in `dz/scripts`
+and every `config.bin` is a `config.cpp`:
+
+```text
+$ dayzmake extract --derapify --only '*.c' --only '*.bin' --only '*.cpp' --only '*.h' ~/DayZ game-sources
+```
+
+`game-sources/pbo-map.tsv` tells which PBO a prefix came from. Run it again with `-f` after a game update: the old
+tree is replaced in one step and files that no longer exist are gone. A mod folder (`@Foo`) or a single PBO works
+the same. See [extract](../reference/pbo.md#dayzmake-extract).
+
 ## What does this class have?
 
 ```text
@@ -35,6 +64,28 @@ class Entity
   void OnRPC(PlayerIdentity sender,int rpc_type,ParamsReadContext ctx)
   void SetHealth(float value)
 ```
+
+## What does this config class inherit?
+
+`api config` is the same lookup for configs (`config.bin` and `config.cpp`): what does `CfgVehicles/Hatchback_02`
+inherit, and what is its resolved `displayName`? It merges the configs of the game and of the mods in load order,
+as the engine does, so the answer includes what mods change.
+
+```text
+$ dayzmake api config CfgVehicles/Hatchback_02 --max 6
+CfgVehicles/Hatchback_02
+chain: Hatchback_02 : CarScript : Car : Transport : All
+defined in (2):
+  [vanilla] Addons/vehicles_wheeled.pbo
+  [vanilla] Addons/sounds_hpp.pbo
+properties (77):
+... 80 more lines (raise --max or narrow the query)
+```
+
+Every property is tagged with the class it comes from (`displayName = "..."  (from Hatchback_02)`), and the lines
+after the properties list the classes declared inside the class and its subclasses. Add `-m <mods>` to see a class
+as the mods leave it, `--json` for a structured object. The first run builds one cached index per source, which
+takes a moment for the game; later runs read the cache. See [api config](../reference/api.md#dayzmake-api-config).
 
 ## Where is it, and what derives from it?
 

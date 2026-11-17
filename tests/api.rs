@@ -2022,6 +2022,276 @@ mod from_pbo {
         assert!(out.contains("Base.c:"), "{out}");
     }
 
+    /// A mod `@Grep` with two scripts (the PBO prefix is `gm`).
+    fn grep_mod(w: &World) -> String {
+        let dir = w.home.join("@Grep");
+        let empty = tempfile::tempdir().expect("tmp");
+        make_pbo(
+            empty.path(),
+            &[
+                (
+                    "4_World/b.c",
+                    "// getgame().GetMission() in a comment\nvoid B()\n{\n\tGetGame().GetMission();\n\tgetgame().getmission();\n}\n",
+                ),
+                (
+                    "3_Game/a.c",
+                    "void A() { GetGame().GetMission(); }\nmodded class Base\n{\n}\n",
+                ),
+            ],
+            Some("gm"),
+            &dir.join("addons/gm.pbo"),
+        );
+        dir.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn api_grep_matches_sorted_by_source_path_and_line() {
+        let w = World::new();
+        let m = grep_mod(&w);
+        let (code, out, err) = w.run(&["api", "grep", "class Base", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines,
+            [
+                "[vanilla] scripts\\3_Game\\Base.c:3: class Base",
+                "[vanilla] scripts\\4_World\\Modded.c:1: modded class Base",
+                "[_Grep] gm\\3_Game\\a.c:2: modded class Base",
+            ]
+        );
+        // mods sort by path, then line, whatever the order inside the PBO
+        let (code, out, err) = w.run(&["api", "grep", r"GetMission\(\)", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            out.lines().collect::<Vec<_>>(),
+            [
+                "[_Grep] gm\\3_Game\\a.c:1: void A() { GetGame().GetMission(); }",
+                // comments count; control characters are escaped, as everywhere in the output
+                "[_Grep] gm\\4_World\\b.c:1: // getgame().GetMission() in a comment",
+                "[_Grep] gm\\4_World\\b.c:4: \\tGetGame().GetMission();",
+            ]
+        );
+        // vanilla only: no tags
+        let (code, out, err) = w.run(&["api", "grep", "class Base"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(
+            out.starts_with("scripts\\3_Game\\Base.c:3: class Base\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn api_grep_ignore_case_and_comments() {
+        let w = World::new();
+        let m = grep_mod(&w);
+        let (code, out, err) = w.run(&[
+            "api",
+            "grep",
+            "--ignore-case",
+            r"getgame\(\)\.getmission",
+            "-m",
+            &m,
+        ]);
+        assert_eq!(code, 0, "{err}");
+        let n: Vec<&str> = out
+            .lines()
+            .map(|l| l.split(": ").next().expect("path"))
+            .collect();
+        assert_eq!(
+            n,
+            [
+                "[_Grep] gm\\3_Game\\a.c:1",
+                "[_Grep] gm\\4_World\\b.c:1",
+                "[_Grep] gm\\4_World\\b.c:4",
+                "[_Grep] gm\\4_World\\b.c:5",
+            ],
+            "{out}"
+        );
+        let (code, out, _) = w.run(&["api", "grep", "nonexistent_zzz"]);
+        assert_eq!(code, 0);
+        assert!(out.starts_with("no match"), "{out}");
+    }
+
+    #[test]
+    fn api_grep_max_truncates_and_counts_the_rest() {
+        let w = World::new();
+        let m = grep_mod(&w);
+        let (code, out, err) = w.run(&[
+            "api",
+            "grep",
+            "--ignore-case",
+            "getgame",
+            "--max",
+            "2",
+            "-m",
+            &m,
+        ]);
+        assert_eq!(code, 0, "{err}");
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "{out}");
+        assert_eq!(
+            lines[2],
+            "... 2 more lines (raise --max or narrow the query)"
+        );
+    }
+
+    #[test]
+    fn api_grep_json_is_an_array() {
+        let w = World::new();
+        let m = grep_mod(&w);
+        let (code, out, err) = w.run(&["api", "grep", "--json", "modded class Base", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(
+            v,
+            serde_json::json!([
+                {"source": "vanilla", "path": "scripts\\4_World\\Modded.c", "line": 1, "text": "modded class Base"},
+                {"source": "_Grep", "path": "gm\\3_Game\\a.c", "line": 2, "text": "modded class Base"},
+            ])
+        );
+    }
+
+    #[test]
+    fn api_grep_merges_hits_across_the_pbos_of_a_mod() {
+        let w = World::new();
+        let dir = w.home.join("@Two");
+        let empty = tempfile::tempdir().expect("tmp");
+        // paths interleave across the two PBOs: a/1, b/1 (pbo one) and a/2, b/0 (pbo two) with prefix p
+        make_pbo(
+            empty.path(),
+            &[("a.c", "hit\nhit\n"), ("c.c", "hit\n")],
+            Some("p"),
+            &dir.join("addons/one.pbo"),
+        );
+        make_pbo(
+            empty.path(),
+            &[("b.c", "hit\n"), ("0.c", "x\nhit\n")],
+            Some("p"),
+            &dir.join("addons/two.pbo"),
+        );
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "grep", "^hit$", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        let paths: Vec<&str> = out
+            .lines()
+            .map(|l| &l[l.find(' ').expect("tag") + 1..])
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "p\\0.c:2: hit",
+                "p\\a.c:1: hit",
+                "p\\a.c:2: hit",
+                "p\\b.c:1: hit",
+                "p\\c.c:1: hit"
+            ]
+        );
+        for max in ["0", "1", "3", "4"] {
+            let (code, out, err) = w.run(&["api", "grep", "^hit$", "-m", &m, "--max", max]);
+            assert_eq!(code, 0, "{err}");
+            let n: usize = max.parse().expect("n");
+            let lines: Vec<&str> = out.lines().collect();
+            assert_eq!(lines.len(), n + 1, "{max}: {out}");
+            assert_eq!(
+                lines[n],
+                format!("... {} more lines (raise --max or narrow the query)", 5 - n)
+            );
+            assert!(!out.contains("no match"), "{out}");
+            if n > 0 {
+                assert!(lines[0].ends_with("p\\0.c:2: hit"), "{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn api_grep_invalid_regex_is_a_clear_error() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "grep", "(unclosed"]);
+        assert_eq!(code, 1, "{out}");
+        assert!(err.contains("invalid regex"), "{err}");
+        assert!(err.contains("(unclosed"), "{err}");
+    }
+
+    #[test]
+    fn api_src_context_clamps_at_the_file_start() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--context", "5"]);
+        assert_eq!(code, 0, "{err}");
+        let want = "// ==== [vanilla] dta/scripts.pbo scripts\\3_Game\\Base.c:3\n\
+                    1| /** @brief The base of everything. It has more to say.\n\
+                    2|  *  @param nothing */\n\
+                    3| class Base\n\
+                    4| {\n\
+                    5| \t/*! Counter, with a doc. Not this. */\n\
+                    6| \tint m_Count;\n\
+                    7| \tprotected int m_Prot;\n\
+                    8| \tprivate int m_Secret;\n";
+        // the second file is the modded class, separated by a blank line
+        assert_eq!(out.split("\n\n").next(), Some(want.trim_end()));
+        let (code, out, err) = w.run(&["api", "src", "Base", "--context", "0"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("\n3| class Base\n\n"), "{out}");
+    }
+
+    #[test]
+    fn api_src_lines_range_pads_line_numbers() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "8-11"]);
+        assert_eq!(code, 0, "{err}");
+        let first = out.split("\n\n").next().expect("first file");
+        let mut it = first.lines();
+        assert!(it.next().expect("header").starts_with("// ==== [vanilla]"));
+        assert_eq!(it.next(), Some(" 8| \tprivate int m_Secret;"));
+        assert_eq!(it.next(), Some(" 9| \tstatic const int LIMIT = 10;"));
+        assert_eq!(it.next(), Some("10| \tstatic int s_Value = 5;"));
+        assert_eq!(it.next(), Some("11| \tint m_Arr[4];"));
+        assert_eq!(it.next(), None);
+        // past the end is clamped
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "80-9999"]);
+        assert_eq!(code, 0, "{err}");
+        let first = out.split("\n\n").next().expect("first file");
+        assert_eq!(first.lines().count(), 1 + 2, "{out}");
+        assert!(first.lines().nth(1).expect("line").starts_with("80| "));
+    }
+
+    #[test]
+    fn api_src_range_errors() {
+        let w = World::new();
+        for (args, msg) in [
+            (&["--context", "2", "--lines", "1-2"][..], "exclude"),
+            (&["--context", "2", "--cat"][..], "exclude"),
+            (&["--lines", "1-2", "--cat"][..], "exclude"),
+            (&["--lines", "5-2"][..], "5-2"),
+            (&["--lines", "abc"][..], "--lines"),
+            (&["--context", "x"][..], "--context"),
+        ] {
+            let mut a = vec!["api", "src", "Base"];
+            a.extend_from_slice(args);
+            let (code, out, err) = w.run(&a);
+            assert_eq!(code, 1, "{args:?}: {out}");
+            assert!(err.contains(msg), "{args:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn api_src_range_json() {
+        let w = World::new();
+        let (code, out, err) = w.run(&["api", "src", "Base", "--lines", "2-3", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let v: serde_json::Value = serde_json::from_str(&out).expect("json");
+        let f = &v["files"][0];
+        assert_eq!(f["index"], "vanilla");
+        assert_eq!(f["line"], 3);
+        assert_eq!(
+            f["lines"],
+            serde_json::json!([
+                {"line": 2, "text": " *  @param nothing */"},
+                {"line": 3, "text": "class Base"}
+            ])
+        );
+        assert!(f.get("text").is_none());
+    }
+
     #[test]
     fn api_class_json() {
         let w = World::new();
@@ -2649,5 +2919,77 @@ mod from_pbo {
         assert_eq!(mods[0]["id"], 100);
         assert_eq!(mods[0]["has_scripts"], true);
         assert_eq!(mods[2]["has_scripts"], false);
+    }
+
+    #[test]
+    fn dayz_option_names_the_install_and_reports_a_missing_scripts_pbo() {
+        let w = World::new();
+        let game = w.root.join("steamapps/common/DayZ");
+        let (code, out, err) = w.run(&["api", "class", "Base", "--dayz", &game.to_string_lossy()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.contains("class Base"), "{out}");
+        let (code, out, _) = w.run(&[
+            "api",
+            "class",
+            "Base",
+            "-v",
+            "--dayz",
+            &game.to_string_lossy(),
+        ]);
+        assert_eq!(code, 0);
+        assert!(out.contains("stable build unknown"), "{out}");
+        let empty = w.home.join("nogame");
+        fs::create_dir_all(&empty).expect("mkdir");
+        let (code, _, err) = w.run(&["api", "class", "Base", "--dayz", &empty.to_string_lossy()]);
+        assert_eq!(code, 1);
+        assert!(err.contains("not found (--dayz)"), "{err}");
+    }
+
+    #[test]
+    fn a_corrupt_scripts_pbo_is_an_error() {
+        let w = World::new();
+        fs::write(w.stable_pbo(), b"not a pbo at all").expect("write");
+        let (code, _, err) = w.run(&["api", "class", "Base"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("scripts.pbo"), "{err}");
+    }
+
+    #[test]
+    fn api_src_of_an_unknown_name_is_an_error_and_a_file_without_a_final_newline_gets_one() {
+        let w = World::new();
+        let (code, _, err) = w.run(&["api", "src", "NoSuchThing", "--cat"]);
+        assert_eq!(code, 1);
+        assert!(err.contains("no class or enum named"), "{err}");
+        make_pbo(
+            &fixture("vanilla/scripts"),
+            &[("3_Game/NoNl.c", "class NoNl {}")],
+            None,
+            &w.stable_pbo(),
+        );
+        let (code, out, err) = w.run(&["api", "src", "NoNl", "--cat"]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.ends_with("class NoNl {}\n"), "{out:?}");
+    }
+
+    #[test]
+    fn grep_skips_an_unreadable_mod_pbo_and_a_mod_pbo_without_scripts() {
+        let w = World::new();
+        let dir = w.home.join("@Odd");
+        fs::create_dir_all(dir.join("addons")).expect("mkdir");
+        fs::write(dir.join("addons/bad.pbo"), b"garbage").expect("write");
+        fs::write(
+            dir.join("addons/conf.pbo"),
+            raw_pbo(
+                &[("config.cpp", b"class CfgPatches {};")],
+                &[("prefix", "odd")],
+            ),
+        )
+        .expect("write");
+        let m = dir.to_string_lossy().into_owned();
+        let (code, out, err) = w.run(&["api", "grep", "zzz_not_there", "-m", &m]);
+        assert_eq!(code, 0, "{err}");
+        assert!(err.contains("api-bad-pbo"), "{err}");
+        // searched vanilla and a mod: no hint to add mods
+        assert_eq!(out.trim(), "no match");
     }
 }

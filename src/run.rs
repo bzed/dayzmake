@@ -6,10 +6,12 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::cli_io::{AtomicTarget, Input, Output, StdoutState, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
-use crate::commands::{binarize, config, p3d, paa, pbo, sign};
+use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
+use dayzmake_core::extract::ExtractOptions;
 use dayzmake_core::p3d::model_magic;
+use dayzmake_core::pbo::UnpackOptions;
 use dayzmake_core::preprocess::IncludeFolders;
 use dayzmake_core::sign::BISignVersion;
 use dayzmake_core::warning::WarningSink;
@@ -27,8 +29,9 @@ Usage:
     dayzmake binarize [-v] [-f] [-w <wname>]... <source> <target>
     dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>]... [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
     dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privatekey>] [-s <signature>] <sourcefolder> [<target>]
-    dayzmake inspect [-v] [<source>]
-    dayzmake unpack [-v] [-f] [--use-prefix] <source> <targetfolder>
+    dayzmake inspect [-v] [--json] [<source>]
+    dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <pattern>]... <source> <targetfolder>
+    dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepattern>]... <source> <targetfolder>
     dayzmake cat [-v] [-f] <source> <filename> [<target>]
     dayzmake keygen [-v] [-f] <keyname>
     dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
@@ -40,8 +43,10 @@ Usage:
     dayzmake api sub [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--all] [--json] <name>
     dayzmake api enum [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <name>
     dayzmake api chain [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--json] <name>
-    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--json] <name>
+    dayzmake api src [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--cat] [--context <n>] [--lines <a-b>] [--json] <name>
+    dayzmake api grep [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--max <n>] [--ignore-case] [--json] <regex>
     dayzmake api defines [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] [<regex>]
+    dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
     dayzmake mcp [-v]
@@ -60,6 +65,8 @@ Commands:
     inspect     Inspect a PBO and list contained files, or a model (MLOD/ODOL v56) and
                 show its format, version, LODs, textures, materials and selections.
     unpack      Unpack a PBO into a folder.
+    extract     Unpack every PBO of a DayZ install, a mod folder or a single PBO into one tree by prefix,
+                optionally derapified, with a prefix -> PBO map (pbo-map.tsv).
     cat         Read the named file from the target PBO to stdout.
     keygen      Generate a keypair with the specified path (extensions are added).
     sign        Sign a PBO with the given private key.
@@ -67,7 +74,8 @@ Commands:
     paa2img     Convert a PAA file to a standard image format (e.g. PNG).
     img2paa     Convert a standard image file to PAA.
     api         Query the DayZ script API from the installed scripts.pbo (vanilla) and,
-                with -m, from mods: class, find, sub, enum, chain, src, defines, update;
+                with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
+                config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
@@ -77,7 +85,8 @@ Options:
     -w --warning <wname>        Warning to disable
     -i --include <includefolder>    Folder to search for includes; the CWD is only checked directly.
     -x --exclude <excludepattern>   Glob pattern to exclude from PBO.
-                                      For unpack: pattern to exclude from output folder.
+                                      For unpack and extract: pattern of entries to leave out (matched against the
+                                      entry path).
     -d --indent <indentation>   String to use for indentation. 4 spaces by default.
     -e --headerext <headerext>  Extension to add to PBO header as \"key=value\".
     -k --key <privatekey>       Sign the PBO with the given private key.
@@ -86,6 +95,8 @@ Options:
     -s --signature <signature>  Signature path to use when signing the PBO.
     --v2                     Generate an older v2 signature.
     --use-prefix                unpack: extract into <targetfolder>/<prefix>/.
+    --only <pattern>            unpack, extract: write only the entries that match a pattern (-x wins).
+    --derapify                  extract: write every rapified .bin as a .cpp of the same name.
     --proton-binarize           Linux: binarize .p3d/.rtm with DayZ Tools' binarize.exe under Proton.
     --experimental              api: use the experimental branch instead of stable.
     --dayz <dir>                api: DayZ client/server directory (uses <dir>/dta/scripts.pbo).
@@ -100,7 +111,10 @@ Options:
     --mods-only                 api class: show only what the mods declare.
     --class <class>             api find: search only the members of this class or enum.
     --all                       api sub: include indirect subclasses.
+    --ignore-case               api grep: match case-insensitively.
     --cat                       api src: print the full source files.
+    --context <n>               api src: print n lines around each declaration, with line numbers.
+    --lines <a-b>               api src: print lines a to b of each file, with line numbers.
     --json                      api: print JSON instead of text.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
@@ -123,6 +137,7 @@ pub struct Args {
     cmd_pack: bool,
     cmd_inspect: bool,
     cmd_unpack: bool,
+    cmd_extract: bool,
     cmd_cat: bool,
     cmd_keygen: bool,
     cmd_sign: bool,
@@ -137,7 +152,9 @@ pub struct Args {
     cmd_enum: bool,
     cmd_chain: bool,
     cmd_src: bool,
+    cmd_grep: bool,
     cmd_defines: bool,
+    cmd_config: bool,
     cmd_update: bool,
     cmd_mods: bool,
     flag_experimental: bool,
@@ -150,12 +167,18 @@ pub struct Args {
     flag_class: Option<String>,
     flag_all: bool,
     flag_cat: bool,
+    flag_ignore_case: bool,
+    flag_context: Option<String>,
+    flag_lines: Option<String>,
     flag_json: bool,
     arg_name: String,
+    arg_path: String,
     arg_regex: Option<String>,
     flag_verbose: bool,
     flag_force: bool,
     flag_use_prefix: bool,
+    flag_derapify: bool,
+    flag_only: Vec<String>,
     flag_warning: Vec<String>,
     flag_include: Vec<String>,
     flag_exclude: Vec<String>,
@@ -314,7 +337,12 @@ fn run_command(
     } else if args.cmd_inspect {
         let mut input = get_input(args)?;
         if model_magic(&mut input)?.is_some() {
+            if args.flag_json {
+                return Err(error!("--json is only supported for PBOs."));
+            }
             p3d::cmd_inspect(&mut input, &mut stdout.writer())
+        } else if args.flag_json {
+            pbo::cmd_inspect_json(&mut input, &mut stdout.writer())
         } else {
             pbo::cmd_inspect(&mut input, &mut stdout.writer())
         }
@@ -323,13 +351,35 @@ fn run_command(
         pbo::cmd_cat(&mut get_input(args)?, &mut output, &args.arg_filename)?;
         output.commit()
     } else if args.cmd_unpack {
+        let mut options = UnpackOptions::default();
+        options.force = args.flag_force;
+        options.use_prefix = args.flag_use_prefix;
+        options.exclude.clone_from(&args.flag_exclude);
+        options.only.clone_from(&args.flag_only);
         pbo::cmd_unpack(
             &mut get_input(args)?,
             &PathBuf::from(&args.arg_targetfolder),
-            args.flag_force,
-            args.flag_use_prefix,
+            &options,
             warnings,
         )
+    } else if args.cmd_extract {
+        let mut options = ExtractOptions::default();
+        options.force = args.flag_force;
+        options.derapify = args.flag_derapify;
+        options.exclude.clone_from(&args.flag_exclude);
+        options.only.clone_from(&args.flag_only);
+        let target = PathBuf::from(&args.arg_targetfolder);
+        let summary = extract::cmd_extract(&required_source(args)?, &target, &options, warnings)?;
+        if args.flag_verbose {
+            writeln!(
+                stdout.writer(),
+                "extracted {} files from {} PBOs to {}",
+                summary.files(),
+                summary.pbos(),
+                target.display()
+            )?;
+        }
+        Ok(())
     } else if args.cmd_keygen {
         sign::cmd_keygen(PathBuf::from(&args.arg_keyname), args.flag_force)
     } else if args.cmd_sign {
@@ -370,9 +420,30 @@ fn run_command(
     }
 }
 
-/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
-fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
-    let ctx = api::ApiContext {
+/// `dayzmake api grep`: one line per hit, or the JSON array.
+fn run_grep(
+    args: &Args,
+    ctx: &api::ApiContext,
+    max: usize,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
+    for line in api::grep_lines(
+        ctx,
+        args.arg_regex.as_deref().unwrap_or_default(),
+        args.flag_ignore_case,
+        max,
+        args.flag_json,
+        warnings,
+    )? {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// What the `api` options select.
+fn api_context(args: &Args) -> api::ApiContext {
+    api::ApiContext {
         branch: if args.flag_experimental {
             Branch::Experimental
         } else {
@@ -381,7 +452,33 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
         dayz: args.flag_dayz.as_ref().map(PathBuf::from),
         mods: args.flag_mod.clone().unwrap_or_default(),
         refresh: args.flag_refresh || args.cmd_update,
-    };
+    }
+}
+
+/// `dayzmake api config`: the class, its chain and resolved properties, or the JSON object.
+fn run_config(
+    args: &Args,
+    ctx: &api::ApiContext,
+    max: usize,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
+    for line in api::config_answer(
+        ctx,
+        &args.arg_path,
+        max,
+        args.flag_json,
+        args.flag_verbose,
+        warnings,
+    )? {
+        writeln!(out, "{line}")?;
+    }
+    Ok(())
+}
+
+/// `dayzmake api ...`: load the indexes (rebuilding stale caches), run the query and print the answer.
+fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> Result<(), Error> {
+    let ctx = api_context(args);
     {
         if args.cmd_mods {
             let text = api::mods_text(&ctx, args.flag_json, warnings)?;
@@ -400,6 +497,24 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
             .flag_max
             .parse()
             .map_err(|_| error!("--max must be a number, not \"{}\"", args.flag_max))?;
+        if args.cmd_grep {
+            return run_grep(args, &ctx, max, out, warnings);
+        }
+        if args.cmd_src
+            && let Some(range) = api::SrcRange::parse(
+                args.flag_cat,
+                args.flag_context.as_deref(),
+                args.flag_lines.as_deref(),
+            )?
+        {
+            let text = api::src_range(&ctx, &args.arg_name, range, args.flag_json, warnings)?;
+            if args.flag_json {
+                writeln!(out, "{text}")?;
+            } else {
+                write!(out, "{text}")?;
+            }
+            return Ok(());
+        }
         if args.cmd_src && args.flag_cat {
             let text = api::src_cat(&ctx, &args.arg_name, args.flag_json, warnings)?;
             if args.flag_json {
@@ -408,6 +523,9 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
                 write!(out, "{text}")?;
             }
             return Ok(());
+        }
+        if args.cmd_config {
+            return run_config(args, &ctx, max, out, warnings);
         }
         let name = args.arg_name.clone();
         let query = if args.cmd_class {

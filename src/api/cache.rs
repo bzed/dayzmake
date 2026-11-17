@@ -6,6 +6,9 @@ use std::io::{Error, ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
 use super::model::{ApiIndex, INDEX_FORMAT, InputStamp};
 use dayzmake_core::error;
 use dayzmake_core::warning::{Warning, WarningSink};
@@ -68,17 +71,34 @@ pub fn stamps(inputs: &[PathBuf]) -> Result<Vec<InputStamp>, Error> {
         .collect()
 }
 
-fn load(file: &Path, want: &[InputStamp]) -> Option<ApiIndex> {
+/// An index the cache can store: it knows its format and inputs.
+pub trait Cacheable: Serialize + DeserializeOwned {
+    /// Whether this is of the current format and dayzmake version and was made from exactly `want`.
+    fn is_current(&self, want: &[InputStamp]) -> bool;
+    /// Records the inputs the index was built from.
+    fn set_inputs(&mut self, inputs: Vec<InputStamp>);
+}
+
+impl Cacheable for ApiIndex {
+    fn is_current(&self, want: &[InputStamp]) -> bool {
+        self.format == INDEX_FORMAT
+            && self.version == env!("CARGO_PKG_VERSION")
+            && self.inputs == want
+    }
+
+    fn set_inputs(&mut self, inputs: Vec<InputStamp>) {
+        self.inputs = inputs;
+    }
+}
+
+fn load<T: Cacheable>(file: &Path, want: &[InputStamp]) -> Option<T> {
     let bytes = fs::read(file).ok()?;
-    let index: ApiIndex = serde_json::from_slice(&bytes).ok()?;
-    (index.format == INDEX_FORMAT
-        && index.version == env!("CARGO_PKG_VERSION")
-        && index.inputs == want)
-        .then_some(index)
+    let index: T = serde_json::from_slice(&bytes).ok()?;
+    index.is_current(want).then_some(index)
 }
 
 /// Write `index` through an exclusively created temp file in the same directory and a rename.
-fn store(dir: &Path, key: &str, index: &ApiIndex) -> Result<(), Error> {
+fn store<T: Serialize>(dir: &Path, key: &str, index: &T) -> Result<(), Error> {
     let json = serde_json::to_vec(index).map_err(|e| error!("cannot serialize the index: {e}"))?;
     let mut attempts = 0;
     let (tmp, mut file) = loop {
@@ -120,13 +140,13 @@ fn cache_warning(warnings: &mut dyn WarningSink, msg: &str) {
 /// Returns an error when `key` has characters outside `[A-Za-z0-9_.-]`, an input cannot be read or `build`
 /// fails. A cache that cannot be found, created or written is a warning (`api-cache`): the freshly built index
 /// is returned.
-pub fn cached(
+pub fn cached<T: Cacheable>(
     key: &str,
     inputs: &[PathBuf],
     refresh: bool,
     warnings: &mut dyn WarningSink,
-    build: impl FnOnce(&mut dyn WarningSink) -> Result<ApiIndex, Error>,
-) -> Result<ApiIndex, Error> {
+    build: impl FnOnce(&mut dyn WarningSink) -> Result<T, Error>,
+) -> Result<T, Error> {
     if key.is_empty()
         || !key
             .chars()
@@ -150,7 +170,7 @@ pub fn cached(
         return Ok(index);
     }
     let mut index = build(warnings)?;
-    index.inputs = want;
+    index.set_inputs(want);
     if let Some(dir) = &dir {
         // The index is right either way; a cache that cannot be written only costs time.
         let _ = store(dir, key, &index)

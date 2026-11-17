@@ -794,3 +794,240 @@ fn stale_temp_file_of_the_target_is_skipped_whatever_its_case() {
         "{names:?}"
     );
 }
+
+/// The files below `dir`, as sorted `/`-separated relative paths.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn files_below(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn unpack_filtered(exclude: &[&str], only: &[&str]) -> Vec<String> {
+    let bytes = support::raw_pbo(
+        &[
+            ("scripts\\Game.C", b"c"),
+            ("scripts\\x.c", b"c"),
+            ("model.p3d", b"p"),
+            ("config.bin", b"b"),
+            ("data\\x.paa", b"t"),
+        ],
+        &[],
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let mut options = UnpackOptions::default();
+    options.exclude = exclude.iter().map(ToString::to_string).collect();
+    options.only = only.iter().map(ToString::to_string).collect();
+    unpack(
+        &mut Cursor::new(&bytes),
+        tmp.path(),
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    files_below(tmp.path())
+}
+
+#[test]
+fn unpack_only_writes_the_matching_entries() {
+    assert_eq!(
+        unpack_filtered(&[], &["*.c"]),
+        ["scripts/Game.C", "scripts/x.c"]
+    );
+    assert_eq!(
+        unpack_filtered(&[], &["*.c", "*config.bin"]),
+        ["config.bin", "scripts/Game.C", "scripts/x.c"]
+    );
+}
+
+#[test]
+fn unpack_exclude_leaves_out_the_matching_entries() {
+    assert_eq!(
+        unpack_filtered(&["*.p3d"], &[]),
+        ["config.bin", "data/x.paa", "scripts/Game.C", "scripts/x.c"]
+    );
+}
+
+#[test]
+fn unpack_exclude_wins_over_only() {
+    assert_eq!(
+        unpack_filtered(&["scripts/*"], &["*.c", "*.p3d"]),
+        ["model.p3d"]
+    );
+}
+
+#[test]
+fn unpack_conflict_check_only_covers_the_selected_entries() {
+    let bytes = support::raw_pbo(&[("a.c", b"c"), ("b.p3d", b"p")], &[]);
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("b.p3d"), "mine").unwrap();
+    let mut options = UnpackOptions::default();
+    options.only = vec!["*.c".to_string()];
+    unpack(
+        &mut Cursor::new(&bytes),
+        tmp.path(),
+        &options,
+        &mut Warnings::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("b.p3d")).unwrap(),
+        "mine"
+    );
+}
+
+#[test]
+fn raw_bytes_and_timestamps_of_a_read_pbo_are_available() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a\xffb.txt", b"x", 1_700_000_000)],
+        &[(b"prefix", b"scripts\n\xff")],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(
+        pbo.header_extensions_bytes(),
+        vec![(b"prefix".to_vec(), b"scripts\n\xff".to_vec())]
+    );
+    let header = &pbo.entry_headers()[0];
+    assert_eq!(header.name_bytes, b"a\xffb.txt");
+    assert_eq!(header.timestamp, 1_700_000_000);
+}
+
+#[test]
+fn raw_bytes_keep_utf8_and_windows_1252_apart() {
+    // UTF-8 "é" (c3 a9) and the byte e9 (windows-1252 "é") decode to the same string
+    let bytes = support::raw_pbo_bytes(
+        &[(b"\xc3\xa9.txt", b"x", 0), (b"\xe9.txt", b"y", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let pbo = read(&bytes);
+    assert_eq!(
+        pbo.header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xc3\xa9".to_vec()),
+            (b"other".to_vec(), b"\xe9".to_vec()),
+        ]
+    );
+    let names: Vec<Vec<u8>> = pbo
+        .entry_headers()
+        .into_iter()
+        .map(|h| h.name_bytes)
+        .collect();
+    assert_eq!(names, vec![b"\xc3\xa9.txt".to_vec(), b"\xe9.txt".to_vec()]);
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn rewrite(bytes: &[u8]) -> PBO {
+    let mut out = Vec::new();
+    read(bytes).write(&mut out).unwrap();
+    read(&out)
+}
+
+#[test]
+fn write_keeps_utf8_and_windows_1252_extensions_apart() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let again = rewrite(&bytes);
+    assert_eq!(
+        again.header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xc3\xa9".to_vec()),
+            (b"other".to_vec(), b"\xe9".to_vec()),
+        ]
+    );
+    // and the other way round
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xe9"), (b"other", b"\xc3\xa9")],
+    );
+    assert_eq!(
+        rewrite(&bytes).header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xe9".to_vec()),
+            (b"other".to_vec(), b"\xc3\xa9".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn write_keeps_the_stored_name_bytes_of_the_entry_that_survives() {
+    // both names decode to the same string, so they are one entry; the last one wins, with its data
+    for (first, second) in [
+        (&b"\xe9.txt"[..], &b"\xc3\xa9.txt"[..]),
+        (&b"\xc3\xa9.txt"[..], &b"\xe9.txt"[..]),
+    ] {
+        let bytes = support::raw_pbo_bytes(&[(first, b"x", 0), (second, b"y", 0)], &[]);
+        let again = rewrite(&bytes);
+        let headers = again.entry_headers();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers[0].name_bytes, second);
+        assert_eq!(again.entries().next().unwrap().1, b"y");
+    }
+}
+
+#[cfg(feature = "sign")]
+#[test]
+fn colliding_names_sign_and_verify_after_a_rewrite() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"\xe9.txt", b"x", 0), (b"\xc3\xa9.txt", b"y", 0)],
+        &[(b"prefix", b"\xc3\xa9"), (b"other", b"\xe9")],
+    );
+    let pbo = rewrite(&bytes);
+    let key = armk();
+    let signature = key.sign(&pbo, BISignVersion::V3).unwrap();
+    let public = key.to_public_key().unwrap();
+    public.verify(&pbo, &signature).unwrap();
+    let again = PBO::read(&mut pbo.to_cursor().unwrap()).unwrap();
+    assert_eq!(sign_bytes(&key, &again), sign_bytes(&key, &pbo));
+    public.verify(&again, &signature).unwrap();
+}
+
+#[test]
+fn set_header_extension_keeps_the_stored_bytes_of_the_others() {
+    let bytes = support::raw_pbo_bytes(
+        &[(b"a.txt", b"x", 0)],
+        &[(b"prefix", b"\xe9"), (b"other", b"\xc3\xa9")],
+    );
+    let mut pbo = read(&bytes);
+    pbo.set_header_extension("other", "x");
+    pbo.set_header_extension("added", "y");
+    let mut out = Vec::new();
+    pbo.write(&mut out).unwrap();
+    assert_eq!(
+        read(&out).header_extensions_bytes(),
+        vec![
+            (b"prefix".to_vec(), b"\xe9".to_vec()),
+            (b"other".to_vec(), b"x".to_vec()),
+            (b"added".to_vec(), b"y".to_vec()),
+        ]
+    );
+}
+
+#[test]
+fn entry_filter_normalises_patterns_and_names() {
+    use dayzmake_core::pbo::EntryFilter;
+    let filter = EntryFilter::new(vec!["Scripts\\*.C".into()], vec!["*\\skip.c".into()]);
+    assert!(filter.matches("scripts/a.c"));
+    assert!(filter.matches("SCRIPTS\\A.C"));
+    assert!(!filter.matches("scripts/skip.c"));
+    assert!(!filter.matches("data/a.c"));
+    assert!(EntryFilter::default().matches("anything"));
+}

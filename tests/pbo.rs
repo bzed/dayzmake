@@ -663,3 +663,76 @@ fn cli_sign_refuses_a_pbo_with_a_stale_trailer() {
     assert!(err.contains("repack it"), "{err}");
     assert!(!sig.exists());
 }
+
+/// The files below `dir` (sorted, `/`-separated, relative).
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn files_below(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, base, out);
+            } else {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+fn unpack_filter_pbo() -> Vec<u8> {
+    crafted_pbo(
+        &[
+            ("scripts\\a.c", b"c"),
+            ("model.p3d", b"p"),
+            ("config.bin", b"b"),
+            ("data\\x.paa", b"t"),
+        ],
+        None,
+    )
+}
+
+#[test]
+fn cli_unpack_only_writes_the_matching_entries() {
+    let (tmp, code, err) = unpack_crafted(&unpack_filter_pbo(), &["--only", "*.c"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(files_below(&tmp.path().join("target")), ["scripts/a.c"]);
+
+    let (tmp, code, err) = unpack_crafted(
+        &unpack_filter_pbo(),
+        &["--only", "*.c", "--only", "*config.bin"],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        files_below(&tmp.path().join("target")),
+        ["config.bin", "scripts/a.c"]
+    );
+}
+
+#[test]
+fn cli_unpack_x_leaves_out_the_matching_entries() {
+    let (tmp, code, err) = unpack_crafted(&unpack_filter_pbo(), &["-x", "*.p3d"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(
+        files_below(&tmp.path().join("target")),
+        ["config.bin", "data/x.paa", "scripts/a.c"]
+    );
+}
+
+#[test]
+fn cli_unpack_exclude_wins_over_only() {
+    let (tmp, code, err) = unpack_crafted(
+        &unpack_filter_pbo(),
+        &["-x", "scripts/*", "--only", "*.c", "--only", "*.p3d"],
+    );
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(files_below(&tmp.path().join("target")), ["model.p3d"]);
+}

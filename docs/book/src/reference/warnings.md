@@ -15,7 +15,7 @@ Each section lists the commands that can raise the warning, what triggers it and
 
 Raised by: `api`, `mcp`.
 
-A mod PBO has a `config.bin` that cannot be read, so its `defines[]` are not collected. The scripts of the PBO are still indexed.
+A `config.bin` or `config.cpp` cannot be read. An `#include` in a `config.cpp` is only resolved from the entries of the same PBO (relative to the including entry, or as `\prefix\path` inside the prefix of the PBO): an absolute path, a drive letter, a `..` component or a file that is not in the PBO makes the config unreadable, and the file system is never read. For a mod PBO its `defines[]` are not collected (the scripts of the PBO are still indexed); for `api config` the config is left out of the config index. A class with a name that cannot be a path segment (empty, with a `/` or a control character) is skipped with the same warning.
 
 ```text
 In file …/badmod/addons/entry.pbo: warning: cannot read config.bin: failed to fill whole buffer [api-bad-config]
@@ -43,7 +43,7 @@ warning: skipping mod <name>: <reason> [api-bad-mod]   (the message format)
 
 ## api-bad-pbo
 
-Raised by: `api`, `mcp`.
+Raised by: `api` (also `api grep`), `mcp`.
 
 A PBO of a mod is not readable as a PBO. It is skipped.
 
@@ -59,6 +59,36 @@ The cache folder cannot be found, created or written, or a cache file cannot be 
 
 ```text
 warning: cannot create the cache directory /proc/nope/x: No such file or directory (os error 2); the index is built without a cache [api-cache]
+```
+
+## api-config-base-changed
+
+Raised by: `api config`, `mcp`.
+
+A class is defined again with another base class, or with none. The engine takes the base of the last definition, so a mod that writes `class X { ... }` without `: Base` cuts X off from its base. The lookup shows the change as well. Only a change made by a mod (a `-m` source) is warned about, when the index of the mod is built and whenever it is merged over the game; the game changes some bases on purpose, and the lookup shows those changes without a warning.
+
+```text
+In file …/mod/addons/rebase.pbo: warning: class cfgvehicles/hatch changes its base class: Base -> (none) [api-config-base-changed]
+```
+
+## api-config-limit
+
+Raised by: `api config`, `mcp`.
+
+The config of one source (the game or a mod) has more than 2 million classes or 10 million properties, or the merge of the selected sources does. The rest is skipped; the classes read so far can still be looked up.
+
+```text
+In file …/mod/addons/huge.pbo: warning: the config of mod is too large (more than 2000000 classes or 10000000 properties); the rest is skipped [api-config-limit]   (the message format; no synthetic file in this manual triggers it)
+```
+
+## api-config-order
+
+Raised by: `api config`, `mcp`.
+
+The `requiredAddons` of the `CfgPatches` of some PBOs of one source depend on each other in a cycle, so no order satisfies them. The PBOs of the cycle load after the others, in path order.
+
+```text
+warning: requiredAddons form a cycle between 2 configs (Addons/c1.pbo, Addons/c2.pbo); they load in path order [api-config-order]
 ```
 
 ## api-unsafe-entry
@@ -91,14 +121,34 @@ Raised by: `build --proton-binarize`, `binarize`, and the MCP tools `pbo_build` 
 warning: <model>: <the line binarize.exe printed> [binarize-missing-texture]   (needs DayZ Tools; not reproducible without it)
 ```
 
+## derapify-failed
+
+Raised by: `extract --derapify`, and the MCP tool `extract`.
+
+A `*.bin` starts with the rapified signature but cannot be read as a config. It is written as it is, with its `.bin` name.
+
+```text
+warning: Keeping "config.bin" as it is: failed to fill whole buffer [derapify-failed]
+```
+
 ## duplicate-entry
 
-Raised by: `build`, `pack`, `unpack`.
+Raised by: `build`, `pack`, `unpack`, `extract`.
 
 Two files map to the same PBO entry name ignoring case (`A.txt` and `a.txt`), or, when unpacking, a PBO has two entries with the same path. The first in sorted order is used and the other skipped. An entry generated from source (the rapified `config.bin`) wins over a plain file of the same name.
 
 ```text
 warning: Skipping "data/a.txt": an entry named "data\A.txt" was already packed. [duplicate-entry]
+```
+
+## duplicate-path
+
+Raised by: `extract`.
+
+Two PBOs of the source write the same path ignoring case. The PBO that comes later in sorted order wins; the warning names both.
+
+```text
+warning: "a/x.txt" is in Addons/c.pbo and in dta/a.pbo; keeping the one of dta/a.pbo. [duplicate-path]
 ```
 
 ## empty-value
@@ -123,7 +173,7 @@ warning: Include "Inc/Common.HPP" only matched ".../w/inc/common.hpp" ignoring c
 
 ## leading-separator
 
-Raised by: `unpack`.
+Raised by: `unpack`, `extract`.
 
 A PBO entry name starts with `\` or `/`. It is extracted without it.
 
@@ -173,7 +223,7 @@ In file data/broken.p3d: warning: Cannot check textures and materials: not an ML
 
 ## non-utf8-filename
 
-Raised by: `unpack`.
+Raised by: `unpack`, `extract`.
 
 A PBO entry name is not valid UTF-8. It is extracted as Windows-1252.
 
@@ -199,6 +249,16 @@ A model or animation is already binarized (`ODOL`, `BMTR`). It is copied unchang
 
 ```text
 In file data/odol.p3d: warning: File is already binarized (ODOL v58); copying it as-is. [prebinarized-file]
+```
+
+## old-tree-left
+
+Raised by: `extract`.
+
+The new tree is in place, but the old target folder that was moved away could not be removed. Delete the folder the warning names.
+
+```text
+warning: Could not remove the old tree ".out.extract-4242-0.old": Permission denied (os error 13) [old-tree-left]
 ```
 
 ## prefix-slash
@@ -243,9 +303,9 @@ warning: Header extension "note" contains control characters; replaced them with
 
 ## unsafe-path
 
-Raised by: `build`, `pack`, `unpack`.
+Raised by: `build`, `pack`, `unpack`, `extract`.
 
-A file name is not usable as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name such as `CON` or `NUL`, `..`), or, when unpacking, an entry would leave the target folder or go through a symbolic link. The file or entry is skipped.
+A file name is not usable as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name such as `CON` or `NUL`, `..`), or, when unpacking, an entry would leave the target folder or go through a symbolic link. The file or entry is skipped. `extract` also skips a whole PBO whose prefix is not a safe folder name or is `pbo-map.tsv`.
 
 ```text
 warning: Skipping "data/bad:name.txt": unsafe entry name. [unsafe-path]

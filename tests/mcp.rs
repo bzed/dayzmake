@@ -132,6 +132,7 @@ fn mcp_initialize_and_list_tools() {
         "api_subclasses",
         "api_enum",
         "api_chain",
+        "api_config",
         "api_source",
         "api_defines",
         "api_update",
@@ -150,10 +151,11 @@ fn mcp_initialize_and_list_tools() {
         "pbo_sign",
         "pbo_verify",
         "binarize",
+        "extract",
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 23);
+    assert_eq!(names.len(), 26);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());
@@ -351,6 +353,81 @@ fn fake_steam() -> FakeSteam {
         cache,
         home,
     }
+}
+
+#[test]
+fn mcp_api_source_context_and_lines() {
+    let w = fake_steam();
+    let r = run_raw(
+        lines(&[
+            call(1, "api_source", &json!({"name":"Base","context":1})),
+            call(2, "api_source", &json!({"name":"Base","lines":"3-4"})),
+            call(
+                3,
+                "api_source",
+                &json!({"name":"Base","lines":"3-4","json":true}),
+            ),
+            call(
+                4,
+                "api_source",
+                &json!({"name":"Base","context":1,"lines":"3-4"}),
+            ),
+        ]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("\n3| class Base\n"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(text(&r.replies[1]).contains("\n3| class Base\n4| {\n"));
+    let j: Value = serde_json::from_str(text(&r.replies[2])).expect("json text");
+    assert_eq!(j["files"][0]["lines"][1]["text"], "{", "{j}");
+    assert!(is_error(&r.replies[3]));
+}
+
+#[test]
+fn mcp_api_grep() {
+    let w = fake_steam();
+    let r = run_raw(
+        lines(&[
+            call(
+                1,
+                "api_grep",
+                &json!({"regex":"class base","ignore_case":true}),
+            ),
+            call(2, "api_grep", &json!({"regex":"class base"})),
+            call(
+                3,
+                "api_grep",
+                &json!({"regex":"modded","json":true,"max":1}),
+            ),
+            call(4, "api_grep", &json!({"regex":"(bad"})),
+        ]),
+        &[
+            ("STEAM_ROOT", &w.root),
+            ("DAYZMAKE_CACHE", &w.cache),
+            ("HOME", &w.home),
+        ],
+        &w.home,
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).starts_with("scripts\\3_Game\\Base.c:3: class Base"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(text(&r.replies[1]).starts_with("no match"));
+    let j: Value = serde_json::from_str(text(&r.replies[2])).expect("json text");
+    assert_eq!(j.as_array().map(Vec::len), Some(1), "{j}");
+    assert_eq!(j[0]["source"], "vanilla");
+    assert!(is_error(&r.replies[3]));
 }
 
 #[test]
@@ -955,4 +1032,334 @@ fn mcp_image_to_paa_compress() {
     );
     assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
     assert!(p.join("o.paa").is_file());
+}
+
+#[test]
+fn mcp_unpack_filters_with_exclude_and_only() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::write(
+        tmp.path().join("a.pbo"),
+        make_pbo(&[
+            ("scripts\\a.c", b"c"),
+            ("model.p3d", b"p"),
+            ("config.bin", b"b"),
+            ("data\\x.paa", b"t"),
+        ]),
+    )
+    .expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"only","only":["*.c","*config.bin"]}),
+            ),
+            call(
+                2,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"excl","exclude":["*.p3d"]}),
+            ),
+            call(
+                3,
+                "pbo_unpack",
+                &json!({"pbo":"a.pbo","target":"both","only":["*.c","*.p3d"],"exclude":["scripts/*"]}),
+            ),
+        ],
+        tmp.path(),
+    );
+    for reply in &r.replies {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    let p = tmp.path();
+    assert!(p.join("only/scripts/a.c").is_file());
+    assert!(p.join("only/config.bin").is_file());
+    assert!(!p.join("only/model.p3d").exists());
+    assert!(!p.join("only/data/x.paa").exists());
+    assert!(!p.join("excl/model.p3d").exists());
+    assert!(p.join("excl/data/x.paa").is_file());
+    assert!(!p.join("both/scripts/a.c").exists());
+    assert!(p.join("both/model.p3d").is_file());
+    assert!(!p.join("both/config.bin").exists());
+}
+
+#[test]
+fn extract_tool_unpacks_an_install_and_replaces_with_force() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    fs::create_dir_all(tmp.path().join("install/dta")).expect("mkdir");
+    fs::write(
+        tmp.path().join("install/dta/a.pbo"),
+        support::raw_pbo(&[("x.txt", b"x"), ("y.c", b"y")], &[("prefix", "p")]),
+    )
+    .expect("write");
+    let r = run(
+        &[
+            call(
+                1,
+                "extract",
+                &json!({"source":"install","target":"out","only":["*.c"]}),
+            ),
+            call(2, "extract", &json!({"source":"install","target":"out"})),
+            call(
+                3,
+                "extract",
+                &json!({"source":"install","target":"out","force":true}),
+            ),
+        ],
+        tmp.path(),
+    );
+    assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert_eq!(text(&r.replies[0]), "extracted 1 files from 1 PBOs to out");
+    assert!(is_error(&r.replies[1]));
+    assert!(
+        text(&r.replies[1]).contains("force"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(!is_error(&r.replies[2]), "{}", text(&r.replies[2]));
+    assert!(tmp.path().join("out/p/x.txt").is_file());
+    assert_eq!(
+        fs::read(tmp.path().join("out/pbo-map.tsv")).expect("map"),
+        b"p\tdta/a.pbo\n"
+    );
+}
+
+/// The fake install plus `dta/cfg.pbo`, which holds a text config.
+fn fake_steam_with_config() -> FakeSteam {
+    let w = fake_steam();
+    let cfg = make_pbo(&[(
+        "config.cpp",
+        b"class CfgVehicles { class Base { a = 1; }; class Kid: Base { b = 2; }; };",
+    )]);
+    fs::write(w.root.join("steamapps/common/DayZ/dta/cfg.pbo"), cfg).expect("write");
+    w
+}
+
+fn api_env(w: &FakeSteam) -> [(&'static str, &Path); 3] {
+    [
+        ("STEAM_ROOT", &w.root),
+        ("DAYZMAKE_CACHE", &w.cache),
+        ("HOME", &w.home),
+    ]
+}
+
+#[test]
+fn mcp_every_api_tool_maps_its_arguments() {
+    let w = fake_steam_with_config();
+    let moddir = w.home.join("@Def");
+    fs::create_dir_all(moddir.join("addons")).expect("mkdir");
+    fs::write(
+        moddir.join("addons/d.pbo"),
+        support::raw_pbo(
+            &[("X.c", b"#define MCP_DEF_ZZ\nclass McpDef\n{\n}\n")],
+            &[("prefix", "mcpdef")],
+        ),
+    )
+    .expect("pbo");
+    let r = run_raw(
+        lines(&[
+            call(
+                1,
+                "api_class",
+                &json!({"name":"Base","inherited":true,"mods_only":false}),
+            ),
+            call(2, "api_find", &json!({"regex":"Get","class":"AIAgent"})),
+            call(3, "api_subclasses", &json!({"name":"Base","all":true})),
+            call(4, "api_enum", &json!({"name":"AIStatus"})),
+            call(5, "api_chain", &json!({"name":"Variant"})),
+            call(
+                6,
+                "api_defines",
+                &json!({"regex":"MCP_DEF","mods":s(&moddir)}),
+            ),
+            call(7, "api_config", &json!({"path":"CfgVehicles/Kid"})),
+            call(
+                8,
+                "api_config",
+                &json!({"path":"CfgVehicles/Kid","json":true}),
+            ),
+            call(9, "api_config", &json!({"path":"CfgVehicles/Nope"})),
+        ]),
+        &api_env(&w),
+        &w.home,
+    );
+    for reply in &r.replies[..8] {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    // one fact per tool that only the mapped argument can produce
+    assert!(
+        text(&r.replies[0]).contains("m_Count"),
+        "inherited member: {}",
+        text(&r.replies[0])
+    );
+    let found = text(&r.replies[1]);
+    assert!(found.contains("GetStatus"), "{found}");
+    assert!(
+        !found.contains("GetInstance"),
+        "only members of AIAgent: {found}"
+    );
+    assert!(
+        text(&r.replies[2]).contains("Crlf"),
+        "{}",
+        text(&r.replies[2])
+    );
+    assert!(
+        text(&r.replies[3]).contains("HEX"),
+        "{}",
+        text(&r.replies[3])
+    );
+    assert!(
+        text(&r.replies[4]).contains("Base"),
+        "{}",
+        text(&r.replies[4])
+    );
+    assert!(
+        text(&r.replies[5]).contains("MCP_DEF_ZZ"),
+        "{}",
+        text(&r.replies[5])
+    );
+    assert!(
+        text(&r.replies[6]).contains("Kid : Base"),
+        "{}",
+        text(&r.replies[6])
+    );
+    assert!(
+        text(&r.replies[6]).contains("a = 1"),
+        "{}",
+        text(&r.replies[6])
+    );
+    let j: Value = serde_json::from_str(text(&r.replies[7])).expect("json text");
+    assert_eq!(j["name"], "Kid");
+    assert!(is_error(&r.replies[8]));
+}
+
+#[test]
+fn mcp_api_source_argument_errors_windows_and_target() {
+    let w = fake_steam();
+    let target = w.home.join("base.c.txt");
+    let r = run_raw(
+        lines(&[
+            call(1, "api_source", &json!({"name":"Base","context":"x"})),
+            call(2, "api_source", &json!({"name":"Base","offset":-1})),
+            call(
+                3,
+                "api_source",
+                &json!({"name":"Base","cat":true,"offset":999_999}),
+            ),
+            call(
+                4,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target)}),
+            ),
+            call(
+                5,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target)}),
+            ),
+            call(
+                6,
+                "api_source",
+                &json!({"name":"Base","cat":true,"target":s(&target),"force":true}),
+            ),
+        ]),
+        &api_env(&w),
+        &w.home,
+    );
+    assert!(is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+    assert!(
+        text(&r.replies[0]).contains("context"),
+        "{}",
+        text(&r.replies[0])
+    );
+    assert!(is_error(&r.replies[1]), "{}", text(&r.replies[1]));
+    assert!(
+        text(&r.replies[1]).contains("offset"),
+        "{}",
+        text(&r.replies[1])
+    );
+    assert!(
+        text(&r.replies[2]).contains("past the end"),
+        "{}",
+        text(&r.replies[2])
+    );
+    assert!(!is_error(&r.replies[3]), "{}", text(&r.replies[3]));
+    assert!(
+        fs::read_to_string(&target)
+            .expect("read")
+            .contains("class Base")
+    );
+    assert!(is_error(&r.replies[4]), "an existing target needs force");
+    assert!(!is_error(&r.replies[5]), "{}", text(&r.replies[5]));
+}
+
+#[test]
+fn mcp_rejects_malformed_requests_and_arguments() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let mut input = lines(&[
+        json!({"jsonrpc":"2.0","id":[1],"method":"ping"}),
+        json!({"jsonrpc":"2.0","id":2,"result":{}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"pbo_inspect","arguments":5}}),
+        call(
+            4,
+            "pbo_unpack",
+            &json!({"pbo":"a.pbo","target":"o","exclude":"x"}),
+        ),
+        call(
+            5,
+            "pbo_unpack",
+            &json!({"pbo":"a.pbo","target":"o","exclude":[1]}),
+        ),
+    ]);
+    // an overlong last line without a newline
+    input.extend(std::iter::repeat_n(b'x', (16 << 20) + 10));
+    let r = run_raw(input, &[], tmp.path());
+    assert_eq!(r.replies[0]["error"]["code"], -32600);
+    // the response to nothing gets no reply: the next reply is the one for id 3
+    assert_eq!(r.replies[1]["id"], 3);
+    assert_eq!(r.replies[1]["error"]["code"], -32602);
+    for reply in &r.replies[2..4] {
+        assert!(is_error(reply), "{}", text(reply));
+        assert!(text(reply).contains("array of strings"), "{}", text(reply));
+    }
+    assert_eq!(r.replies.len(), 5, "{}", r.stdout);
+    assert_eq!(r.replies[4]["error"]["code"], -32600);
+}
+
+#[test]
+fn mcp_config_tools_write_targets_and_sign_v2() {
+    let tmp = tempfile::tempdir().expect("tmp");
+    let p = tmp.path();
+    fs::write(p.join("c.cpp"), "class A { x = 1; };\n").expect("write");
+    let sign = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bi/sign");
+    fs::copy(sign.join("testsig.pbo"), p.join("t.pbo")).expect("copy");
+    let r = run(
+        &[
+            call(
+                1,
+                "config_rapify",
+                &json!({"source":"c.cpp","target":"c.bin"}),
+            ),
+            call(
+                2,
+                "config_derapify",
+                &json!({"source":"c.bin","target":"back.cpp"}),
+            ),
+            call(3, "config_preprocess", &json!({"source":"c.cpp"})),
+            call(
+                4,
+                "pbo_sign",
+                &json!({"private_key":s(&sign.join("armk.biprivatekey")),"pbo":"t.pbo","v2":true}),
+            ),
+        ],
+        p,
+    );
+    for reply in &r.replies {
+        assert!(!is_error(reply), "{}", text(reply));
+    }
+    assert!(
+        fs::read_to_string(p.join("back.cpp"))
+            .expect("read")
+            .contains("x = 1;")
+    );
+    assert_eq!(text(&r.replies[3]), "signed");
+    assert!(p.join("t.pbo.armk.bisign").is_file());
 }

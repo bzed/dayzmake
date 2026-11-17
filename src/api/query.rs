@@ -149,8 +149,13 @@ pub enum QueryResult {
 }
 
 fn compile(pattern: &str) -> Result<Regex, Error> {
+    compile_with(pattern, true)
+}
+
+/// Compiles a user regex with the size limit; the error names the pattern.
+pub(crate) fn compile_with(pattern: &str, ignore_case: bool) -> Result<Regex, Error> {
     RegexBuilder::new(pattern)
-        .case_insensitive(true)
+        .case_insensitive(ignore_case)
         .size_limit(REGEX_SIZE_LIMIT)
         .build()
         .map_err(|e| error!("invalid regex {pattern:?}: {e}"))
