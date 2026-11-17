@@ -14,6 +14,8 @@
 // 2. Altered source versions must be plainly marked as such, and must not be
 //    misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
+//
+// Ported to Rust and altered for DayZ (see the dayzmake navmesh spec); this is not the original software.
 
 //! `rcBuildDistanceField`, `rcBuildRegions` (watershed) and `rcBuildRegionsMonotone` with the DayZ
 //! part ids (spec 5.4 step 8, 6.2 step 1, 10.1 items 5 and 6).
@@ -847,7 +849,7 @@ fn merge_and_filter_regions(
         if !regions.get(i).is_some_and(|r| r.remap) {
             continue;
         }
-        let old_id = rd(&regions.iter().map(|r| r.id).collect::<Vec<_>>(), i);
+        let old_id = regions.get(i).map_or(0, |r| r.id);
         reg_id_gen += 1;
         for r in regions.iter_mut().skip(i) {
             if r.id == old_id {
@@ -1019,7 +1021,8 @@ pub fn build_regions_monotone(
     chf.border_size = border_size;
 
     let mut prev: Vec<i32> = Vec::new();
-    // Index 0 is unused: sweep ids start at 1.
+    // Index 0 is unused: sweep ids start at 1. A growable table replaces stock's fixed `max(w, h)`
+    // one, which can overrun on multi-layer rows; indices are identical whenever stock stays in bounds.
     let mut sweeps: Vec<SweepSpan> = Vec::new();
 
     // Sweep one line at a time.

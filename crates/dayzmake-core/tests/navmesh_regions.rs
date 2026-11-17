@@ -59,8 +59,8 @@ fn regions_split_at_sub_area_change() {
         build_distance_field(&mut c).unwrap();
         build_regions(&mut c, 0, &[0; 64], merge).unwrap();
         assert_eq!(distinct(&c).len(), 2, "merge {merge}");
-        // Like upstream, `max_regions` counts the unused id past the last region too.
-        assert!(c.max_regions >= 2);
+        // Like upstream, `max_regions` counts the unused id past the last region too: 2 + 1.
+        assert_eq!(c.max_regions, 3);
         let left = reg(&c, 2, 5);
         let right = reg(&c, 17, 5);
         assert!(left != 0 && right != 0 && left != right);
@@ -125,7 +125,7 @@ fn min_area_uses_first_region_of_group() {
     build_distance_field(&mut c).unwrap();
     build_regions_monotone(&mut c, 0, &mins(), 0).unwrap();
     assert_eq!(distinct(&c).len(), 2, "area 1 first keeps the group");
-    assert!(c.max_regions >= 2);
+    assert_eq!(c.max_regions, 3); // two regions plus the unused id, as upstream
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn min_area_removes_small_group_of_area_one() {
     build_distance_field(&mut c).unwrap();
     build_regions(&mut c, 0, &mins(), 0).unwrap();
     assert!(c.spans.iter().all(|s| s.reg == 1));
-    assert!(c.max_regions >= 1);
+    assert_eq!(c.max_regions, 2); // one region plus the unused id, as upstream
 }
 
 #[test]
@@ -165,8 +165,8 @@ fn border_regions_flagged() {
                 }
             }
         }
-        // Border ids are not counted in `max_regions`.
-        assert!(c.max_regions >= 1);
+        // Four border slots (remapped like upstream) + one region + the unused id.
+        assert_eq!(c.max_regions, 6);
     }
 }
 

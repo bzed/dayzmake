@@ -396,7 +396,7 @@ cosine. Casting `(int)` truncates toward zero. Let `CC = cellClasses[tile.cellCl
 | maxSimplificationError | `B.contourMaxError / cs` (cells) |
 | maxVerticalError | `8.0f` (voxels), a DayZ addition to Recast's contour simplifier |
 | minRegionArea (default) | `(int)((1.0f / cs) * (1.0f / cs))` (16 for 0.25, 100 for 0.1) |
-| minRegionArea per area id | the default for all ids 0..63, except ids 10, 12, 13 and 14 which are `INT_MAX` (never removed as too small) |
+| minRegionArea per area id | the default for all ids 0..63, except ids 10, 12, 13 and 14 which are `INT_MAX` (a connected group whose first region has one of these areas and does not touch the tile border is always removed as too small, see §6.2 and §10.1 item 6) |
 | mergeRegionArea | 400 |
 | vertsPerPoly (nvp) | 6 |
 | detail mesh | none (no `rcBuildPolyMeshDetail`) |
