@@ -1,5 +1,7 @@
-//! #54: deeply nested input is a parse error, never a stack overflow. Every case runs on a 1 MiB
-//! stack (the Windows main-thread size) in a debug build.
+//! #54: deeply nested input is a parse error, never a stack overflow. Every case runs on a 768 KiB
+//! stack in a debug build: below the 1 MiB of a Windows thread, whose frames are as big as here (#108
+//! overflowed it with the deepest case needing 1016 KiB on Linux), and with 40 % headroom over what the
+//! deepest case needs now (about 530 KiB).
 
 #![expect(
     clippy::unwrap_used,
@@ -10,10 +12,13 @@ use dayzmake_core::config::Config;
 use dayzmake_core::preprocess::preprocess;
 use dayzmake_core::warning::Warnings;
 
-/// Runs `f` on a thread with a 1 MiB stack; an overflow aborts the whole test process.
+/// The stack of the test threads: 25 % under the 1 MiB of Windows, so Linux catches growth first.
+const STACK_SIZE: usize = 768 << 10;
+
+/// Runs `f` on a thread with a `STACK_SIZE` stack; an overflow aborts the whole test process.
 fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()
-        .stack_size(1 << 20)
+        .stack_size(STACK_SIZE)
         .spawn(f)
         .unwrap()
         .join()

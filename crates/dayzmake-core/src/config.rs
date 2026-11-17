@@ -230,15 +230,22 @@ peg::parser! {
 
         rule string() -> String = doublequoted_string() / singlequoted_string()
 
-        rule array_element(d: usize) -> ConfigArrayElement =
+        /// An element that is not an array. Kept out of `array_element`, whose frame is on the recursive
+        /// path of nested arrays and must stay small (see `plain_entry`).
+        rule scalar_element(d: usize) -> ConfigArrayElement =
             f:float_element() { ConfigArrayElement::FloatElement(f) } /
             f:wide_integer_element() { ConfigArrayElement::FloatElement(f) } /
             f:signed_hex_element() { ConfigArrayElement::FloatElement(f) } /
             i:integer_element() { ConfigArrayElement::IntElement(i) } /
-            a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
             s:string()  &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) } /
             v:eval_value(d) &(whitespace()? [',' | '}']) { v.into() } /
             s:unquoted_string_array() &(whitespace()? [',' | '}']) { ConfigArrayElement::StringElement(s) }
+
+        /// An array is tried first: the other elements cannot start with `{` except an unquoted string,
+        /// which comes last.
+        rule array_element(d: usize) -> ConfigArrayElement =
+            a:array(d)   &(whitespace()? [',' | '}']) { ConfigArrayElement::ArrayElement(a) } /
+            scalar_element(d)
 
         rule array_elements(d: usize) -> Vec<ConfigArrayElement> = array_element(d) ** (whitespace()? "," whitespace()?)
 
@@ -307,19 +314,26 @@ peg::parser! {
         rule var_item(d: usize) -> Item =
             e:var_entry(d) (whitespace()? (";" / &"}") / [' ' | '\t']* &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
-        rule entry(d: usize) -> Item =
+        /// The entries that are not classes. Kept out of `entry`, whose frame is on the recursive path
+        /// (class, entries, entry, class) and must stay small: a debug build gives every alternative of a
+        /// rule its own stack slots, and a 1 MiB stack (Windows) has to hold the deepest nesting (#108).
+        rule plain_entry(d: usize) -> Item =
             e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
-            e:class(d) whitespace()? (";" / &"}") { e } /
             e:(array_item(d) / var_item(d)) { e } /
             e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
-        rule entry_or_exec(d: usize) -> Item = exec_entry(d) { Item::Nothing } / entry(d)
+        /// A class is tried first, directly in `entry_or_exec`: `class` and `delete` cannot start an `enum`
+        /// block or `__EXEC`, so the order of the alternatives does not matter.
+        rule entry_or_exec(d: usize) -> Box<Item> =
+            e:class(d) whitespace()? (";" / &"}") { e } /
+            exec_entry(d) { Box::new(Item::Nothing) } /
+            e:plain_entry(d) { Box::new(e) }
 
         rule entries(d: usize) -> (Vec<(String, ConfigEntry)>, Vec<(String, i32)>) = v:(entry_or_exec(d) ** (whitespace()?)) {
             let mut entries = Vec::new();
             let mut enums = Vec::new();
             for item in v {
-                match item {
+                match *item {
                     Item::Entry(n, e, en) => { entries.push((n, e)); enums.extend(en); }
                     Item::Enums(en) => enums.extend(en),
                     Item::Nothing => {}
@@ -336,35 +350,35 @@ peg::parser! {
             n
         }
 
-        rule regular_class(d: usize) -> Item = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
+        rule regular_class(d: usize) -> Box<Item> = "class" whitespace()+ n:name() p:parent()? whitespace()? "{" nesting_ok(d) whitespace()? e:entries(d + 1) whitespace()? "}" {
             let parent = p.unwrap_or_default();
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent,
                 is_external: false,
                 is_deletion: false,
                 entries: Some(e.0)
-            }), e.1)
+            }), e.1))
         }
 
-        rule external_class() -> Item = "class" whitespace()+ n:name() {
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+        rule external_class() -> Box<Item> = "class" whitespace()+ n:name() {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: true,
                 is_deletion: false,
                 entries: None
-            }), Vec::new())
+            }), Vec::new()))
         }
 
-        rule deleted_class() -> Item = "delete" whitespace()+ n:name() {
-            Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
+        rule deleted_class() -> Box<Item> = "delete" whitespace()+ n:name() {
+            Box::new(Item::Entry(n, ConfigEntry::ClassEntry(ConfigClass {
                 parent: String::new(),
                 is_external: false,
                 is_deletion: true,
                 entries: None
-            }), Vec::new())
+            }), Vec::new()))
         }
 
-        rule class(d: usize) -> Item = regular_class(d) / external_class() / deleted_class()
+        rule class(d: usize) -> Box<Item> = regular_class(d) / external_class() / deleted_class()
 
         /// Parses a complete config: a sequence of entries until end of input.
         pub rule config() -> Config = whitespace()? e:entries(0) whitespace()? ![_] {

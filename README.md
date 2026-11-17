@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- Parsing a config nested to the depth limit (128 levels) fits a 1 MiB stack again on Windows debug builds: the recursive grammar rules for classes and arrays have smaller frames (a debug build needs about 410 KiB for the deepest class nesting, it needed 920 KiB). The behaviour and the limits are unchanged (#108).
 - `api config`: the warning `api-config-limit` of a merge is raised once and names the PBO where the merge stopped; `api-config-order` names only the PBOs of the cycle, each as `[<source>] <pbo>`, and, like `api-config-base-changed` across PBOs, is raised on every query.
 - `api config` reads the includable text entries of a PBO only when it has a text `config.cpp`, skips a truncated or undecodable one with the new warning `api-config-include-unreadable` (the configs of the PBO still load, and an include of it names the read error), reads at most 64 MiB of them per PBO (new warning `api-config-includes-capped`), and resolves `..` inside the PBO: `#include "..\macros.hpp"` from `sub\config.cpp` finds `macros.hpp`; a path that leaves the PBO's root is still refused (#99).
 - `PBO::insert_entry` over an entry whose stored name is not UTF-8 (windows-1252) stores the raw bytes of the new name; it kept the old entry's bytes (part of #98).
