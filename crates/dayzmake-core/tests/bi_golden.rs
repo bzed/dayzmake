@@ -199,6 +199,9 @@ fn golden_hex_wide() {
         "hex_long",
         "hex_long_arr",
         "hex_zeros",
+        "hex_round",
+        "hex_round2",
+        "hex_round3",
     ] {
         golden(name);
     }

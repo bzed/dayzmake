@@ -1350,7 +1350,8 @@ fn rapified_int64_entry_is_read_and_a_short_one_is_an_error() {
     ));
     // name `x\0` then 8 value bytes: cut after 7 of them
     let end = 16 + 1 + 1 + 1 + 1 + 2 + 7;
-    assert!(Config::read_rapified(&mut Cursor::new(&bytes[..end])).is_err());
+    let err = Config::read_rapified(&mut Cursor::new(&bytes[..end])).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
 }
 
 /// The committed fuzz seed with subtype 6 reads, and its cut-short copy is an error, not a panic.
@@ -1365,5 +1366,6 @@ fn int64_fuzz_seeds() {
         ConfigEntry::Int64Entry(i64::MAX)
     ));
     let cut = std::fs::read(dir.join("int64-truncated.bin")).unwrap();
-    assert!(Config::read_rapified(&mut Cursor::new(cut)).is_err());
+    let err = Config::read_rapified(&mut Cursor::new(cut)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof, "{err}");
 }

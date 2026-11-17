@@ -389,8 +389,6 @@ peg::parser! {
     }
 }
 
-/// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
-/// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
 /// The hex digits of an unsigned `0x` / `0X` literal.
 fn hex_digits(text: &str) -> Option<&str> {
     text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
@@ -405,13 +403,16 @@ fn hex_wrapped(digits: &str) -> i32 {
             // 4 bits per digit: the high bits fall off, which is the wrap-around wanted here
             acc.wrapping_shl(4) | d
         });
-    i32::from_ne_bytes(bits.to_ne_bytes())
+    bits.cast_signed()
 }
 
-/// The value of a signed hex literal (`-0x10`), which `CfgConvert` stores as a float.
+/// The value of a signed hex literal (`-0x10`), which `CfgConvert` stores as a float. The magnitude is rounded
+/// to an f64 digit by digit and then to an f32, the double rounding `CfgConvert` shows: `-0x8000008000000001`,
+/// `-0x1000001000000001` and `-0x10000010000000001` give `0xDF000000`, `0xDD800000` and `0xDF800000` there
+/// (golden `hex_round*`, 2026-11-17), not the singly rounded `0xDF000001` and so on.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "a hex magnitude is rounded to the nearest f32, overflow is infinity, as strtod then a float store does"
+    reason = "the f64 magnitude is rounded to the nearest f32, overflow is an infinity"
 )]
 fn signed_hex_float(text: &str) -> f32 {
     let (negative, rest) = match text.strip_prefix('-') {
@@ -427,6 +428,8 @@ fn signed_hex_float(text: &str) -> f32 {
     if negative { -value } else { value }
 }
 
+/// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
+/// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
 fn float_literal(f: f32) -> String {
     if f.is_infinite() {
         if f.is_sign_positive() {

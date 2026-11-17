@@ -62,6 +62,14 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   `hex_wide`: `-0x10` and `-0x1FFFFFFFFF` are subtype 1 floats (-16.0, -2^37), `0X10` is 16, `+2147483648` is subtype 6, `+5` is 5, `0x8000000000000000` is 0,
   `0xFFFFFFFFFFFFFFFF` is -1. `hex_sign`: `+0x10` is the float 16.0, `-0x0` the float -0.0, `-0X10` -16.0, `00012` the int 12 (decimal), `-0` the int 0.
   `hex_sign_arr`: the same rules in an array (`-0x10`, `+0x10` floats, `0X10` int, `+2147483648` float, `-0` int 0). `x = 0x;` is the string `"0x"`.
+  `hex_round*` (`x = -0x8000008000000001;`, `-0x1000001000000001;`, `-0x10000010000000001;`): f32 bits `df000000`, `dd800000`, `df800000`, so CfgConvert
+  rounds twice (to f64, then to f32); the single rounding would be `df000001`, `dd800001`, `df800001`. dayzmake does the same.
+  Not committed (dayzmake differs, #107): `x = __EVAL(2147483648); y = __EVAL(2^31); z = __EVAL(2^40);` gives
+  three floats (type 1) with imprecise values, `0x4effffe4`, `0x4effffe4`, `0x5307ffe7` (dayzmake: exact floats). Enums: `enum { A = 0x1FFFFFFFFF, B = 0X10 }; a = A; b = B;`
+  gives `a = -1`, `b = 16` (hex wraps, `0X` works) and `a = A` stays the string `"A"`; `enum { A = -0x10, B }` gives -16, -15. Enum values go through f32:
+  `A = 2147483648`, `A = 2147483647`, `A = 4294967296`, `A = 99999999999999999999` and `A = -2147483649` all give -2147483648 (the int overflow value), and so does
+  the next name; `A = 16777217, B` gives 16777216 and 16777216; `C = 2147483520, D` gives 2147483520 twice; `E = 2147483584, F` gives -2147483648 twice. dayzmake errors
+  on the over-32-bit and `0X` cases and counts exactly for the others.
 - `sign/`: throwaway test key `armk` (made by `dayzmake keygen`). `testsig.pbo` was built by dayzmake.
   `nonutf8.pbo` is the same PBO with the entry `data\aXb.txt` renamed to `data\a<0x97>b.txt` (cp1252 em dash) and its
   SHA-1 trailer recomputed. Both `.bisign` files were made by `DSSignFile.exe`, and `DSCheckSignatures.exe -deep`
