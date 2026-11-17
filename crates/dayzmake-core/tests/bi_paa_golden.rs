@@ -60,3 +60,74 @@ fn ai88_from_imagetopaa() {
         ]
     );
 }
+
+// Error paths of the 16-bit formats, from the same BI files with their first (8 x 8) mipmap damaged.
+
+const FORMATS_16: [&str; 3] = ["rgbq_4444.paa", "rgbq_1555.paa", "rgbq_88.paa"];
+
+/// A BI file and the offset of the header of its first mipmap (width, height, 3 byte size).
+#[expect(clippy::unwrap_used, clippy::indexing_slicing, reason = "test helper")]
+fn bi_file(name: &str) -> (Vec<u8>, usize) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/bi/paa")
+        .join(name);
+    let bytes = std::fs::read(path).unwrap();
+    // magic, then taggs (8 byte name, u32 size, data) up to a zero byte, then the u16 palette size
+    let mut pos = 2;
+    while bytes[pos] != 0 {
+        let size = u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
+        pos += 12 + usize::try_from(size).unwrap();
+    }
+    pos += 2;
+    assert_eq!(bytes[pos..pos + 4], [8, 0, 8, 0], "first mipmap is 8 x 8");
+    (bytes, pos)
+}
+
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn read_error(bytes: Vec<u8>) -> String {
+    Paa::read(&mut Cursor::new(bytes)).unwrap_err().to_string()
+}
+
+#[test]
+fn sixteen_bit_mipmap_without_checksum_is_an_error() {
+    for name in FORMATS_16 {
+        let (bytes, hdr) = bi_file(name);
+        let size = usize::from(bytes[hdr + 4]);
+        let end = hdr + 7 + size;
+        let mut cut = bytes[..hdr + 4].to_vec();
+        cut.push(u8::try_from(size - 4).unwrap());
+        cut.extend_from_slice(&bytes[hdr + 5..end - 4]);
+        cut.extend_from_slice(&bytes[end..]);
+        let message = read_error(cut);
+        assert!(
+            message.contains("the checksum is missing"),
+            "{name}: {message}"
+        );
+    }
+}
+
+#[test]
+fn sixteen_bit_mipmap_with_lzo_bit_is_an_error() {
+    for name in FORMATS_16 {
+        let (mut bytes, hdr) = bi_file(name);
+        bytes[hdr + 1] |= 0x80;
+        let message = read_error(bytes);
+        assert!(
+            message.contains("LZO compression is only supported for DXT formats"),
+            "{name}: {message}"
+        );
+    }
+}
+
+#[test]
+fn sixteen_bit_mipmap_cut_in_the_data_is_an_error() {
+    for name in FORMATS_16 {
+        let (bytes, hdr) = bi_file(name);
+        let size = usize::from(bytes[hdr + 4]);
+        let message = read_error(bytes[..hdr + 7 + size / 2].to_vec());
+        assert!(
+            message.contains("Truncated PAA mipmap."),
+            "{name}: {message}"
+        );
+    }
+}
