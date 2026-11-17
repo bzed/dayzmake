@@ -4,7 +4,6 @@
 //! these helpers rather than scattered `as`.
 
 /// C `(int)x`: truncation towards zero.
-#[expect(dead_code, reason = "used by the tile builder tasks that follow")]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "C truncation as in Recast; saturating on out-of-range values"

@@ -8,7 +8,11 @@
 pub(crate) mod bytes;
 pub mod capture;
 pub mod client;
+pub(crate) mod dayz;
 pub mod detour;
+#[doc(hidden)]
+pub mod internals;
 pub mod islands;
 pub(crate) mod num;
+pub(crate) mod recast;
 pub mod wire;
