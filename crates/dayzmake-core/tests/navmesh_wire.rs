@@ -23,10 +23,8 @@ fn synthetic_world() -> WorldParams {
     world.deep_water_depth = 1.5;
     world.contour_max_error = 0.3;
     world.obstacles = true;
-    world.obstacles_raw = [1, 0, 0, 0];
     world.block_size = 4;
     world.filter_isolated_islands = true;
-    world.filter_raw = [1, 0, 0, 0];
     world.seed_position = [60.0, 10.0, 60.0];
     world.stand_height = 1.5;
     world.crouch_height = 1.0;
@@ -128,6 +126,26 @@ fn world_params_keeps_raw_flag_bytes() {
     let out = changed.encode();
     assert_eq!(out[0x24..0x28], [0, 1, 2, 3]);
     assert_eq!(out[0x2C..0x30], [1, 9, 8, 7]);
+}
+
+#[test]
+fn world_params_equality_follows_wire_bytes() {
+    // Built from Default with only the bools set: raw bytes stay 0, yet it equals its own parse.
+    let params = synthetic_world();
+    assert_eq!(params.world.obstacles_raw, [0, 0, 0, 0]);
+    let parsed = WorldParams::parse(&params.encode()).unwrap();
+    assert_eq!(parsed.world.obstacles_raw, [1, 0, 0, 0]);
+    assert_eq!(parsed, params);
+    assert_eq!(parsed.world, params.world);
+    // Differing bools still differ; differing pad bytes with equal effective bytes do not.
+    let mut other = params.clone();
+    other.world.obstacles = false;
+    assert_ne!(other, params);
+    let mut padded = params.clone();
+    padded.world.obstacles_raw = [3, 4, 5, 6];
+    assert_ne!(padded, params);
+    padded.world.obstacles_raw = [1, 0, 0, 0];
+    assert_eq!(padded, params);
 }
 
 #[test]

@@ -113,7 +113,12 @@ impl<'a> Reader<'a> {
 /// Parsing sets the `bool` to `raw[0] != 0`. Encoding writes the raw bytes, but when the `bool`
 /// disagrees with `raw[0]` (a value built from [`Default`] with only the `bool` set), byte 0 is
 /// replaced by `u8::from(bool)`.
-#[derive(Debug, Clone, PartialEq, Default)]
+///
+/// Equality follows the wire: two blocks are equal when every other field is equal and their
+/// effective flag bytes (the raw bytes with byte 0 forced to agree with the `bool`) are equal. So a
+/// block built from [`Default`] with only `obstacles = true` set equals the block parsed from its own
+/// encoding.
+#[derive(Debug, Clone, Default)]
 #[non_exhaustive]
 pub struct WorldBlock {
     /// World size in x, metres.
@@ -158,6 +163,32 @@ pub struct WorldBlock {
     pub obstacles_raw: [u8; 4],
     /// The four wire bytes of `filter_isolated_islands` (flag plus pad), kept for round-tripping.
     pub filter_raw: [u8; 4],
+}
+
+impl PartialEq for WorldBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.world_size_x == other.world_size_x
+            && self.world_size_z == other.world_size_z
+            && self.tile_width == other.tile_width
+            && self.tile_height == other.tile_height
+            && self.tiles_x == other.tiles_x
+            && self.tiles_z == other.tiles_z
+            && self.deep_sea_height == other.deep_sea_height
+            && self.deep_water_depth == other.deep_water_depth
+            && self.contour_max_error == other.contour_max_error
+            && flag_bytes(self.obstacles, self.obstacles_raw)
+                == flag_bytes(other.obstacles, other.obstacles_raw)
+            && self.block_size == other.block_size
+            && flag_bytes(self.filter_isolated_islands, self.filter_raw)
+                == flag_bytes(other.filter_isolated_islands, other.filter_raw)
+            && self.seed_position == other.seed_position
+            && self.stand_height == other.stand_height
+            && self.crouch_height == other.crouch_height
+            && self.prone_height == other.prone_height
+            && self.diameter == other.diameter
+            && self.max_step_height == other.max_step_height
+            && self.max_slope == other.max_slope
+    }
 }
 
 impl WorldBlock {
