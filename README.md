@@ -33,7 +33,7 @@ is maintained here.
 
 - Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
 - A config float literal that overflows f32 (`1e999`, `-1e39`) is rapified as an infinity, no longer an error, as CfgConvert does; a literal that underflows is 0. `derapify` writes an infinity as `1e999` / `-1e999`, so derapify then rapify keeps the bits (#102).
-- Config errors raised while parsing a value (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
+- Config errors raised while parsing a value (`Invalid integer`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs
   that define it. It indexes every `config.bin` and `config.cpp` of the `dta` and `addons` PBOs of the game (also the

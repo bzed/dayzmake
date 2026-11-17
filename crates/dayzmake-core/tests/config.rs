@@ -1037,6 +1037,19 @@ fn last_entry_without_semicolon_keeps_its_type() {
     );
 }
 
+/// A grammar-action error on an entry that ends at the line end (no `;`) names its line, LF and CRLF.
+#[test]
+fn last_entry_without_semicolon_integer_overflow_is_an_error() {
+    for src in [
+        "y = 1;\nx = 99999999999999999999\n",
+        "y = 1;\r\nx = 99999999999999999999\r\n",
+    ] {
+        let err = read_err(src, "cfg.cpp");
+        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
+        assert!(err.contains("Invalid integer"), "{err:?}");
+    }
+}
+
 /// `CfgConvert` rejects a last entry at the very end of the file with neither `;` nor line end
 /// (`x = 1.5`, `x = abc`, `x = 1e5`); so does dayzmake, with the line.
 #[test]

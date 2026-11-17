@@ -101,8 +101,7 @@ peg::parser! {
         /// as CfgConvert reads it) the end of the line.
         rule entry_end() = whitespace()? [';' | '}'] / [' ' | '\t']* ['\r' | '\n']
 
-        /// A float followed by the end of an entry. The terminator is checked before the value is,
-        /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
+        /// A float followed by the end of an entry.
         rule float_entry() -> f32 = f:float_text() &entry_end() v:float_value(f) { v }
 
         /// A float followed by the end of an array element.
@@ -112,6 +111,8 @@ peg::parser! {
         /// `1e999` / `-1e999` for it, which reads back to the same value.
         rule float_value(at: (usize, &str)) -> f32 = {?
             let (pos, f) = at;
+            // `float_text` only matches what `f32::from_str` accepts, and overflow is an infinity, so the
+            // error cannot fire; it stays as a guard against a grammar change.
             f.parse::<f32>()
                 .map_err(|e| { ctx.error.get_or_insert((pos, error!("Invalid float \"{f}\": {e}"))); "a valid float" })
         }
@@ -335,12 +336,9 @@ peg::parser! {
     }
 }
 
-/// Reads the enum table at the header's `enum_offset`. The class tree is usable without it, so a bad
-/// offset, a cut-short table or a name that is not a config identifier gives the values read before
-/// it, never an error.
 /// The text of a float as derapify writes it. An infinity becomes `1e999` / `-1e999`, a literal that
 /// overflows to the same f32 when read back. NaN has no such form and stays `NaN` (a string when read).
-fn float_text(f: f32) -> String {
+fn float_literal(f: f32) -> String {
     if f.is_infinite() {
         if f.is_sign_positive() {
             "1e999"
@@ -353,6 +351,9 @@ fn float_text(f: f32) -> String {
     }
 }
 
+/// Reads the enum table at the header's `enum_offset`. The class tree is usable without it, so a bad
+/// offset, a cut-short table or a name that is not a config identifier gives the values read before
+/// it, never an error.
 fn read_enum_table<I: Read + Seek>(input: &mut I) -> Vec<(String, i32)> {
     let mut out = Vec::new();
     // an unreadable table is not an error: the values read so far are returned
@@ -564,7 +565,7 @@ impl ConfigArray {
                     )?;
                 }
                 ConfigArrayElement::FloatElement(f) => {
-                    output.write_all(float_text(*f).as_bytes())?;
+                    output.write_all(float_literal(*f).as_bytes())?;
                 }
                 ConfigArrayElement::IntElement(i) => {
                     output.write_all(format!("{i}").as_bytes())?;
@@ -790,7 +791,7 @@ impl ConfigClass {
                         )?;
                     }
                     ConfigEntry::FloatEntry(f) => {
-                        output.write_all(format!("{key} = {};\n", float_text(*f)).as_bytes())?;
+                        output.write_all(format!("{key} = {};\n", float_literal(*f)).as_bytes())?;
                     }
                     ConfigEntry::IntEntry(i) => {
                         output.write_all(format!("{key} = {i};\n").as_bytes())?;
