@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- `api grep` prints at most 512 bytes of a matching line, cut at a character boundary and followed by ` […]`; `--json` cuts `text` the same way and adds `"truncated": true` to cut hits. The MCP `api_source` refuses `target` together with `context` or `lines` instead of ignoring it (part of #98).
 - `inspect` of an ODOL v56 model leaves out the `Class:` and `Damage:` lines when they are empty and a section (Textures, Materials, Proxies, Properties, Selections, Animations) that has no items; an empty material name was already printed as `(none)` (#96).
 - Any config entry may end at the line end instead of `;`, as in CfgConvert; it keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is an infinity (see below). At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
 - The preprocessor strips a `//` comment at the very end of the input, with no line end after it, as CfgConvert does; before, `x = 1;` followed by `// c` without a final newline was a syntax error. An unterminated `/*` runs to the end of the file, also as in CfgConvert (silently there), and raises the new warning `unterminated-comment` with file and line; an included file's comment ends with that file. When the last line of a config is picked out to decide whether its entry may end at the end of the file, a lone CR now counts as a line break; CfgConvert rejects `x = 1\r#define Y 1` and `x = 1\r// c`, dayzmake accepts them (#103).

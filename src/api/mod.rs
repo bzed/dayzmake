@@ -477,8 +477,29 @@ pub struct GrepHit {
     pub path: String,
     /// 1-based line.
     pub line: u32,
-    /// The raw line, lossily decoded.
+    /// The raw line, lossily decoded; at most [`GREP_LINE_MAX`] bytes (see `truncated`).
     pub text: String,
+    /// Whether `text` was cut at [`GREP_LINE_MAX`] bytes (on a character boundary).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
+}
+
+/// The most bytes of a matching line `api grep` returns.
+pub const GREP_LINE_MAX: usize = 512;
+
+/// Marker the text output of `api grep` puts after a cut line.
+const GREP_CUT_MARKER: &str = " [\u{2026}]";
+
+/// `line` cut to [`GREP_LINE_MAX`] bytes at the previous character boundary, and whether it was cut.
+fn cap_line(line: &str) -> (&str, bool) {
+    if line.len() <= GREP_LINE_MAX {
+        return (line, false);
+    }
+    let mut end = GREP_LINE_MAX;
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    (line.get(..end).unwrap_or(""), true)
 }
 
 /// What `api grep` found: the first `max` hits in order and how many more there were.
@@ -568,11 +589,13 @@ pub fn grep(
                     let path = shown
                         .get_or_insert_with(|| format!("{prefix}\\{entry}"))
                         .clone();
+                    let (text, truncated) = cap_line(line);
                     kept.push(GrepHit {
                         source: name.to_string(),
                         path,
                         line: u32::try_from(i + 1).unwrap_or(u32::MAX),
-                        text: line.to_string(),
+                        text: text.to_string(),
+                        truncated,
                     });
                 }
             }
@@ -588,7 +611,7 @@ pub fn grep(
     Ok(result)
 }
 
-/// The output of `api grep`: JSON (an array of `{source, path, line, text}`, cut to `max`) or text lines
+/// The output of `api grep`: JSON (an array of `{source, path, line, text}` plus `truncated` on cut lines, cut to `max`; lines are cut to [`GREP_LINE_MAX`] bytes) or text lines
 /// (`[<source>] <path>:<line>: <text>`, the tag only when mods are selected), then the `... N more lines`
 /// note.
 ///
@@ -619,7 +642,11 @@ pub fn grep_lines(
                 String::new()
             };
             // paths and text come from files the user did not write
-            printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text))
+            let mut line = printable(&format!("{tag}{}:{}: {}", h.path, h.line, h.text));
+            if h.truncated {
+                line.push_str(GREP_CUT_MARKER);
+            }
+            line
         })
         .collect();
     if out.is_empty() && r.more == 0 {
