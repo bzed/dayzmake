@@ -84,3 +84,10 @@ path = "fuzz_targets/odol_read.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "navmesh_wire"
+path = "fuzz_targets/navmesh_wire.rs"
+test = false
+doc = false
+bench = false

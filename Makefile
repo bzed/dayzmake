@@ -56,6 +56,7 @@ features:
 	$(CARGO) clippy -p dayzmake-core --no-default-features --lib $(LOCKED) -- -D warnings
 	$(CARGO) clippy -p dayzmake-core --no-default-features --features sign --lib $(LOCKED) -- -D warnings
 	$(CARGO) clippy -p dayzmake-core --no-default-features --features image --lib $(LOCKED) -- -D warnings
+	$(CARGO) clippy -p dayzmake-core --no-default-features --features navmesh --lib $(LOCKED) -- -D warnings
 	$(CARGO) test -p dayzmake-core --no-default-features $(LOCKED)
 
 # docs.rs builds with nightly, `--cfg docsrs` and all features.

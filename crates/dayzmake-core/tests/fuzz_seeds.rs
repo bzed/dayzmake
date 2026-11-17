@@ -6,6 +6,8 @@ use std::io::{self, Cursor};
 use std::path::Path;
 
 use dayzmake_core::config::Config;
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::P3D;
 use dayzmake_core::paa::Paa;
@@ -133,6 +135,25 @@ fn sign_verify_seeds() -> io::Result<()> {
 fn odol_read_seeds() -> io::Result<()> {
     for data in seeds("odol_read")? {
         let _ = Odol::read(&mut Cursor::new(&data));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_wire_seeds() -> io::Result<()> {
+    for data in seeds("navmesh_wire")? {
+        // Same as the fuzz target: what parses must encode and parse again to the same bytes.
+        if let Ok(world) = WorldParams::parse(&data) {
+            let bytes = world.encode();
+            assert_eq!(WorldParams::parse(&bytes)?.encode(), bytes);
+        }
+        let _ = WorldParams::parse_message(&data);
+        if let Ok(tile) = TileInput::parse(&data) {
+            let bytes = tile.encode();
+            let again = TileInput::parse(&bytes)?;
+            assert_eq!(again.encode(), bytes);
+        }
     }
     Ok(())
 }

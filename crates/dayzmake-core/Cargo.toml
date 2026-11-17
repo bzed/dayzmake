@@ -17,11 +17,13 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["sign", "image"]
+default = ["sign", "image", "navmesh"]
 # BI signatures and keys (`sign` module): keys, signing, verification and key generation use `rsa` (pure Rust).
 sign = ["dep:rsa", "dep:getrandom", "dep:zeroize"]
 # PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
 image = ["dep:image"]
+# Navmesh generation (`navmesh` module): the data-server wire format and, later, the tile builder and `.nm` writer.
+navmesh = []
 
 [dependencies]
 byteorder = "1.5"

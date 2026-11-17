@@ -10,6 +10,7 @@
 //! - [`odol`]: binarized ODOL v56 models, read for what a listing needs (LODs, textures, materials, proxies).
 //! - [`paa`]: PAA textures, with conversion from and to images (feature `image`).
 //! - `sign`: BI keys and `.bisign` signatures (feature `sign`).
+//! - `navmesh`: DayZ navmesh generation, starting with the data-server wire format (feature `navmesh`).
 //! - [`binarize`]: BI's `binarize.exe`, natively on Windows or under Proton.
 //! - [`warning`]: the warnings library calls raise.
 //!
@@ -34,6 +35,7 @@
 //! - `sign` (default): the `sign` module.
 //! - `image` (default): `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the
 //!   re-exported `image` crate.
+//! - `navmesh` (default): the `navmesh` module.
 //!
 //! # Licence
 //!
@@ -99,6 +101,9 @@ pub mod fileid;
 pub(crate) mod io;
 /// Bohemia's LZSS compression.
 pub(crate) mod lzss;
+#[cfg(feature = "navmesh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "navmesh")))]
+pub mod navmesh;
 /// Binarized ODOL v56 model reading.
 pub mod odol;
 /// P3D model reading and inspection.
