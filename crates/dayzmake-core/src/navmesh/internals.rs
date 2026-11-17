@@ -12,3 +12,4 @@ pub use super::recast::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span};
 pub use super::recast::rasterize::{
     RasterMode, RasterOutcome, RasterParams, rasterize_part, rasterize_triangle,
 };
+pub use super::recast::region::{build_distance_field, build_regions, build_regions_monotone};
