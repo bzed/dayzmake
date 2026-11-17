@@ -193,6 +193,7 @@ fn navmesh_nm_seeds() -> io::Result<()> {
         if selector & 1 == 1 {
             if let Ok(tile) = TileData::parse(data) {
                 let bytes = tile.to_bytes();
+                assert_eq!(bytes, data, "write(parse(d)) != d");
                 assert_eq!(TileData::parse(&bytes)?.to_bytes(), bytes);
             }
             continue;

@@ -67,7 +67,10 @@ fn two_tile_file() {
     let bytes = to_bytes(&set);
     assert_eq!(&bytes[..4], b"TESM");
     assert_eq!(&bytes[48 + 8 + 16..][..4], b"VAND");
-    assert_eq!(set.tiles[0].data.extra.byte_size(), 52);
+    assert_eq!(
+        set.tiles[0].data.extra.as_ref().map(TileExtra::byte_size),
+        Some(52)
+    );
     assert_eq!(set.tiles[0].data.header.extra_data_size, 52);
     // The header of the first blob carries extraDataSize at offset 100.
     let blob = 48 + 8 + 16;
@@ -88,15 +91,34 @@ fn tile_blob_round_trips() {
 }
 
 #[test]
-fn tile_without_extra_has_no_extra_section() {
+fn tile_without_extra_has_no_extra_section_and_an_empty_one_has_twelve_bytes() {
     let mut t = tile(0, 0);
-    t.extra = TileExtra::default();
+    t.extra = None;
     t.header.extra_data_size = 0;
     let blob = t.to_bytes();
     assert_eq!(blob.len(), 304 - 52);
     let back = TileData::parse(&blob).expect("parses");
     assert_eq!(back.header.extra_data_size, 0);
-    assert!(back.extra.parts.is_empty() && back.extra.obstacles.is_empty());
+    assert_eq!(back.extra, None);
+    assert_eq!(back.to_bytes(), blob);
+
+    // An empty section is 12 bytes of zero counts and survives a round trip.
+    let mut e = tile(0, 0);
+    e.extra = Some(TileExtra::default());
+    let blob = e.to_bytes();
+    assert_eq!(blob.len(), 304 - 52 + 12);
+    assert_eq!(&blob[100..104], &12i32.to_le_bytes());
+    let back = TileData::parse(&blob).expect("parses");
+    assert_eq!(back.extra, Some(TileExtra::default()));
+    assert_eq!(back.header.extra_data_size, 12);
+    assert_eq!(back.to_bytes(), blob);
+
+    // A foreign blob built by hand: extraDataSize 12, zero counts.
+    let mut hand = tile(0, 0).to_bytes();
+    hand.truncate(304 - 52);
+    hand[100..104].copy_from_slice(&12i32.to_le_bytes());
+    hand.extend_from_slice(&[0; 12]);
+    assert_eq!(TileData::parse(&hand).expect("parses").to_bytes(), hand);
 }
 
 #[test]
@@ -342,16 +364,22 @@ fn write_fuzz_seeds() -> io::Result<()> {
     let mut sparse = empty_set(2, 2);
     sparse.tiles = vec![set_tile(3, tile(1, 1))];
     // The first byte selects the reader: 0 = a whole file, 1 = a single tile blob.
-    let seeds: [(&str, Vec<u8>); 6] = [
+    let mut no_extra = tile(0, 0);
+    no_extra.extra = None;
+    let mut empty_extra = tile(0, 0);
+    empty_extra.extra = Some(TileExtra::default());
+    let seeds: [(&str, Vec<u8>); 8] = [
         ("two_tiles", good.clone()),
         ("version_7", v7),
         ("truncated", good[..good.len() - 40].to_vec()),
         ("sparse", to_bytes(&sparse)),
         ("header_only", good[..48].to_vec()),
         ("tile_blob", tile(2, 3).to_bytes()),
+        ("tile_no_extra", no_extra.to_bytes()),
+        ("tile_empty_extra", empty_extra.to_bytes()),
     ];
     for (name, data) in seeds {
-        let mut seed = vec![u8::from(name == "tile_blob")];
+        let mut seed = vec![u8::from(name.starts_with("tile_"))];
         seed.extend_from_slice(&data);
         fs::write(dir.join(name), seed)?;
     }

@@ -205,8 +205,9 @@ pub struct Obstacle {
 
 /// The extra section of a tile blob (spec 7.2).
 ///
-/// An empty value (no parts, part polygons or obstacles) is stored as no section at all
-/// (`extraDataSize == 0`): the three counts are only written when something is present.
+/// A tile either has no extra section at all (`TileData::extra` is `None`, `extraDataSize == 0`) or
+/// has one, which is at least the 12 bytes of three zero counts: `Some(TileExtra::default())` is
+/// written as those 12 bytes.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct TileExtra {
@@ -225,9 +226,8 @@ impl TileExtra {
         self.parts.is_empty() && self.part_polys.is_empty() && self.obstacles.is_empty()
     }
 
-    /// The size of the section in bytes when it is written:
-    /// `12 + 16 * parts + 8 * part_polys + 16 * obstacles` (spec 7.2). This is the size of a section
-    /// that is written; an empty value is written as no section (0 bytes), see the type's docs.
+    /// The size of the section in bytes:
+    /// `12 + 16 * parts + 8 * part_polys + 16 * obstacles` (spec 7.2). An empty value is 12 bytes.
     #[must_use]
     pub fn byte_size(&self) -> usize {
         EXTRA_FIXED_LEN
@@ -332,8 +332,9 @@ pub struct TileData {
     pub bv_tree: Vec<BvNode>,
     /// Off-mesh connections.
     pub off_mesh: Vec<OffMeshConnection>,
-    /// The extra section.
-    pub extra: TileExtra,
+    /// The extra section: `None` when the blob has none (`extraDataSize == 0`), `Some` otherwise,
+    /// even when all three counts are zero (12 bytes).
+    pub extra: Option<TileExtra>,
 }
 
 fn u32_to_usize(n: u32) -> usize {
@@ -459,9 +460,9 @@ impl TileData {
             });
         }
         let extra = if extra_size == 0 {
-            TileExtra::default()
+            None
         } else {
-            TileExtra::parse(r.rest()).prepend_error("Invalid extra section:")?
+            Some(TileExtra::parse(r.rest()).prepend_error("Invalid extra section:")?)
         };
         Ok(Self {
             header,
@@ -479,11 +480,7 @@ impl TileData {
 
     /// The size of the serialised blob in bytes, or `None` if it would overflow `usize`.
     pub(crate) fn blob_len(&self) -> Option<usize> {
-        let extra = if self.extra.is_empty() {
-            0
-        } else {
-            self.extra.byte_size()
-        };
+        let extra = self.extra.as_ref().map_or(0, TileExtra::byte_size);
         [
             self.verts.len().checked_mul(VERT_LEN)?,
             self.polys.len().checked_mul(POLY_LEN)?,
@@ -500,17 +497,13 @@ impl TileData {
     }
 
     /// Serialises the tile. The header counts and `extraDataSize` are derived from the sections
-    /// (an empty [`TileExtra`] is not written and gives `extraDataSize` 0); all other header fields
+    /// (`extra` is `None`: no section, `extraDataSize` 0; `Some`: the section, even when empty); all other header fields
     /// are written as stored.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.blob_len().unwrap_or(HEADER_LEN));
         let h = &self.header;
-        let extra_size = if self.extra.is_empty() {
-            0
-        } else {
-            len_i32(self.extra.byte_size())
-        };
+        let extra_size = len_i32(self.extra.as_ref().map_or(0, TileExtra::byte_size));
         for v in [h.magic, h.version, h.x, h.y, h.layer] {
             put_i32(&mut out, v);
         }
@@ -574,8 +567,8 @@ impl TileData {
             out.extend_from_slice(&[c.flags, c.side]);
             put_u32(&mut out, c.user_id);
         }
-        if !self.extra.is_empty() {
-            self.extra.write(&mut out);
+        if let Some(extra) = &self.extra {
+            extra.write(&mut out);
         }
         out
     }

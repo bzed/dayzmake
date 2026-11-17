@@ -63,7 +63,7 @@ pub fn tile(x: i32, y: i32) -> TileData {
     data.polys = vec![poly];
     data.links = vec![Link::default(); 3];
     data.bv_tree = vec![BvNode::default(); 2];
-    data.extra = extra;
+    data.extra = Some(extra);
     data
 }
 
