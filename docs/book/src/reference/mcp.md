@@ -64,7 +64,7 @@ is the PBO of the [first mod guide](../guides/first-mod.md)):
 
 ```text
 > {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"doc","version":"1"}}}
-{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-06-18","serverInfo":{"name":"dayzmake","version":"3.0.2"}}}
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"tools":{}},"protocolVersion":"2025-06-18","serverInfo":{"name":"dayzmake","version":"3.1.0"}}}
 > {"jsonrpc":"2.0","method":"notifications/initialized"}
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"api_class","arguments":{"name":"PlayerBase","mods":"My Mod"}}}
 {"id":2,"jsonrpc":"2.0","result":{"content":[{"text":"class PlayerBase : Entity  [vanilla 4_world]\n  bool IsAlive()  // Returns true while the player is alive.\n  void OnRPC(PlayerIdentity sender,int rpc_type,ParamsReadContext ctx)\nclass PlayerBase  [My_Mod 4_world]  [modded]\n  void Heal(float amount)  // Added by MyMod.","type":"text"}],"isError":false}}

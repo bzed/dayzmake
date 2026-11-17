@@ -30,7 +30,7 @@ need to be GPL-2.0-or-later compatible.
 
 ## Changes
 
-### Unreleased
+### 0.3.0
 
 - Parsing a config nested to the depth limit (128 levels) fits a 1 MiB stack again on Windows debug builds: the recursive grammar rules for classes and arrays have smaller frames (about 410 KiB for the deepest class nesting instead of 920 KiB). The behaviour and the limits are unchanged (#108).
 - New `PBO::read_entries_tolerant(input, wanted, &TolerantRead)` (a truncated or undecodable selected entry is an error of its own, and the selection is bounded by the byte limit of the new `#[non_exhaustive]` options struct `TolerantRead::new(max_bytes)`), `SelectedEntry::into_data`, `SelectedEntry::is_over_limit` and `PboSelection::into_entries`; `read_entries` is unchanged (#99).

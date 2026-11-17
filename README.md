@@ -29,7 +29,10 @@ is maintained here.
 ## Changes
 <!-- ANCHOR: changes -->
 
-### Unreleased
+### 3.1.0
+
+With dayzmake-core 0.3.0.
+
 
 - Parsing a config nested to the depth limit (128 levels) fits a 1 MiB stack again on Windows debug builds: the recursive grammar rules for classes and arrays have smaller frames (a debug build needs about 410 KiB for the deepest class nesting, it needed 920 KiB). The behaviour and the limits are unchanged (#108).
 - `api config`: the warning `api-config-limit` of a merge is raised once and names the PBO where the merge stopped; `api-config-order` names only the PBOs of the cycle, each as `[<source>] <pbo>`, and, like `api-config-base-changed` across PBOs, is raised on every query.
@@ -286,7 +289,7 @@ GitHub CLI (without a tag it downloads the latest release):
 gh release download -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
 ```
 
-On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.0.2-debian-trixie-x86_64.tar.gz`):
+On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.1.0-debian-trixie-x86_64.tar.gz`):
 
 ```
 gpg --import dayzmake-release-key.asc
@@ -319,7 +322,7 @@ $s = @(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null)
   [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ') -and
   [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ') -and
   -not ($s | Select-String -Quiet -Pattern '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ')
-$file = 'dayzmake-v3.0.2-windows-x86_64.zip'
+$file = 'dayzmake-v3.1.0-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
