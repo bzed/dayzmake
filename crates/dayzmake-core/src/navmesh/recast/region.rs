@@ -30,7 +30,7 @@ use std::io;
 use super::compact::CompactHeightfield;
 
 /// `RC_BORDER_REG`: a region id with this bit set belongs to the tile border.
-const BORDER_REG: u16 = 0x8000;
+pub(crate) const BORDER_REG: u16 = 0x8000;
 /// `RC_NULL_AREA`.
 const NULL_AREA: u8 = 0;
 /// `RC_NULL_NEI`.
