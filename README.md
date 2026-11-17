@@ -31,6 +31,7 @@ is maintained here.
 
 ### Unreleased
 
+- A config entry that ends at the line end without `;` (the last entry of a block or file) keeps its value type, as in CfgConvert: `x = 1.5` is a float, no longer the string `"1.5"`, and `x = 1e999` is the usual error. At the very end of a file without a line end such an entry is a syntax error, as in CfgConvert (#95).
 - Config errors raised while parsing a value (`Invalid integer`, `Invalid float`, a failing `__EVAL`/`__EXEC`, nesting too deep) carry the `In line <file>:<line>:` context of a parse error (#94).
 - `api config <path>` looks up a config class such as `CfgVehicles/Hatchback_02`: its inheritance chain, its own and
   inherited properties each tagged with the class they come from, the classes inside it, its subclasses and the PBOs

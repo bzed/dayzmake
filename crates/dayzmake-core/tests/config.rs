@@ -990,3 +990,56 @@ fn grammar_action_errors_carry_file_and_line() {
         );
     }
 }
+
+/// The config as text.
+#[expect(clippy::unwrap_used, reason = "test helper")]
+fn text_of(src: &str) -> String {
+    parse(src).to_string().unwrap()
+}
+
+/// A last entry that ends at a line end instead of `;` keeps its value type, as in `CfgConvert`
+/// (`tests/fixtures/bi/cfgconvert/last_*.cpp`). The same with CRLF, and inside a class.
+#[test]
+fn last_entry_without_semicolon_keeps_its_type() {
+    assert_eq!(text_of("x = 1.5\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = 1.5\r\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = 1e5\n"), "x = 100000.0;\n");
+    assert_eq!(text_of("x = 7\n"), "x = 7;\n");
+    assert_eq!(text_of("x = \"s\"\n"), "x = \"s\";\n");
+    assert_eq!(text_of("x = 1.5  \t\n"), "x = 1.5;\n");
+    assert_eq!(text_of("x = abc\n"), "x = \"abc\";\n");
+    assert_eq!(text_of("x = abc def\n"), "x = \"abc def\";\n");
+    assert_eq!(text_of("x = 1 abc\n"), "x = \"1 abc\";\n");
+    assert_eq!(
+        text_of("class A { x = 1.5\n};"),
+        "class A {\n    x = 1.5;\n};\n"
+    );
+}
+
+/// `1e999` is the same hard error without a `;`, with the line of the entry.
+#[test]
+fn last_entry_without_semicolon_out_of_range_is_an_error() {
+    for src in ["y = 1;\nx = 1e999\n", "y = 1;\r\nx = 1e999\r\n"] {
+        let err = read_err(src, "cfg.cpp");
+        assert!(err.starts_with("In line cfg.cpp:2:\n\n  "), "{err:?}");
+        assert!(err.contains("out of range"), "{err:?}");
+    }
+}
+
+/// `CfgConvert` rejects a last entry at the very end of the file with neither `;` nor line end
+/// (`x = 1.5`, `x = abc`, `x = 1e5`); so does dayzmake, with the line.
+#[test]
+fn last_entry_at_end_of_file_without_terminator_is_an_error() {
+    for src in [
+        "y = 1;\nx = 1.5",
+        "y = 1;\nx = abc",
+        "y = 1;\nx = 1e5",
+        "y = 1;\nx = 1e999",
+    ] {
+        let err = read_err(src, "cfg.cpp");
+        assert!(
+            err.starts_with("In line cfg.cpp:2:\n\n  "),
+            "{src:?}: {err:?}"
+        );
+    }
+}

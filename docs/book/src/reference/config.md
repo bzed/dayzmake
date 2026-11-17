@@ -53,6 +53,9 @@ Behaviour:
 - A source that is already rapified is copied unchanged with the `prerapified-file` warning.
 - Syntax errors name the line and the token that was expected. Values that are not quoted are accepted with the
   `unquoted-string` warning and an entry without a value with `empty-value`.
+- The last entry of a block or of the file may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps
+  its number type (`1e999` is the same error as with `;`). At the very end of a file without a line end, such an
+  entry is a syntax error, because CfgConvert rejects it too.
 - `delete`, `class X: Y`, forward declarations and `+=` array appends are supported.
 
 Examples:

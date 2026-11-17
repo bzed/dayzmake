@@ -97,9 +97,13 @@ peg::parser! {
 
         rule float_text() -> (usize, &'input str) = p:position!() t:$((['-' | '+'])? ((['0'..='9']* "." ['0'..='9']+ exponent()?) / (['0'..='9']+ exponent()))) { (p, t) }
 
+        /// The end of an entry: `;`, the `}` of the class, or (for the last entry of a block or file,
+        /// as CfgConvert reads it) the end of the line.
+        rule entry_end() = whitespace()? [';' | '}'] / [' ' | '\t']* ['\r' | '\n']
+
         /// A float followed by the end of an entry. The terminator is checked before the value is,
         /// because an error raised for `1e999x` would stay and beat the unquoted-string fallback.
-        rule float_entry() -> f32 = f:float_text() &(whitespace()? [';' | '}']) v:float_value(f) { v }
+        rule float_entry() -> f32 = f:float_text() &entry_end() v:float_value(f) { v }
 
         /// A float followed by the end of an array element.
         rule float_element() -> f32 = f:float_text() &(whitespace()? [',' | '}']) v:float_value(f) { v }
@@ -119,7 +123,7 @@ peg::parser! {
 
         /// An integer followed by the end of an entry; the terminator is checked first, like for floats
         /// (`99999999999x` stays an unquoted string).
-        rule integer_entry() -> i32 = i:integer_text() &(whitespace()? [';' | '}']) v:integer_value(i) { v }
+        rule integer_entry() -> i32 = i:integer_text() &entry_end() v:integer_value(i) { v }
 
         /// An integer followed by the end of an array element.
         rule integer_element() -> i32 = i:integer_text() &(whitespace()? [',' | '}']) v:integer_value(i) { v }
@@ -253,12 +257,17 @@ peg::parser! {
             Ok(out)
         }
 
-        rule plain_entry(d: usize) -> Item =
-            e:(array_entry(d) / array_expansion_entry(d) / var_entry(d)) { Item::Entry(e.0, e.1, Vec::new()) }
+        rule array_item(d: usize) -> Item =
+            e:(array_entry(d) / array_expansion_entry(d)) whitespace()? (";" / &"}") { Item::Entry(e.0, e.1, Vec::new()) }
+
+        /// A value entry; the last one of a block or file may end at the line end instead of `;`.
+        rule var_item(d: usize) -> Item =
+            e:var_entry(d) (whitespace()? (";" / &"}") / [' ' | '\t']* &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
         rule entry(d: usize) -> Item =
             e:enum_block() whitespace()? (";" / &"}") { Item::Enums(e) } /
-            e:(class(d) / plain_entry(d)) whitespace()? (";" / &"}") { e } /
+            e:class(d) whitespace()? (";" / &"}") { e } /
+            e:(array_item(d) / var_item(d)) { e } /
             e:unquoted_string_entry() (";" / &"}" / &['\r' | '\n']) { Item::Entry(e.0, e.1, Vec::new()) }
 
         rule entry_or_exec(d: usize) -> Item = exec_entry(d) { Item::Nothing } / entry(d)
@@ -1251,9 +1260,17 @@ impl Config {
         }
         let buffer =
             String::from_utf8(bytes).map_err(|e| error!("Failed to read input file: {}", e))?;
+        let buffer_ends_a_line = buffer.is_empty() || buffer.ends_with(['\r', '\n']);
 
         let (preprocessed, info) = preprocess_in(buffer, path, includefolders, warnings)
             .prepend_error("Failed to preprocess config:")?;
+
+        // The preprocessor ends its output with a line end. A file without one has its last entry
+        // end at the end of the file, which CfgConvert rejects unless it is closed by `;` or `}`.
+        let preprocessed = match preprocessed.strip_suffix('\n') {
+            Some(text) if !buffer_ends_a_line => text.to_string(),
+            _ => preprocessed,
+        };
 
         let mut found = ConfigWarnings(Vec::new());
 

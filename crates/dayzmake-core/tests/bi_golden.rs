@@ -83,3 +83,17 @@ fn golden_e23() {
 fn golden_mac() {
     golden("mac");
 }
+
+// A last entry with a line end but no `;`: CfgConvert keeps the value type (2026-11-17).
+#[test]
+fn golden_last_float() {
+    golden("last_float");
+}
+#[test]
+fn golden_last_exp() {
+    golden("last_exp");
+}
+#[test]
+fn golden_last_str() {
+    golden("last_str");
+}
