@@ -324,6 +324,10 @@ fn clip_triangle(
 fn paint(s: &mut Span, p: &RasterParams) {
     s.area = p.area;
     s.sub_area = p.sub_area;
+    // The first hide part keeps the span (R21): a second copy of an object does not take it over.
+    if p.mode == RasterMode::PaintOrAdd && s.hide_part == 0 {
+        s.hide_part = p.sub_area;
+    }
 }
 
 /// The mode's action on one cell with the new piece `(smin, smax)`. Returns `false` for a repeat
@@ -412,7 +416,16 @@ fn apply_cell(
                 }
             }
             if !hit {
-                hf.add_span(x, z, smin, smax, p.area, p.flag_merge_threshold);
+                // The added span has sub area 0 (addSpan), but it belongs to the hide part (R21).
+                hf.add_span_in_part(
+                    x,
+                    z,
+                    smin,
+                    smax,
+                    p.area,
+                    p.flag_merge_threshold,
+                    Some(p.sub_area),
+                );
             }
         }
     }

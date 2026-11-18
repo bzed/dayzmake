@@ -51,8 +51,6 @@ const LADDER_FLAGS: u16 = 0x40;
 /// Area of ladders.
 const LADDER_AREA: u8 = 15;
 
-/// The tree area: its spans carry a tree index in the part id field, not a part (spec 5.4).
-const TREE_AREA: u8 = 10;
 const STATE_VALID: u8 = 0;
 const STATE_INVALID: u8 = 1;
 const STATE_WATER: u8 = 2;
@@ -678,9 +676,9 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
                     break;
                 }
                 last = sp.smax;
-                if sp.area != TREE_AREA && ctx.is_hide_part(sp.sub_area) {
+                if ctx.is_hide_part(sp.hide_part) {
                     {
-                        let n = parts.entry(sp.sub_area).or_insert(0_u32);
+                        let n = parts.entry(sp.hide_part).or_insert(0_u32);
                         *n = n.saturating_add(1);
                     }
                 }
@@ -1418,7 +1416,7 @@ mod tests {
         for (i, column) in hf.columns_mut().iter_mut().enumerate() {
             if matches!(i % width, 17 | 18) {
                 for sp in column.iter_mut() {
-                    sp.sub_area = sub;
+                    sp.hide_part = sub;
                 }
             }
         }
@@ -1454,6 +1452,22 @@ mod tests {
                 .iter()
                 .all(|s| s.part.is_none())
         );
+        // The sub area (the id that regions and trees use) is not the hide part (R21).
+        let (mut hf_sub, chf_sub) = hide_wall_field(0);
+        for column in hf_sub.columns_mut() {
+            for sp in column.iter_mut().filter(|sp| sp.hide_part == 0) {
+                sp.sub_area = 3;
+            }
+        }
+        let ctx = ClassCtx::new(&chf_sub, &hf_sub, &class, &hide)
+            .unwrap()
+            .unwrap();
+        assert!(
+            class_spans(&ctx, &[edge])
+                .unwrap()
+                .iter()
+                .all(|s| s.part.is_none())
+        );
         // Id 0 is no part, even when part 0 is a hide part.
         let (hf0, chf0) = hide_wall_field(0);
         let ctx = ClassCtx::new(&chf0, &hf0, &class, &[true, true])
@@ -1468,9 +1482,10 @@ mod tests {
     }
 
     /// Ruling R17: a hide part that fewer than a quarter of the samples of a run meet gives no part.
-    /// Tree spans (area 10) carry a tree index, not a part.
+    /// The visit counts the hide part of a span whatever its area is (ruling R21): the filters make
+    /// hide spans unwalkable (area 0), and the shipped meshes list the links over them.
     #[test]
-    fn a_hide_part_needs_a_quarter_of_the_samples_and_no_trees_count() {
+    fn a_hide_part_needs_a_quarter_of_the_samples_and_counts_unwalkable_spans() {
         let class = synthetic_class();
         let edge = seg([4.5, 1.0, 2.0], [4.5, 1.0, 8.0]);
         let hide = [false, false, false, true];
@@ -1481,7 +1496,7 @@ mod tests {
             for (i, column) in hf.columns_mut().iter_mut().enumerate() {
                 if matches!(i % width, 17 | 18) && zs.contains(&(i / width)) {
                     for sp in column.iter_mut() {
-                        sp.sub_area = 3;
+                        sp.hide_part = 3;
                     }
                 }
             }
@@ -1493,20 +1508,21 @@ mod tests {
         let half = spans_with(16..28);
         assert_eq!(half.len(), 2);
         assert!(half.iter().all(|s| s.part == Some(3)), "{half:?}");
-        // The same ids on spans of the tree area do not count either.
-        let (mut hf, chf) = hide_wall_field(3);
-        for column in hf.columns_mut() {
-            for sp in column.iter_mut().filter(|sp| sp.sub_area == 3) {
-                sp.area = TREE_AREA;
+        // The same wall made unwalkable (area 0) or a tree area still gives the part.
+        for other in [0, 10] {
+            let (mut hf, chf) = hide_wall_field(3);
+            for column in hf.columns_mut() {
+                for sp in column.iter_mut().filter(|sp| sp.hide_part == 3) {
+                    sp.area = other;
+                }
             }
+            let ctx = ClassCtx::new(&chf, &hf, &class, &hide).unwrap().unwrap();
+            let spans = class_spans(&ctx, &[edge]).unwrap();
+            assert!(
+                !spans.is_empty() && spans.iter().all(|s| s.part == Some(3)),
+                "area {other}: {spans:?}"
+            );
         }
-        let ctx = ClassCtx::new(&chf, &hf, &class, &hide).unwrap().unwrap();
-        assert!(
-            class_spans(&ctx, &[edge])
-                .unwrap()
-                .iter()
-                .all(|s| s.part.is_none())
-        );
     }
 
     fn visits(list: &[(u16, u32)]) -> Visits {
@@ -1558,7 +1574,7 @@ mod tests {
         // columns instead of being visited.
         let mut raised = hf.clone();
         for column in raised.columns_mut() {
-            for sp in column.iter_mut().filter(|sp| sp.sub_area == 1) {
+            for sp in column.iter_mut().filter(|sp| sp.hide_part == 1) {
                 sp.smin = 60;
                 sp.smax = 70;
             }

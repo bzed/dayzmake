@@ -31,6 +31,12 @@ fn span(smin: u16, smax: u16, area: u8) -> Span {
     Span::new(smin, smax, area)
 }
 
+/// `s` as a span of hide part `part` (ruling R21).
+fn in_part(mut s: Span, part: u16) -> Span {
+    s.hide_part = part;
+    s
+}
+
 /// A vertical sliver inside cell `(x, 0)` covering heights `y0..y1`.
 fn wall(x: f32, y0: f32, y1: f32) -> [[f32; 3]; 3] {
     [[x + 0.2, y0, 0.5], [x + 0.8, y0, 0.5], [x + 0.5, y1, 0.5]]
@@ -263,10 +269,10 @@ fn paint_or_add_adds_when_nothing_touched() {
     p.sub_area = 4;
     p.flag_merge_threshold = 1;
 
-    // Empty column: the piece is added, with sub_area 0 (addSpan).
+    // Empty column: the piece is added, with sub_area 0 (addSpan) and the hide part (R21).
     let mut hf = hf4();
     raster(&mut hf, &wall(0.0, 20.0, 25.0), &p);
-    assert_eq!(hf.column(0, 0), &[span(20, 25, 14)]);
+    assert_eq!(hf.column(0, 0), &[in_part(span(20, 25, 14), 4)]);
 
     // Ground touched by the piece: painted, nothing added.
     let mut hf = hf4();
@@ -282,7 +288,10 @@ fn paint_or_add_adds_when_nothing_touched() {
     let mut hf = hf4();
     hf.add_span(0, 0, 0, 5, 1, 1);
     raster(&mut hf, &wall(0.0, 20.0, 25.0), &p);
-    assert_eq!(hf.column(0, 0), &[span(0, 5, 1), span(20, 25, 14)]);
+    assert_eq!(
+        hf.column(0, 0),
+        &[span(0, 5, 1), in_part(span(20, 25, 14), 4)]
+    );
 }
 
 #[test]
@@ -425,7 +434,7 @@ fn paint_or_add_stops_at_smax_plus_one() {
     let mut hf = hf4();
     hf.add_span(0, 0, 0, 5, 1, 1);
     raster(&mut hf, &wall(0.0, 3.0, 6.0), &p);
-    assert_eq!(hf.column(0, 0), &[span(0, 6, 14)]);
+    assert_eq!(hf.column(0, 0), &[in_part(span(0, 6, 14), 4)]);
     // Piece [3, 7]: painted with the sub area, nothing added.
     let mut hf = hf4();
     hf.add_span(0, 0, 0, 5, 1, 1);
@@ -460,4 +469,69 @@ fn parts_far_apart_in_a_large_grid() {
     assert_eq!(hf.column(2, 800), &[span(6, 7, 12)]);
     let total: usize = hf.columns().iter().map(Vec::len).sum();
     assert_eq!(total, 2);
+}
+
+/// Ruling R21: the hide part of a span is a layer of its own. A painted span gets it with the sub
+/// area; an added span, which has sub area 0, gets it too; the other modes do not write it.
+#[test]
+fn hide_part_layer_follows_the_hide_rasterisation_only() {
+    let mut p = params(RasterMode::PaintOrAdd, 14);
+    p.sub_area = 4;
+    let mut hf = hf4();
+    hf.add_span(0, 0, 0, 5, 1, 1);
+    raster(&mut hf, &wall(0.0, 3.0, 7.0), &p);
+    assert_eq!(
+        (hf.column(0, 0)[0].sub_area, hf.column(0, 0)[0].hide_part),
+        (4, 4)
+    );
+    // The doors (PaintBelow) and the trees (Tree) paint the sub area, not the hide part.
+    for mode in [RasterMode::PaintBelow, RasterMode::Tree] {
+        let mut q = params(mode, 12);
+        q.sub_area = 6;
+        q.walkable_height = 2;
+        q.walkable_climb = 1;
+        let mut hf = hf4();
+        hf.add_span(0, 0, 0, 5, 1, 1);
+        raster(&mut hf, &wall(0.0, 3.0, 12.0), &q);
+        assert_eq!(hf.column(0, 0)[0].hide_part, 0, "{mode:?}");
+    }
+    // A plain addSpan leaves it 0.
+    let mut hf = hf4();
+    hf.add_span(1, 1, 0, 5, 14, 1);
+    assert_eq!(hf.column(1, 1)[0].hide_part, 0);
+}
+
+/// Ruling R21: a hide part painted or added over spans that already belong to another hide part (two
+/// copies of one object) leaves them in the first part; the lowest span that has one decides.
+#[test]
+fn an_added_hide_span_keeps_the_hide_part_it_merges_with() {
+    let mut first = params(RasterMode::PaintOrAdd, 14);
+    first.sub_area = 4;
+    first.flag_merge_threshold = 1;
+    let mut second = first;
+    second.sub_area = 9;
+    let mut hf = hf4();
+    raster(&mut hf, &wall(0.0, 20.0, 25.0), &first);
+    raster(&mut hf, &wall(0.0, 24.0, 25.0), &second);
+    assert_eq!(hf.column(0, 0), &[in_part(span(20, 25, 14), 4)]);
+    // Painting (the piece reaches past the span's top) keeps the first part too, and takes the area
+    // and the sub area as before.
+    raster(&mut hf, &wall(0.0, 22.0, 30.0), &second);
+    assert_eq!(hf.column(0, 0).len(), 1);
+    assert_eq!(
+        (hf.column(0, 0)[0].sub_area, hf.column(0, 0)[0].hide_part),
+        (9, 4)
+    );
+    let mut hf = hf4();
+    raster(&mut hf, &wall(0.0, 20.0, 25.0), &first);
+    raster(&mut hf, &wall(0.0, 24.0, 25.0), &second);
+    // Separate spans stay separate and keep their own part.
+    raster(&mut hf, &wall(0.0, 40.0, 45.0), &second);
+    assert_eq!(
+        hf.column(0, 0),
+        &[in_part(span(20, 25, 14), 4), in_part(span(40, 45, 14), 9)]
+    );
+    // A span bridging both merges with both: the lower one's part.
+    hf.add_span_in_part(0, 0, 24, 41, 14, 1, Some(9));
+    assert_eq!(hf.column(0, 0), &[in_part(span(20, 45, 14), 4)]);
 }

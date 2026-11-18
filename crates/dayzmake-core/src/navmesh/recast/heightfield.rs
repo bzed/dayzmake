@@ -49,6 +49,10 @@ pub struct Span {
     pub area: u8,
     /// DayZ part id (door parts, tree indices).
     pub sub_area: u16,
+    /// The hide part (area 14 group) that the span belongs to, 0 for none. A second id layer next
+    /// to [`Span::sub_area`]: only the hide part rasterisation writes it (ruling R21), the regions
+    /// and contours do not look at it, and the link trajectory walk reads it.
+    pub hide_part: u16,
 }
 
 impl Span {
@@ -60,6 +64,7 @@ impl Span {
             smax,
             area,
             sub_area: 0,
+            hide_part: 0,
         }
     }
 }
@@ -204,6 +209,26 @@ impl Heightfield {
         area: u8,
         flag_merge_threshold: i32,
     ) {
+        self.add_span_in_part(x, z, smin, smax, area, flag_merge_threshold, None);
+    }
+
+    /// [`Self::add_span`] for a piece of a hide part (ruling R21): the new span gets `hide_part`
+    /// unless a span that it merged with already had one; the first of those (lowest in the column)
+    /// keeps its id. `None` leaves the id 0, as [`Self::add_span`] does.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "addSpan's arguments and the hide part"
+    )]
+    pub fn add_span_in_part(
+        &mut self,
+        x: i32,
+        z: i32,
+        smin: u16,
+        smax: u16,
+        area: u8,
+        flag_merge_threshold: i32,
+        hide_part: Option<u16>,
+    ) {
         if self.span_count >= self.span_limit {
             if self.index(x, z).is_some() {
                 self.refused = self.refused.saturating_add(1);
@@ -218,6 +243,8 @@ impl Heightfield {
         };
         let before = column.len();
         let mut new = Span::new(store13(smin), store13(smax), area);
+        new.hide_part = hide_part.unwrap_or(0);
+        let mut older = 0_u16;
         let mut i = 0;
         while let Some(&cur) = column.get(i) {
             if cur.smin > new.smax {
@@ -232,7 +259,13 @@ impl Heightfield {
             if (i32::from(new.smax) - i32::from(cur.smax)).abs() <= flag_merge_threshold {
                 new.area = new.area.max(cur.area);
             }
+            if older == 0 {
+                older = cur.hide_part;
+            }
             column.remove(i);
+        }
+        if older != 0 && hide_part.is_some() {
+            new.hide_part = older;
         }
         column.insert(i, new);
         let after = column.len();
