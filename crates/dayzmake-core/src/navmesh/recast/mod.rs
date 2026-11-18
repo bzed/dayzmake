@@ -24,5 +24,6 @@ pub(crate) mod compact;
 pub(crate) mod contour;
 pub(crate) mod filter;
 pub(crate) mod heightfield;
+pub(crate) mod mesh;
 pub(crate) mod rasterize;
 pub(crate) mod region;
