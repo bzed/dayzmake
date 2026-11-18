@@ -15,10 +15,10 @@ use super::dayz::{
     slope::walkable,
 };
 use super::detour::{
-    CreateParams, Obstacle, OffMeshInput, TileData, TileExtra, TilePart, TilePartPoly,
-    create_tile_data,
+    CreateParams, Obstacle, TileData, TileExtra, TilePart, TilePartPoly, create_tile_data,
+    stored_off_mesh,
 };
-use super::links::generate_links;
+use super::links::{Links, generate_links};
 use super::num::{ceil_i32, i32_to_f32, trunc_i32};
 use super::recast::{
     compact::{CompactHeightfield, build_compact, erode, mark_box_area},
@@ -198,6 +198,8 @@ const NULL_AREA: u8 = 0;
 /// The terrain area: groups with it are skipped in step 3 (group 0 was rasterised in step 1).
 const TERRAIN_AREA: u32 = 1;
 const LADDER_AREA: u32 = 15;
+/// The hide part group (spec 5.4).
+const HIDE_AREA: u32 = 14;
 
 /// The low byte of an area id (the extras list stores the area "as a byte").
 fn low_byte(area: u32) -> u8 {
@@ -465,6 +467,23 @@ fn attach_parts(
     stray
 }
 
+/// Spec 7.2, ruling R17: the off-mesh polygons of the connections that belong to a hide part join the
+/// part's polygon list. `stored[i]` tells whether connection `i` is in the tile (Detour keeps those
+/// that start inside it, in order), and `ground` is the number of ground polygons that the off-mesh
+/// polygons follow. The lists stay ascending: the ground polygons come first.
+fn attach_off_mesh(extras: &mut [ExtraPart], links: &Links, stored: &[bool], ground: usize) {
+    let mut poly = ground;
+    for (part, &keep) in links.parts.iter().zip(stored) {
+        if !keep {
+            continue;
+        }
+        if let Some(part) = part.and_then(|p| extras.get_mut(usize::from(p))) {
+            part.polys.push(u32::try_from(poly).unwrap_or(u32::MAX));
+        }
+        poly += 1;
+    }
+}
+
 /// The extra section from the extras list (spec 7.2).
 fn extra_section(extras: &[ExtraPart], obstacles: Vec<Obstacle>) -> io::Result<TileExtra> {
     let mut extra = TileExtra::default();
@@ -573,10 +592,14 @@ pub fn build_tile_with_span_limit(
     // Step 6: area passes.
     let obstacles = post_compact(&mut chf, &cfg, pbmin, pbmax, tree_items, obstacles_on)?;
     // Step 7: links.
-    let off_mesh = if options.links {
-        generate_links(&mut chf, &hf, &ladders, &cfg, world)?
+    let links = if options.links {
+        let hide: Vec<bool> = extras
+            .iter()
+            .map(|e| u32::from(e.area) == HIDE_AREA)
+            .collect();
+        generate_links(&mut chf, &hf, &ladders, &cfg, world, &hide)?
     } else {
-        Vec::new()
+        Links::default()
     };
     drop(hf);
     // Step 8: distance field and regions.
@@ -607,7 +630,7 @@ pub fn build_tile_with_span_limit(
         return Ok(TileOutcome::Empty);
     }
 
-    finish_tile(world, input, &cfg, &pm, &mut extras, obstacles, &off_mesh)
+    finish_tile(world, input, &cfg, &pm, &mut extras, obstacles, &links)
 }
 
 /// Spec 5.4 step 11 and 7: flags, extras and the Detour tile.
@@ -618,16 +641,22 @@ fn finish_tile(
     pm: &PolyMesh,
     extras: &mut [ExtraPart],
     obstacles: Vec<Obstacle>,
-    off_mesh: &[OffMeshInput],
+    links: &Links,
 ) -> io::Result<TileOutcome> {
     let pad = cfg.pad;
     let mut flags: Vec<u16> = pm.areas.iter().map(|a| area_flags(*a)).collect();
     let stray = attach_parts(extras, &pm.sub_areas, &pm.areas, &mut flags);
     let obstacle_count = obstacles.len();
-    let extra = extra_section(extras, obstacles)?;
-
+    // The extra section comes after the scalars: which connections Detour keeps depends on them.
+    let no_extra = TileExtra::default();
     let mut params = CreateParams::new(
-        &pm.verts, &pm.polys, &flags, &pm.areas, cfg.nvp, off_mesh, &extra,
+        &pm.verts,
+        &pm.polys,
+        &flags,
+        &pm.areas,
+        cfg.nvp,
+        &links.off_mesh,
+        &no_extra,
     );
     params.tile_x = input.x;
     params.tile_y = input.z;
@@ -646,6 +675,9 @@ fn finish_tile(
     params.walkable_climb = world.world.max_step_height;
     params.cs = cfg.cs;
     params.ch = cfg.ch;
+    attach_off_mesh(extras, links, &stored_off_mesh(&params), pm.areas.len());
+    let extra = extra_section(extras, obstacles)?;
+    params.extra = &extra;
     let data =
         create_tile_data(&params).map_err(|e| error!("could not build Detour navmesh: {e}"))?;
     Ok(TileOutcome::Built {
@@ -657,7 +689,38 @@ fn finish_tile(
 
 #[cfg(test)]
 mod tests {
-    use super::part_id;
+    use super::{ExtraPart, Links, attach_off_mesh, part_id};
+    use crate::navmesh::detour::OffMeshInput;
+
+    fn extra(area: u8) -> ExtraPart {
+        ExtraPart {
+            object_id: 0,
+            part_index: 0,
+            area,
+            state: 1,
+            polys: Vec::new(),
+        }
+    }
+
+    /// Ruling R17: the off-mesh polygon numbers follow the ground polygons in the order of the stored
+    /// connections; connections that Detour drops take no number and no part.
+    #[test]
+    fn off_mesh_polygons_join_their_hide_part() {
+        let mut extras = vec![extra(12), extra(14), extra(14)];
+        // The ground polygons 5 and 6 are already in part 1.
+        extras[1].polys = vec![5, 6];
+        let links = Links {
+            off_mesh: vec![OffMeshInput::default(); 6],
+            parts: vec![Some(1), Some(2), None, Some(1), Some(9), Some(2)],
+        };
+        // Connection 1 is not stored, so the polygons are 10, (none), 11, 12, 13, 14.
+        let stored = [true, false, true, true, true, true];
+        attach_off_mesh(&mut extras, &links, &stored, 10);
+        assert_eq!(extras[1].polys, [5, 6, 10, 12]);
+        // Part 9 does not exist: ignored, and its polygon (13) is still counted.
+        assert_eq!(extras[2].polys, [14]);
+        assert_eq!(extras[0].polys, Vec::<u32>::new());
+    }
 
     /// Ruling R11: part ids wrap like C's `(unsigned short)counter++`.
     #[test]

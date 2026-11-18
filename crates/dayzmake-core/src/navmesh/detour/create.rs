@@ -473,6 +473,16 @@ fn classify_off_mesh(params: &CreateParams<'_>) -> OffMeshClasses {
     out
 }
 
+/// Which of the off-mesh connections of `params` are stored in the tile: those that start inside it,
+/// in order. The stored connections become the polygons after the ground polygons.
+pub(crate) fn stored_off_mesh(params: &CreateParams<'_>) -> Vec<bool> {
+    classify_off_mesh(params)
+        .classes
+        .iter()
+        .map(|&(start, _)| start == 0xff)
+        .collect()
+}
+
 /// Checks the slice lengths and limits; returns the polygon count.
 fn validate(params: &CreateParams<'_>) -> io::Result<usize> {
     let nvp = params.nvp;

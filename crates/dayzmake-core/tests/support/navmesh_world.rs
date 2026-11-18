@@ -111,7 +111,7 @@ fn quad(out: &mut Vec<V>, a: V, b: V, c: V, d: V, outward: V) {
 }
 
 /// An axis-aligned box, outward facing.
-fn cuboid(min: V, max: V) -> Vec<V> {
+pub fn cuboid(min: V, max: V) -> Vec<V> {
     let mut out = Vec::new();
     let p = |x: usize, y: usize, z: usize| -> V {
         [

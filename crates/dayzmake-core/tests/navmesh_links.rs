@@ -10,6 +10,9 @@ use dayzmake_core::navmesh::wire::{TileGroup, TileInput, WorldParams};
 mod navmesh_world;
 use navmesh_world::{synthetic_world, terrain, world_params};
 
+/// The extras index of the hide part the tests add: the two door parts of the room come first.
+const HIDE_PART: usize = 2;
+
 #[expect(clippy::panic, reason = "test helper")]
 fn built(outcome: TileOutcome) -> TileData {
     match outcome {
@@ -150,4 +153,78 @@ fn hostile_link_class_is_an_error_not_an_allocation() {
         .map(|_| ())
         .unwrap_err();
     assert!(e.to_string().contains("samples"), "{e}");
+}
+
+/// The wall tile with a hide part (area 14) laid over the low wall: a box a little wider than the wall
+/// that paints the wall's spans with the part id.
+#[expect(clippy::unwrap_used, reason = "test helper on the synthetic world")]
+fn hide_wall_input() -> TileInput {
+    let (_, tiles) = synthetic_world();
+    let mut input = tiles.iter().find(|t| (t.x, t.z) == (1, 1)).unwrap().clone();
+    let mut hide = TileGroup::default();
+    hide.area = 14;
+    hide.verts = navmesh_world::cuboid([54.8, 8.0, 79.9], [65.2, 11.0, 80.4]);
+    let mut part = dayzmake_core::navmesh::wire::TilePart::default();
+    part.part_index = 0;
+    part.object_id = 0x8000_f000_0001_0000;
+    hide.parts = vec![part];
+    input.groups.push(hide);
+    input
+}
+
+/// The polygons the extra section lists for part `index`.
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helper on a tile it just built"
+)]
+fn part_polys(data: &TileData, index: usize) -> Vec<u32> {
+    let extra = data.extra.as_ref().unwrap();
+    let mut out = Vec::new();
+    let mut at = extra.parts[index].first_poly;
+    while let Ok(i) = usize::try_from(at) {
+        out.push(extra.part_polys[i].poly);
+        at = extra.part_polys[i].next;
+    }
+    out
+}
+
+/// Spec 7.2, ruling R17: a jump over a hide part joins that part's polygon list with its off-mesh
+/// polygon, which lies after the ground polygons.
+#[test]
+#[expect(clippy::cast_sign_loss, reason = "test on the synthetic world")]
+fn links_over_a_hide_part_join_its_polygons() {
+    let p = world_params();
+    let data = built(build_tile(&p, &hide_wall_input(), &BuildOptions::default()).unwrap());
+    let base = data.header.off_mesh_base as u32;
+    let polys = part_polys(&data, HIDE_PART);
+    let jumps: Vec<u32> = data
+        .off_mesh
+        .iter()
+        .filter(|c| data.polys[usize::from(c.poly)].area() == 48)
+        .map(|c| u32::from(c.poly))
+        .collect();
+    assert!(!jumps.is_empty(), "no jump links");
+    assert!(
+        polys.iter().any(|poly| *poly >= base),
+        "no off-mesh polygon in the hide part: {polys:?}, base {base}"
+    );
+    for poly in polys.iter().filter(|poly| **poly >= base) {
+        assert!(jumps.contains(poly), "{poly} is not a jump link: {jumps:?}");
+    }
+    // The list stays ascending, as the section needs it.
+    assert!(polys.windows(2).all(|w| w[0] < w[1]), "{polys:?}");
+}
+
+/// Without a hide part no off-mesh polygon is listed in any part.
+#[test]
+#[expect(clippy::cast_sign_loss, reason = "test on the synthetic world")]
+fn links_without_a_hide_part_join_nothing() {
+    let p = world_params();
+    let (_, tiles) = synthetic_world();
+    let input = tiles.iter().find(|t| (t.x, t.z) == (1, 1)).unwrap();
+    let data = built(build_tile(&p, input, &BuildOptions::default()).unwrap());
+    let base = data.header.off_mesh_base as u32;
+    let extra = data.extra.as_ref().unwrap();
+    assert!(extra.part_polys.iter().all(|e| e.poly < base));
 }

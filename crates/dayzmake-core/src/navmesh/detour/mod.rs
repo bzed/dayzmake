@@ -15,6 +15,7 @@ mod query;
 mod set;
 mod tile;
 
+pub(crate) use create::stored_off_mesh;
 pub use create::{CreateParams, OffMeshInput, create_tile_data};
 pub use mesh::NavMesh;
 pub use query::find_nearest_poly;

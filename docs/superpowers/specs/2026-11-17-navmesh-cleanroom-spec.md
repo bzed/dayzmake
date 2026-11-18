@@ -717,9 +717,12 @@ behaviour, earlier versions swept one side):
         span is in 2..6: result **water** (state 2); stop.
       * If `inRange` and the solid column has spans: `last = 0`; `top = (u32)(i64)((y + traj[j].ymax - bmin.y)/ch)`,
         `bot = (u32)(i64)((y + traj[j].ymin - bmin.y)/ch)` (negative values wrap as unsigned); walk the spans in order
-        keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `bot <= s.smax &&
-        s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a block): if `prev` exists and
-        its area is in 2..6, result **water** and stop.
+        keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `s.subArea` is the
+        index of a **hide part** (a part of an area 14 group of the extras list, 5.1; id 0 is no part) and `s.area != 10`
+        (tree spans carry a tree index in the same field), count one visit for that part id in the sample's *part visits*
+        (R17); if `bot <= s.smax && s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a
+        block): if `prev` exists and its area is in 2..6, result **water** and stop. (The span that makes the loop break,
+        the first one above the window, is not counted. The part visits of a sample that fails are not used.)
       * `hiU = max(hiU, (u16)last)`; `loU = min(loU, (u16)last)`.
    7. If a failure state was set, `state[k] = that`, continue to the next `k`. Otherwise `hsel = (mch >= 0) ? hiU : loU`;
       `centerH = float(hsel + 1) * ch + bmin.y - cy`; `value[k] = centerH`; `state[k] = 1` (invalid) if
@@ -729,7 +732,10 @@ behaviour, earlier versions swept one side):
    `s0 = P0 + dir*t0`, `s1 = P0 + dir*t1`, `e0 = P1 + dir*t0`, `e1 = P1 + dir*t1`; `centerH = value[k-1]`; then for
    each of the four points set its y to the **top** (`smax*ch + bmin.y`) of the **solid** span in that column
    (`(int)` truncating cell index, any area) whose top is closest to the point's y; if out of range or the column is
-   empty leave y. Span validity starts at 1 (one-way). Append to `spans`.
+   empty leave y. Span validity starts at 1 (one-way). The span's **part** is the hide part with the most visits
+   summed over the part visits of the run's samples `[start, k)` (the lowest part id on a tie), provided that at least
+   a quarter of those samples (`4 * samples-with-visits >= k - start`) visited some hide part; otherwise none (R17,
+   a fit to the shipped meshes, not a rule found in the tool). Append to `spans`.
 
 **Reverse merge.** `thr = (cs*5)^2`. For `i` over spans in order (skip if validity 0), for `j > i` (skip if validity 0):
 if `distSq(b.e0, a.s0) < thr && distSq(b.e1, a.s1) < thr && distSq(b.s0, a.e0) < thr && distSq(b.s1, a.e1) < thr`
@@ -743,7 +749,8 @@ logic only skips validity-0 spans, so a validity-2 span can be matched again as 
 `rem = 0`, `off = len * 0.5`. `count = 1 - (int)(rem * -0.5f)`. For `i = 0..count-1`: `w = (len > 0) ? off / len : 0`;
 `start = s0 + d*w`, `end = e0 + d*w`; add a connection with those endpoints, centre height `span.centerH`, radius
 `off` if `count == 1` else `1.0`, flags = class flags, area = class area, direction value `1` if validity != 1 (i.e. 2)
-else 0, userId = class index; then `off += 2.0`. (So one link per ~2 m along the span, centred.)
+else 0, userId = class index; every connection of the span carries the span's part; then `off += 2.0`. (So one link per
+~2 m along the span, centred.) Ladders carry no part. A reverse merge does not move parts: a span keeps its own.
 
 Connections are therefore ordered: ladders, then per class in config order, spans in order, links along the span.
 
@@ -778,7 +785,10 @@ Area 4 is never produced by this pipeline, and 6, 7, 9, 11 are remapped away bef
 If the extras list from 5.1 is non-empty: for each polygon `i` with part id `p = polyMesh.subAreas[i]`:
 if `p >= extras.size()` count a "stray part id" for the tile and skip the polygon; if `extras[p].area != areas[i]` skip;
 otherwise set (`state == 0`) or clear (`state != 0`) flag 0x2 on the polygon and append `i` to `extras[p].polys`.
-Polygon indices are in ascending order.
+Then the **off-mesh polygons** (R17): each connection that carries a part (6.4) and is stored in the tile (7.3: only
+connections that start inside the tile are) appends its polygon, `polyCount + (number of stored connections before it)`, to
+`extras[part].polys`; its flags are not touched. Polygon indices are in ascending order, because the off-mesh polygons
+follow the ground polygons.
 
 Extra section bytes (little-endian):
 
@@ -1376,3 +1386,37 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     (also with `S0` unfused: it breaks a tile of a regression set), double precision intermediates, tie rule `<`
     in the reverse merge (breaks most tiles), FMA or other association in the span, midline or centre height
     formulas. R15 (the reciprocal in the slab test) is the same habit.
+19. **Off-mesh polygons in hide parts (ruling R17, #122).** The shipped extra sections list off-mesh polygons in hide
+    parts (parts of an area 14 group). In the 396 inner Badlands tiles that differed in the parts list (of 52,441), the
+    polygons and vertices are identical, and the shipped list has more `TilePartPoly` entries (8 bytes each), all of
+    them polygons at or above `off_mesh_base`; 1,980 off-mesh polygons in the whole shipped mesh. What the data says:
+    * Only parts of area 14 ever hold off-mesh polygons, and a connection is in at most one part.
+    * It is not the polygons: the ground polygons next to a hide part have part id 0 and are in no part, but the
+      connections that touch them are.
+    * It is not geometry alone: the hide part nearest to a connection (3-D distance of the segment to the part's
+      triangles) is the right one in 1,934 of 1,935 cases, but no distance separates the connections that are in a
+      part from the others, neither overall nor per link class (a jump class has members at 1 m and non-members at
+      0.35 m; the radius and centre height do not help).
+    * It is the trajectory walk (6.4 step 3.6). The solid heightfield keeps the part id of a hide part on spans that
+      the filters made unwalkable (area 0), and a trajectory visits them. Matched by tile and start point, the 36
+      connections in a hide part of four test blocks and the 2,818 that are in none agree with "the hide-part ids of
+      the spans the run's walks visited": every member has its part among them, no non-member has any.
+    * Which spans count: the spans the loop visits, including the one that blocks the trajectory, but **not** the first
+      span above the window that ends a column's walk (counting it moves connections to a neighbouring part of the
+      same object in 5 tiles of 7 blocks), and not spans of area 10: trees carry a tree index in the same field, and
+      that index can be the index of a hide part (without this, 79 of 160 connections in 17 test tiles were wrong).
+    * Which id: the id with the most visits over the samples of the run. The last id seen is wrong where two parts of
+      one object lie around a link (1 tile of 3 blocks), the lowest id in 2 of 13 blocks, the first id in 1 of 3.
+    * How many samples: a graze is not enough. Runs in which fewer than a quarter of the samples visit a hide part
+      are not in a part in the shipped meshes. The quarter is a fit: of the thresholds tried on 10,176 connections
+      of 115 tiles (55 that differed under a rule without it, 60 others), 1/5 to 1/4 are equal, 3/10 and above lose
+      members; the visits of the first and last sample only, or the visits of the whole run without a threshold, are
+      worse (167 and 122 wrong connections against 72 for the quarter in the 55 tiles that differed).
+    Result, whole central half of the Badlands capture (inner tiles 49..277): tiles with a difference 448 to 98; the
+    parts list classes: `extra` 397 to 47 tiles, `extra_data_size` 384 to 25. No class grew; `bmax`, the position,
+    ground polygon and field classes are as before. The five validation sets of 14.15 match completely. Not explained:
+    in 46 tiles 43 connections are in a part that the shipped mesh does not list, 18 are missing and 27 are in another
+    part (for example Badlands 162,176, where the shipped mesh puts four connections into the box part next to the
+    part the walk visits); the shipped rule has more conditions than the above. 14 more tiles differ in the part lists
+    of ground polygons (not off-mesh polygons); that is not part of this ruling.
+

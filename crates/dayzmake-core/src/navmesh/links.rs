@@ -50,6 +50,8 @@ const LADDER_FLAGS: u16 = 0x40;
 /// Area of ladders.
 const LADDER_AREA: u8 = 15;
 
+/// The tree area: its spans carry a tree index in the part id field, not a part (spec 5.4).
+const TREE_AREA: u8 = 10;
 const STATE_VALID: u8 = 0;
 const STATE_INVALID: u8 = 1;
 const STATE_WATER: u8 = 2;
@@ -112,13 +114,23 @@ impl Seg {
     }
 }
 
+/// The off-mesh connections of a tile and, for each, the hide part it belongs to (spec 7.2).
+#[derive(Debug, Default)]
+pub(crate) struct Links {
+    /// The connections: the ladders first, then the link classes in order.
+    pub(crate) off_mesh: Vec<OffMeshInput>,
+    /// `parts[i]`: the index in the tile's extras list of the hide part of connection `i`, if any.
+    pub(crate) parts: Vec<Option<u16>>,
+}
+
 // 6.1 Ladders
 
 /// Spec 6.1: one connection per vertex pair of every ladder group, in group order.
-pub(crate) fn ladder_links(ladders: &[&TileGroup], out: &mut Vec<OffMeshInput>) {
+pub(crate) fn ladder_links(ladders: &[&TileGroup], out: &mut Links) {
     for g in ladders {
         for pair in g.verts.as_chunks::<2>().0 {
-            out.push(OffMeshInput {
+            out.parts.push(None);
+            out.off_mesh.push(OffMeshInput {
                 start: pair[0],
                 end: pair[1],
                 center_height: 0.0,
@@ -425,6 +437,8 @@ pub(crate) struct LinkSpan {
     pub(crate) center_h: f32,
     /// 0 merged away, 1 one-way, 2 bidirectional.
     pub(crate) validity: u8,
+    /// The hide part the span belongs to: [`run_part`] of the walks of its samples.
+    pub(crate) part: Option<u16>,
 }
 
 /// The constants and fields of one link class sweep (spec 6.4, *Sampling*).
@@ -441,6 +455,8 @@ pub(crate) struct ClassCtx<'a> {
     mch: f32,
     inv_nt: f32,
     min_run: i32,
+    /// `hide[i]`: part `i` of the tile's extras list is a part of a hide group (area 14).
+    hide: &'a [bool],
 }
 
 impl<'a> ClassCtx<'a> {
@@ -452,6 +468,7 @@ impl<'a> ClassCtx<'a> {
         chf: &'a CompactHeightfield,
         hf: &'a Heightfield,
         class: &'a LinkClass,
+        hide: &'a [bool],
     ) -> io::Result<Option<Self>> {
         let cs = chf.cs;
         let traj = trajectory(class, cs)?;
@@ -473,7 +490,13 @@ impl<'a> ClassCtx<'a> {
             inv_nt: 1.0_f32 / i32_to_f32(n_t),
             min_run: ceil_i32((r + r) / cs),
             traj,
+            hide,
         }))
+    }
+
+    /// True when `sub` is the part id of a hide part of this tile (id 0 is no part).
+    fn is_hide_part(&self, sub: u16) -> bool {
+        sub != 0 && self.hide.get(usize::from(sub)).copied().unwrap_or(false)
     }
 }
 
@@ -549,7 +572,7 @@ fn is_water(area: u8) -> bool {
 }
 
 /// The outcome of walking one trajectory (spec 6.4 step 3.6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Walk {
     /// A failure state: 1 blocked, 2 water.
     pub(crate) fail: Option<u8>,
@@ -557,6 +580,46 @@ pub(crate) struct Walk {
     pub(crate) hi_u: u16,
     /// The lowest `last` over the steps.
     pub(crate) lo_u: u16,
+    /// The hide part ids (spec 7.2) of the spans the walk visited, with the number of spans.
+    pub(crate) parts: Vec<(u16, u32)>,
+}
+
+/// Counts one visit of the hide part `part`.
+fn count_part(parts: &mut Vec<(u16, u32)>, part: u16) {
+    if let Some(entry) = parts.iter_mut().find(|e| e.0 == part) {
+        entry.1 = entry.1.saturating_add(1);
+    } else {
+        parts.push((part, 1));
+    }
+}
+
+/// The hide part a link span belongs to (ruling R17): the part id that most of the spans visited by
+/// the given walks carry, the lowest id on a tie. `None` when no walk met a hide part.
+pub(crate) fn dominant_part<'a>(walks: impl IntoIterator<Item = &'a [(u16, u32)]>) -> Option<u16> {
+    let mut total: Vec<(u16, u32)> = Vec::new();
+    for walk in walks {
+        for &(part, n) in walk {
+            if let Some(entry) = total.iter_mut().find(|e| e.0 == part) {
+                entry.1 = entry.1.saturating_add(n);
+            } else {
+                total.push((part, n));
+            }
+        }
+    }
+    total
+        .into_iter()
+        .max_by_key(|&(part, n)| (n, std::cmp::Reverse(part)))
+        .map(|(part, _)| part)
+}
+
+/// The hide part of a run of samples (ruling R17): the [`dominant_part`] of the walks of the run's
+/// samples, when at least a quarter of the samples met a hide part.
+pub(crate) fn run_part(walks: &[Vec<(u16, u32)>]) -> Option<u16> {
+    let met = walks.iter().filter(|w| !w.is_empty()).count();
+    if met.saturating_mul(4) < walks.len() {
+        return None;
+    }
+    dominant_part(walks.iter().map(Vec::as_slice))
 }
 
 /// Spec 6.4 step 3.6: the trajectory from `S` (floor `ys`) to `E_k` (floor `ye`) through the solid
@@ -574,6 +637,7 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
     let mut hi_u = 0_u16;
     let mut lo_u = 10000_u16;
     let mut last = 0_u16;
+    let mut parts: Vec<(u16, u32)> = Vec::new();
     for (j, t) in ctx.traj.samples.iter().enumerate() {
         let u = idx_f32(j) * ctx.inv_nt;
         let y = ys + (ye - ys) * u;
@@ -582,10 +646,11 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
         let cx = trunc_i32((x - hf.bmin[0]) / ctx.cs);
         let cz = trunc_i32((z - hf.bmin[2]) / ctx.cs);
         let in_range = cx >= 0 && cx < hf.width && cz >= 0 && cz < hf.height;
-        let fail = |state| Walk {
+        let fail = |state, parts| Walk {
             fail: Some(state),
             hi_u,
             lo_u,
+            parts,
         };
 
         if (j == 0 || j + 1 == n_t) && in_range {
@@ -593,7 +658,7 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
             if let Some(area) = first.and_then(|i| chf.areas.get(i))
                 && is_water(*area)
             {
-                return fail(STATE_WATER);
+                return fail(STATE_WATER, parts);
             }
         }
         let column = hf.column(cx, cz);
@@ -607,13 +672,16 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
                     break;
                 }
                 last = sp.smax;
+                if sp.area != TREE_AREA && ctx.is_hide_part(sp.sub_area) {
+                    count_part(&mut parts, sp.sub_area);
+                }
                 if bot <= u32::from(sp.smax) && u32::from(sp.smin) <= top {
-                    return fail(STATE_INVALID);
+                    return fail(STATE_INVALID, parts);
                 }
                 prev = Some(sp);
             }
             if prev.is_some_and(|sp| is_water(sp.area)) {
-                return fail(STATE_WATER);
+                return fail(STATE_WATER, parts);
             }
         }
         hi_u = hi_u.max(last);
@@ -623,44 +691,49 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
         fail: None,
         hi_u,
         lo_u,
+        parts,
     }
 }
 
 /// Spec 6.4 step 3: the state (0 valid, 1 invalid, 2 water) and obstacle height of sample `k`.
-fn sample_state(ctx: &ClassCtx<'_>, g: &PassGeometry, t: f32) -> (u8, f32) {
+fn sample_state(ctx: &ClassCtx<'_>, g: &PassGeometry, t: f32) -> (u8, f32, Vec<(u16, u32)>) {
     let class = ctx.class;
     let (s, e, cy) = sample_at(g, t);
     // 3.1 and 3.2: the floor under the start.
     let Some(y_s) = compact_floor(ctx.chf, s) else {
-        return (STATE_INVALID, 0.0);
+        return (STATE_INVALID, 0.0, Vec::new());
     };
     if !(y_s <= class.jump_dropdown_min + class.max_step_height + s[1]
         && s[1] - (class.max_step_height - class.jump_dropdown_max) <= y_s)
     {
-        return (STATE_INVALID, 0.0);
+        return (STATE_INVALID, 0.0, Vec::new());
     }
     // 3.3 and 3.4: the floor under the end.
     let ys = y_s + ctx.ch;
     let y_top = ys + ctx.traj.samples.last().map_or(0.0, |t| t.ymin);
     let Some(y_e) = compact_floor(ctx.chf, e) else {
-        return (STATE_INVALID, 0.0);
+        return (STATE_INVALID, 0.0, Vec::new());
     };
     if !(y_e <= class.max_step_height + y_top
         && (y_top - class.jump_dropdown_min + class.jump_dropdown_max) - class.max_step_height
             <= y_e)
     {
-        return (STATE_INVALID, 0.0);
+        return (STATE_INVALID, 0.0, Vec::new());
     }
     let ye = y_e + ctx.ch;
     // 3.6 and 3.7.
     let walk = walk_trajectory(ctx, s, e, ys, ye);
     if let Some(state) = walk.fail {
-        return (state, 0.0);
+        return (state, 0.0, walk.parts);
     }
     let hsel = if ctx.mch >= 0.0 { walk.hi_u } else { walk.lo_u };
     let center_h = i32_to_f32(i32::from(hsel) + 1) * ctx.ch + ctx.hf.bmin[1] - cy;
     let invalid = (ctx.mch >= 0.0 && center_h < ctx.mch) || (ctx.mch < 0.0 && center_h > ctx.mch);
-    (if invalid { STATE_INVALID } else { STATE_VALID }, center_h)
+    (
+        if invalid { STATE_INVALID } else { STATE_VALID },
+        center_h,
+        walk.parts,
+    )
 }
 
 /// Snaps `p.y` to the top of the solid span of its column closest to it (spec 6.4, *Run
@@ -688,6 +761,7 @@ fn extract_runs(
     step: f32,
     state: &[u8],
     value: &[f32],
+    walks: &[Vec<(u16, u32)>],
     spans: &mut Vec<LinkSpan>,
 ) {
     let n_s = state.len();
@@ -713,6 +787,7 @@ fn extract_runs(
         let mut e0 = add(g.p1, scale(g.dir, t0));
         let mut e1 = add(g.p1, scale(g.dir, t1));
         let center_h = value.get(k - 1).copied().unwrap_or(0.0);
+        let part = run_part(walks.get(first..k).unwrap_or_default());
         for p in [&mut s0, &mut s1, &mut e0, &mut e1] {
             snap_to_solid(ctx.hf, p);
         }
@@ -723,6 +798,7 @@ fn extract_runs(
             e1,
             center_h,
             validity: 1,
+            part,
         });
     }
 }
@@ -751,12 +827,13 @@ pub(crate) fn sample_pass(ctx: &ClassCtx<'_>, edge: &Seg, side: f32) -> io::Resu
     };
     let mut state = vec![STATE_INVALID; count];
     let mut value = vec![0.0_f32; count];
-    for (k, (st, val)) in state.iter_mut().zip(&mut value).enumerate() {
+    let mut walks: Vec<Vec<(u16, u32)>> = vec![Vec::new(); count];
+    for (k, ((st, val), walk)) in state.iter_mut().zip(&mut value).zip(&mut walks).enumerate() {
         let t = idx_f32(k) * step;
-        (*st, *val) = sample_state(ctx, &g, t);
+        (*st, *val, *walk) = sample_state(ctx, &g, t);
     }
     let mut spans = Vec::new();
-    extract_runs(ctx, &g, step, &state, &value, &mut spans);
+    extract_runs(ctx, &g, step, &state, &value, &walks, &mut spans);
     Ok(spans)
 }
 
@@ -820,12 +897,7 @@ pub(crate) fn reverse_merge(spans: &mut [LinkSpan], cs: f32) {
 ///
 /// # Errors
 /// Returns an error when the span would emit more than [`MAX_SPAN_LINKS`] connections.
-pub(crate) fn emit(
-    span: &LinkSpan,
-    class: &LinkClass,
-    r: f32,
-    out: &mut Vec<OffMeshInput>,
-) -> io::Result<()> {
+pub(crate) fn emit(span: &LinkSpan, class: &LinkClass, r: f32, out: &mut Links) -> io::Result<()> {
     let d = sub(span.s1, span.s0);
     let length = len(d);
     let d2 = 2.0_f32 * r;
@@ -845,7 +917,8 @@ pub(crate) fn emit(
     }
     for _ in 0..count {
         let w = if length > 0.0 { off / length } else { 0.0 };
-        out.push(OffMeshInput {
+        out.parts.push(span.part);
+        out.off_mesh.push(OffMeshInput {
             start: add(span.s0, scale(d, w)),
             end: add(span.e0, scale(d, w)),
             center_height: span.center_h,
@@ -872,8 +945,9 @@ pub(crate) fn generate_links(
     ladders: &[&TileGroup],
     cfg: &TileConfig,
     world: &WorldParams,
-) -> io::Result<Vec<OffMeshInput>> {
-    let mut out = Vec::new();
+    hide: &[bool],
+) -> io::Result<Links> {
+    let mut out = Links::default();
     ladder_links(ladders, &mut out);
     if world.link_classes.is_empty() {
         return Ok(out);
@@ -894,7 +968,7 @@ pub(crate) fn generate_links(
     let edges = candidate_edges(&segs, link_depth(world), chf.cs);
     // 6.4.
     for class in &world.link_classes {
-        let Some(ctx) = ClassCtx::new(chf, hf, class)? else {
+        let Some(ctx) = ClassCtx::new(chf, hf, class, hide)? else {
             continue;
         };
         let mut spans = class_spans(&ctx, &edges)?;
@@ -1213,6 +1287,7 @@ mod tests {
                 e1: add(g.p1, g.dir),
                 center_h: 0.5,
                 validity: 1,
+                part: None,
             }
         };
         let mut spans = [span(1.0), span(-1.0)];
@@ -1280,7 +1355,7 @@ mod tests {
         // sample starts on the floor and `last` keeps the floor's top (10) over the empty columns.
         let (hf, chf) = field(|x| (x <= 15).then_some(10), |_| None, 1);
         let class = synthetic_class();
-        let ctx = ClassCtx::new(&chf, &hf, &class).unwrap().unwrap();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[]).unwrap().unwrap();
         let s = [3.3, 1.1, 5.0];
         let e = [5.7, 1.1, 5.0];
         let w = walk_trajectory(&ctx, s, e, 1.1, 1.1);
@@ -1297,12 +1372,12 @@ mod tests {
         // A tall wall (top 4.0 m) in cell columns 19 and 20 blocks the jump.
         let (hf, chf) = field(|_| Some(10), |x| (x == 19 || x == 20).then_some(40), 1);
         let class = synthetic_class();
-        let ctx = ClassCtx::new(&chf, &hf, &class).unwrap().unwrap();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[]).unwrap().unwrap();
         let w = walk_trajectory(&ctx, [3.3, 1.1, 5.0], [5.7, 1.1, 5.0], 1.1, 1.1);
         assert_eq!(w.fail, Some(1));
         // Water (area 3) under the first sample: state 2.
         let (hf, chf) = field(|_| Some(10), |_| None, 3);
-        let ctx = ClassCtx::new(&chf, &hf, &class).unwrap().unwrap();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[]).unwrap().unwrap();
         let w = walk_trajectory(&ctx, [3.3, 1.1, 5.0], [5.7, 1.1, 5.0], 1.1, 1.1);
         assert_eq!(w.fail, Some(2));
     }
@@ -1312,11 +1387,179 @@ mod tests {
         field(|_| Some(10), |x| (x == 17 || x == 18).then_some(19), 1)
     }
 
+    /// The wall field with the part id `sub` on the wall's columns.
+    fn hide_wall_field(sub: u16) -> (Heightfield, CompactHeightfield) {
+        let (mut hf, chf) = wall_field();
+        let width = usize::try_from(hf.width).unwrap();
+        for (i, column) in hf.columns_mut().iter_mut().enumerate() {
+            if matches!(i % width, 17 | 18) {
+                for sp in column.iter_mut() {
+                    sp.sub_area = sub;
+                }
+            }
+        }
+        (hf, chf)
+    }
+
+    /// Ruling R17: a link span over a hide part carries the part's index; other part ids and 0 do not
+    /// count.
+    #[test]
+    fn spans_over_a_hide_part_carry_it() {
+        let (hf, chf) = hide_wall_field(3);
+        let class = synthetic_class();
+        let edge = seg([4.5, 1.0, 2.0], [4.5, 1.0, 8.0]);
+        let hide = [false, false, false, true];
+        let ctx = ClassCtx::new(&chf, &hf, &class, &hide).unwrap().unwrap();
+        let spans = class_spans(&ctx, &[edge]).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert!(spans.iter().all(|s| s.part == Some(3)), "{spans:?}");
+        // Part 3 is a door part: not a hide part.
+        let no_hide = [false; 4];
+        let ctx = ClassCtx::new(&chf, &hf, &class, &no_hide).unwrap().unwrap();
+        assert!(
+            class_spans(&ctx, &[edge])
+                .unwrap()
+                .iter()
+                .all(|s| s.part.is_none())
+        );
+        // The part list of the tile is shorter than the id: no part either, and no panic.
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[true]).unwrap().unwrap();
+        assert!(
+            class_spans(&ctx, &[edge])
+                .unwrap()
+                .iter()
+                .all(|s| s.part.is_none())
+        );
+        // Id 0 is no part, even when part 0 is a hide part.
+        let (hf0, chf0) = hide_wall_field(0);
+        let ctx = ClassCtx::new(&chf0, &hf0, &class, &[true, true])
+            .unwrap()
+            .unwrap();
+        assert!(
+            class_spans(&ctx, &[edge])
+                .unwrap()
+                .iter()
+                .all(|s| s.part.is_none())
+        );
+    }
+
+    /// Ruling R17: a hide part that fewer than a quarter of the samples of a run meet gives no part.
+    /// Tree spans (area 10) carry a tree index, not a part.
+    #[test]
+    fn a_hide_part_needs_a_quarter_of_the_samples_and_no_trees_count() {
+        let class = synthetic_class();
+        let edge = seg([4.5, 1.0, 2.0], [4.5, 1.0, 8.0]);
+        let hide = [false, false, false, true];
+        // The part id on the wall's columns for the z cells `zs` only; the run has 24 or so samples.
+        let spans_with = |zs: std::ops::Range<usize>| {
+            let (mut hf, chf) = wall_field();
+            let width = usize::try_from(hf.width).unwrap();
+            for (i, column) in hf.columns_mut().iter_mut().enumerate() {
+                if matches!(i % width, 17 | 18) && zs.contains(&(i / width)) {
+                    for sp in column.iter_mut() {
+                        sp.sub_area = 3;
+                    }
+                }
+            }
+            let ctx = ClassCtx::new(&chf, &hf, &class, &hide).unwrap().unwrap();
+            class_spans(&ctx, &[edge]).unwrap()
+        };
+        // Four of 24 cells (one sixth): no part. Twelve of 24 (a half): the part.
+        assert!(spans_with(18..22).iter().all(|s| s.part.is_none()));
+        let half = spans_with(16..28);
+        assert_eq!(half.len(), 2);
+        assert!(half.iter().all(|s| s.part == Some(3)), "{half:?}");
+        // The same ids on spans of the tree area do not count either.
+        let (mut hf, chf) = hide_wall_field(3);
+        for column in hf.columns_mut() {
+            for sp in column.iter_mut().filter(|sp| sp.sub_area == 3) {
+                sp.area = TREE_AREA;
+            }
+        }
+        let ctx = ClassCtx::new(&chf, &hf, &class, &hide).unwrap().unwrap();
+        assert!(
+            class_spans(&ctx, &[edge])
+                .unwrap()
+                .iter()
+                .all(|s| s.part.is_none())
+        );
+    }
+
+    #[test]
+    fn the_run_part_is_the_dominant_part_when_a_quarter_of_the_samples_met_one() {
+        let met: Vec<(u16, u32)> = vec![(4, 2), (9, 1)];
+        let none: Vec<(u16, u32)> = Vec::new();
+        assert_eq!(run_part(&[]), None);
+        assert_eq!(run_part(&[none.clone(), none.clone()]), None);
+        // 1 of 4 samples: just enough. 1 of 5: too few.
+        assert_eq!(
+            run_part(&[met.clone(), none.clone(), none.clone(), none.clone()]),
+            Some(4)
+        );
+        assert_eq!(
+            run_part(&[met, none.clone(), none.clone(), none.clone(), none]),
+            None
+        );
+    }
+
+    /// The span that ends a column's walk, the first one above the trajectory window, does not count.
+    #[test]
+    fn a_hide_part_above_the_window_does_not_count() {
+        let (hf, chf) = hide_wall_field(1);
+        let class = synthetic_class();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[false, true])
+            .unwrap()
+            .unwrap();
+        // The jump clears the wall (top 1.9 m): its spans lie below the window and are visited.
+        let (s, e) = ([3.3, 1.1, 5.0], [5.7, 1.1, 5.0]);
+        let below = walk_trajectory(&ctx, s, e, 1.1, 1.1);
+        assert_eq!(below.fail, None);
+        assert!(
+            below.parts.iter().all(|p| p.0 == 1) && !below.parts.is_empty(),
+            "{below:?}"
+        );
+        // The same part raised well above the window (6.0 to 7.0 m): it ends the walk of its
+        // columns instead of being visited.
+        let mut raised = hf.clone();
+        for column in raised.columns_mut() {
+            for sp in column.iter_mut().filter(|sp| sp.sub_area == 1) {
+                sp.smin = 60;
+                sp.smax = 70;
+            }
+        }
+        let ctx = ClassCtx::new(&chf, &raised, &class, &[false, true])
+            .unwrap()
+            .unwrap();
+        let above = walk_trajectory(&ctx, s, e, 1.1, 1.1);
+        assert_eq!(above.fail, None);
+        assert!(above.parts.is_empty(), "{above:?}");
+    }
+
+    #[test]
+    fn the_dominant_part_is_the_most_visited_and_the_lowest_on_a_tie() {
+        let none: &[(u16, u32)] = &[];
+        assert_eq!(dominant_part([none]), None);
+        assert_eq!(dominant_part(std::iter::empty::<&[(u16, u32)]>()), None);
+        // 7 seen 3 times in total, 5 twice.
+        assert_eq!(
+            dominant_part([&[(5, 1), (7, 2)][..], &[(5, 1), (7, 1)][..]]),
+            Some(7)
+        );
+        // A tie goes to the lower id, whatever the order.
+        assert_eq!(dominant_part([&[(9, 2), (4, 2)][..]]), Some(4));
+        assert_eq!(dominant_part([&[(4, 2), (9, 2)][..]]), Some(4));
+        // Counts add up across walks and cannot overflow.
+        assert_eq!(
+            dominant_part([&[(1, u32::MAX)][..], &[(1, 5)][..], &[(2, u32::MAX)][..]]),
+            Some(1)
+        );
+    }
+
     #[test]
     fn both_passes_give_spans_in_order() {
         let (hf, chf) = wall_field();
         let class = synthetic_class();
-        let ctx = ClassCtx::new(&chf, &hf, &class).unwrap().unwrap();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[]).unwrap().unwrap();
         // The edge runs along the middle of the wall.
         let edge = seg([4.5, 1.0, 2.0], [4.5, 1.0, 8.0]);
         let mut spans = class_spans(&ctx, &[edge]).unwrap();
@@ -1343,7 +1586,7 @@ mod tests {
     fn short_runs_are_dropped() {
         let (hf, chf) = wall_field();
         let class = synthetic_class();
-        let ctx = ClassCtx::new(&chf, &hf, &class).unwrap().unwrap();
+        let ctx = ClassCtx::new(&chf, &hf, &class, &[]).unwrap().unwrap();
         // minRun = ceil(0.6 / 0.25) = 3: an edge of 0.5 m (nS = 2) has no span.
         let edge = seg([4.5, 1.0, 2.0], [4.5, 1.0, 2.5]);
         assert_eq!(class_spans(&ctx, &[edge]).unwrap().len(), 0);
@@ -1357,6 +1600,7 @@ mod tests {
             e1,
             center_h,
             validity: 1,
+            part: None,
         }
     }
 
@@ -1428,8 +1672,9 @@ mod tests {
             [7.0, 0.0, 1.8],
             0.8,
         );
-        let mut out = Vec::new();
+        let mut out = Links::default();
         emit(&s, &class, 0.3, &mut out).unwrap();
+        let out = out.off_mesh;
         // rem = 7 - 1.2, count = 1 - (int)(rem * -0.5) = 3, centred and 2 m apart.
         assert_eq!(out.len(), 3);
         let xs: Vec<f32> = out.iter().map(|c| c.start[0]).collect();
@@ -1454,8 +1699,9 @@ mod tests {
         one.validity = 2;
         let mut class = class;
         class.index = 5;
-        let mut out = Vec::new();
+        let mut out = Links::default();
         emit(&one, &class, 0.3, &mut out).unwrap();
+        let out = out.off_mesh;
         assert_eq!(out.len(), 1);
         assert!(close(out[0].radius, 0.5) && close(out[0].start[0], 0.5));
         assert!(out[0].bidirectional);
@@ -1468,7 +1714,7 @@ mod tests {
             [1.0e12, 0.0, 1.8],
             0.8,
         );
-        assert!(emit(&huge, &class, 0.3, &mut Vec::new()).is_err());
+        assert!(emit(&huge, &class, 0.3, &mut Links::default()).is_err());
     }
 
     #[test]
@@ -1482,8 +1728,10 @@ mod tests {
             ],
             ..TileGroup::default()
         };
-        let mut out = Vec::new();
+        let mut out = Links::default();
         ladder_links(&[&g], &mut out);
+        assert_eq!(out.parts, [None]);
+        let out = out.off_mesh;
         assert_eq!(out.len(), 1);
         let l = &out[0];
         assert_eq!((l.start, l.end), ([1.0, 2.0, 3.0], [1.0, 5.0, 3.0]));
