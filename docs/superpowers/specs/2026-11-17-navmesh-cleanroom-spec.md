@@ -658,8 +658,8 @@ Find all other segments that face `s` across an obstacle within `depth`, group t
    u.z*dq.x + n.z*dq.z)`. Box in local space: `min = (0, -width/2, 0)`, `max = (len, +width/2, depth)`.
 3. For every segment `k` in `segs` (including `s` itself): transform its endpoints `a`, `b` to local, `e = b - a`;
    clip the parametric segment `a + t*e` against the box: `tmin = 0`, `tmax = FLT_MAX`; for each axis: if `|e| < 1e-6`
-   reject when `a` lies outside `[min,max]` on that axis; else `t1 = (min - a)/e`, `t2 = (max - a)/e`, swap so
-   `t1 <= t2`, `tmin = max(tmin, t1)`, `tmax = min(tmax, t2)`, reject if `tmax < tmin`. Accept if not rejected and
+   reject when `a` lies outside `[min,max]` on that axis; else `ood = 1.0f/e`, `t1 = (min - a)*ood`,
+   `t2 = (max - a)*ood` (a multiplication by the reciprocal, ruling R15), swap so `t1 <= t2`, `tmin = max(tmin, t1)`, `tmax = min(tmax, t2)`, reject if `tmax < tmin`. Accept if not rejected and
    `tmin <= 1` and `tmax >= 0`.
 4. For accepted segments compute the world direction of segment `k` flattened to y = 0: `v = (p1.x - p0.x, 0, p1.z -
    p0.z)`, normalised if the 2-D length is `>= FLT_EPSILON` (else `v.y = 1`). Require `dot(v, u) <= cos(2.3561945f)`
@@ -1342,3 +1342,10 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     tiles are identical to the shipped ones; the values 0 to 4 and 6 do not match). Every shipped world has 5 voxels both
     for `walkableClimb` (0.45 m) and for `ceil(proneHeight / 0.1)` (0.5 m), so the data cannot say which one DayZ means;
     dayzmake uses `walkableClimb`, the step height a walker can wade up. A world with other agent values would settle it.
+17. **Slab test by reciprocal (ruling R15, #117).** The segment-box clip of `refineEdge` (§6.3 step 3) multiplies by `1/e`, as
+    upstream's `isectSegAABB` does (RecastDemo `InputGeom.cpp`; demo code, not the Recast library, so it corroborates the
+    ruling and the tile data proves it), instead of dividing. The two differ by one ulp for some operands (`3/7` and
+    `3*(1/7)`). In Livonia tile 130,223 one clip parameter is one ulp lower, which moves a midline end point across an
+    exact rounding tie of `p0 + (p1 - p0)*t` at x of about 6510, and so both end points of two links by 1 mm. With the
+    reciprocal all five validation sets match the shipped meshes completely (inner tiles); a lerp `p0*(1-t) + p1*t`
+    for that point fixes the tile but breaks every set, and neither FMA nor a reciprocal in `normalize` changes it.

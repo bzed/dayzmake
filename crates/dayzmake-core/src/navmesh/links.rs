@@ -199,8 +199,9 @@ fn clip_segment(a: V, e: V, min: V, max: V) -> Option<(f32, f32)> {
                 return None;
             }
         } else {
-            let mut t1 = (lo - a) / e;
-            let mut t2 = (hi - a) / e;
+            let ood = 1.0_f32 / e;
+            let mut t1 = (lo - a) * ood;
+            let mut t2 = (hi - a) * ood;
             if t1 > t2 {
                 std::mem::swap(&mut t1, &mut t2);
             }
@@ -1116,6 +1117,22 @@ mod tests {
             *v = [1, 1, 1, 0];
         }
         assert_eq!(edge_segments(&short).len(), 0);
+    }
+
+    /// Ruling R15: the slab test multiplies by the reciprocal `1 / e` (as upstream's segment-box test
+    /// does) instead of dividing; `3 / 7` and `3 * (1 / 7)` are different `f32` values.
+    #[test]
+    fn clip_multiplies_by_the_reciprocal() {
+        let (_, tmax) = clip_segment(
+            [0.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [0.0, -1.0, -1.0],
+            [3.0, 1.0, 1.0],
+        )
+        .expect("the segment crosses the box");
+        let by_reciprocal = 3.0_f32 * (1.0_f32 / 7.0);
+        assert_ne!(by_reciprocal.to_bits(), (3.0_f32 / 7.0).to_bits());
+        assert_eq!(tmax.to_bits(), by_reciprocal.to_bits());
     }
 
     #[test]
