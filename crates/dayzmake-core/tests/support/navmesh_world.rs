@@ -235,7 +235,9 @@ fn part(part_index: u32, object_id: u64, first_vertex: usize) -> TilePart {
 pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
     let mut out = Vec::new();
     // Tiles are 50 m wide: 10 m on each side makes 70 m, 35 cells of 2 m.
-    assert!(f32::midpoint(tmax[0] - tmin[0], 20.0) - 35.0 < f32::EPSILON * 64.0);
+    for (lo, hi) in tmin.iter().zip(&tmax) {
+        assert!((f32::midpoint(hi - lo, 20.0) - 35.0).abs() < f32::EPSILON * 64.0);
+    }
     for iz in 0..35_u8 {
         for ix in 0..35_u8 {
             let x0 = tmin[0] - 10.0 + 2.0 * f32::from(ix);

@@ -14,6 +14,7 @@ pub mod detour;
 #[doc(hidden)]
 pub mod internals;
 pub mod islands;
+pub(crate) mod links;
 pub(crate) mod num;
 pub(crate) mod recast;
 pub mod wire;

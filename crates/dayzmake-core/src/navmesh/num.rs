@@ -58,3 +58,14 @@ pub(crate) fn trunc_u16(x: f32) -> u16 {
 pub(crate) fn trunc_u8(x: f32) -> u8 {
     x as u8
 }
+
+/// C `(u32)(i64)x`: truncation to a 64-bit integer, then wrapping to 32 bits, so negative values wrap
+/// to large unsigned ones. The 64-bit step saturates on out-of-range floats and gives 0 for NaN.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "wrapping as in the C code (spec 6.4): negative heights become large unsigned values"
+)]
+pub(crate) fn wrap_u32(x: f32) -> u32 {
+    (x as i64) as u32
+}

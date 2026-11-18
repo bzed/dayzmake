@@ -18,6 +18,7 @@ use super::detour::{
     CreateParams, Obstacle, OffMeshInput, TileData, TileExtra, TilePart, TilePartPoly,
     create_tile_data,
 };
+use super::links::generate_links;
 use super::num::{ceil_i32, i32_to_f32, trunc_i32};
 use super::recast::{
     compact::{CompactHeightfield, build_compact, erode, mark_box_area},
@@ -357,7 +358,7 @@ fn rasterize_objects<'a>(
 }
 
 /// The area table of spec 4: the default minimum region area, except for areas 10 and 12 to 14.
-fn min_region_table(cfg: &TileConfig) -> [i32; 64] {
+pub(crate) fn min_region_table(cfg: &TileConfig) -> [i32; 64] {
     let mut table = [cfg.min_region_area; 64];
     for id in [10, 12, 13, 14] {
         if let Some(e) = table.get_mut(id) {
@@ -409,21 +410,6 @@ fn post_compact(
     erode(chf, cfg.walkable_radius).map_err(|e| error!("could not erode: {e}"))?;
     remap_and_roof(chf);
     Ok(found)
-}
-
-/// Spec 5.4 step 7 hook: jump, climb and ladder links. Task 12 fills it in; no links for now.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "the link stage is fallible once it exists"
-)]
-pub(crate) fn links(
-    _chf: &mut CompactHeightfield,
-    _hf: &Heightfield,
-    _ladders: &[&TileGroup],
-    _cfg: &TileConfig,
-    _world: &WorldParams,
-) -> io::Result<Vec<OffMeshInput>> {
-    Ok(Vec::new())
 }
 
 /// The poly flags of an area (spec 7.1).
@@ -570,7 +556,7 @@ pub fn build_tile(
     let obstacles = post_compact(&mut chf, &cfg, pbmin, pbmax, tree_items, obstacles_on)?;
     // Step 7: links.
     let off_mesh = if options.links {
-        links(&mut chf, &hf, &ladders, &cfg, world)?
+        generate_links(&mut chf, &hf, &ladders, &cfg, world)?
     } else {
         Vec::new()
     };
@@ -649,4 +635,18 @@ fn finish_tile(
         stray_part_ids: stray,
         obstacles: obstacle_count,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::part_id;
+
+    /// Ruling R11: part ids wrap like C's `(unsigned short)counter++`.
+    #[test]
+    fn part_ids_wrap_at_65536() {
+        assert_eq!(part_id(0), 0);
+        assert_eq!(part_id(65535), 65535);
+        assert_eq!(part_id(65536), 0);
+        assert_eq!(part_id(65537), 1);
+    }
 }
