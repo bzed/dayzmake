@@ -13,6 +13,7 @@
 //! pass along an edge at most [`MAX_EDGE_SAMPLES`], and one span emits at most [`MAX_SPAN_LINKS`]
 //! connections; beyond them the build fails with an error instead of allocating.
 
+use std::collections::BTreeMap;
 use std::io;
 
 use super::build::{TileConfig, min_region_table};
@@ -437,7 +438,7 @@ pub(crate) struct LinkSpan {
     pub(crate) center_h: f32,
     /// 0 merged away, 1 one-way, 2 bidirectional.
     pub(crate) validity: u8,
-    /// The hide part the span belongs to: [`run_part`] of the walks of its samples.
+    /// The hide part the span belongs to: [`RunVisits::part`] over its samples.
     pub(crate) part: Option<u16>,
 }
 
@@ -581,45 +582,50 @@ pub(crate) struct Walk {
     /// The lowest `last` over the steps.
     pub(crate) lo_u: u16,
     /// The hide part ids (spec 7.2) of the spans the walk visited, with the number of spans.
-    pub(crate) parts: Vec<(u16, u32)>,
+    pub(crate) parts: Visits,
 }
 
-/// Counts one visit of the hide part `part`.
-fn count_part(parts: &mut Vec<(u16, u32)>, part: u16) {
-    if let Some(entry) = parts.iter_mut().find(|e| e.0 == part) {
-        entry.1 = entry.1.saturating_add(1);
-    } else {
-        parts.push((part, 1));
-    }
+/// Visits per hide part id; empty for a walk that met none (no allocation).
+pub(crate) type Visits = BTreeMap<u16, u32>;
+
+/// A hide part must have been met by at least `MET_NUM / MET_DEN` of the samples of a run (ruling
+/// R17). The value is a fit: the data does not pin it down (spec 14.19).
+const MET_NUM: usize = 1;
+const MET_DEN: usize = 4;
+
+/// The visits of the samples of one run of valid samples, totalled while the samples are scanned.
+#[derive(Debug, Default)]
+pub(crate) struct RunVisits {
+    len: usize,
+    met: usize,
+    total: Visits,
 }
 
-/// The hide part a link span belongs to (ruling R17): the part id that most of the spans visited by
-/// the given walks carry, the lowest id on a tie. `None` when no walk met a hide part.
-pub(crate) fn dominant_part<'a>(walks: impl IntoIterator<Item = &'a [(u16, u32)]>) -> Option<u16> {
-    let mut total: Vec<(u16, u32)> = Vec::new();
-    for walk in walks {
-        for &(part, n) in walk {
-            if let Some(entry) = total.iter_mut().find(|e| e.0 == part) {
-                entry.1 = entry.1.saturating_add(n);
-            } else {
-                total.push((part, n));
-            }
+impl RunVisits {
+    /// Adds the walk of the next valid sample.
+    pub(crate) fn add(&mut self, walk: &Visits) {
+        self.len += 1;
+        if walk.is_empty() {
+            return;
+        }
+        self.met += 1;
+        for (&part, &n) in walk {
+            let e = self.total.entry(part).or_insert(0);
+            *e = e.saturating_add(n);
         }
     }
-    total
-        .into_iter()
-        .max_by_key(|&(part, n)| (n, std::cmp::Reverse(part)))
-        .map(|(part, _)| part)
-}
 
-/// The hide part of a run of samples (ruling R17): the [`dominant_part`] of the walks of the run's
-/// samples, when at least a quarter of the samples met a hide part.
-pub(crate) fn run_part(walks: &[Vec<(u16, u32)>]) -> Option<u16> {
-    let met = walks.iter().filter(|w| !w.is_empty()).count();
-    if met.saturating_mul(4) < walks.len() {
-        return None;
+    /// The hide part of the run (ruling R17): the part with the most visits, the lowest id on a tie,
+    /// when enough of the samples met a hide part; otherwise none.
+    pub(crate) fn part(&self) -> Option<u16> {
+        if self.met.saturating_mul(MET_DEN) < self.len.saturating_mul(MET_NUM) {
+            return None;
+        }
+        self.total
+            .iter()
+            .max_by_key(|&(&part, &n)| (n, std::cmp::Reverse(part)))
+            .map(|(&part, _)| part)
     }
-    dominant_part(walks.iter().map(Vec::as_slice))
 }
 
 /// Spec 6.4 step 3.6: the trajectory from `S` (floor `ys`) to `E_k` (floor `ye`) through the solid
@@ -637,7 +643,7 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
     let mut hi_u = 0_u16;
     let mut lo_u = 10000_u16;
     let mut last = 0_u16;
-    let mut parts: Vec<(u16, u32)> = Vec::new();
+    let mut parts = Visits::new();
     for (j, t) in ctx.traj.samples.iter().enumerate() {
         let u = idx_f32(j) * ctx.inv_nt;
         let y = ys + (ye - ys) * u;
@@ -673,7 +679,10 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
                 }
                 last = sp.smax;
                 if sp.area != TREE_AREA && ctx.is_hide_part(sp.sub_area) {
-                    count_part(&mut parts, sp.sub_area);
+                    {
+                        let n = parts.entry(sp.sub_area).or_insert(0_u32);
+                        *n = n.saturating_add(1);
+                    }
                 }
                 if bot <= u32::from(sp.smax) && u32::from(sp.smin) <= top {
                     return fail(STATE_INVALID, parts);
@@ -696,35 +705,35 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
 }
 
 /// Spec 6.4 step 3: the state (0 valid, 1 invalid, 2 water) and obstacle height of sample `k`.
-fn sample_state(ctx: &ClassCtx<'_>, g: &PassGeometry, t: f32) -> (u8, f32, Vec<(u16, u32)>) {
+fn sample_state(ctx: &ClassCtx<'_>, g: &PassGeometry, t: f32) -> (u8, f32, Visits) {
     let class = ctx.class;
     let (s, e, cy) = sample_at(g, t);
     // 3.1 and 3.2: the floor under the start.
     let Some(y_s) = compact_floor(ctx.chf, s) else {
-        return (STATE_INVALID, 0.0, Vec::new());
+        return (STATE_INVALID, 0.0, Visits::new());
     };
     if !(y_s <= class.jump_dropdown_min + class.max_step_height + s[1]
         && s[1] - (class.max_step_height - class.jump_dropdown_max) <= y_s)
     {
-        return (STATE_INVALID, 0.0, Vec::new());
+        return (STATE_INVALID, 0.0, Visits::new());
     }
     // 3.3 and 3.4: the floor under the end.
     let ys = y_s + ctx.ch;
     let y_top = ys + ctx.traj.samples.last().map_or(0.0, |t| t.ymin);
     let Some(y_e) = compact_floor(ctx.chf, e) else {
-        return (STATE_INVALID, 0.0, Vec::new());
+        return (STATE_INVALID, 0.0, Visits::new());
     };
     if !(y_e <= class.max_step_height + y_top
         && (y_top - class.jump_dropdown_min + class.jump_dropdown_max) - class.max_step_height
             <= y_e)
     {
-        return (STATE_INVALID, 0.0, Vec::new());
+        return (STATE_INVALID, 0.0, Visits::new());
     }
     let ye = y_e + ctx.ch;
     // 3.6 and 3.7.
     let walk = walk_trajectory(ctx, s, e, ys, ye);
     if let Some(state) = walk.fail {
-        return (state, 0.0, walk.parts);
+        return (state, 0.0, Visits::new());
     }
     let hsel = if ctx.mch >= 0.0 { walk.hi_u } else { walk.lo_u };
     let center_h = i32_to_f32(i32::from(hsel) + 1) * ctx.ch + ctx.hf.bmin[1] - cy;
@@ -761,11 +770,12 @@ fn extract_runs(
     step: f32,
     state: &[u8],
     value: &[f32],
-    walks: &[Vec<(u16, u32)>],
+    run_parts: &[Option<u16>],
     spans: &mut Vec<LinkSpan>,
 ) {
     let n_s = state.len();
     let mut start: Option<usize> = None;
+    let mut run_index = 0_usize;
     for k in 0..=n_s {
         // k == nS is an invalid sentinel.
         let valid = state.get(k).is_some_and(|&s| s == STATE_VALID);
@@ -776,6 +786,8 @@ fn extract_runs(
         let Some(first) = start.take() else {
             continue;
         };
+        let part = run_parts.get(run_index).copied().flatten();
+        run_index += 1;
         let run = i32::try_from(k - first).unwrap_or(i32::MAX);
         if run <= ctx.min_run {
             continue;
@@ -787,7 +799,6 @@ fn extract_runs(
         let mut e0 = add(g.p1, scale(g.dir, t0));
         let mut e1 = add(g.p1, scale(g.dir, t1));
         let center_h = value.get(k - 1).copied().unwrap_or(0.0);
-        let part = run_part(walks.get(first..k).unwrap_or_default());
         for p in [&mut s0, &mut s1, &mut e0, &mut e1] {
             snap_to_solid(ctx.hf, p);
         }
@@ -827,13 +838,26 @@ pub(crate) fn sample_pass(ctx: &ClassCtx<'_>, edge: &Seg, side: f32) -> io::Resu
     };
     let mut state = vec![STATE_INVALID; count];
     let mut value = vec![0.0_f32; count];
-    let mut walks: Vec<Vec<(u16, u32)>> = vec![Vec::new(); count];
-    for (k, ((st, val), walk)) in state.iter_mut().zip(&mut value).zip(&mut walks).enumerate() {
+    // The part of every maximal run of valid samples, in order; the visits of the samples are
+    // totalled as they come, so nothing per sample is kept.
+    let mut run_parts: Vec<Option<u16>> = Vec::new();
+    let mut run = RunVisits::default();
+    for (k, (st, val)) in state.iter_mut().zip(&mut value).enumerate() {
         let t = idx_f32(k) * step;
-        (*st, *val, *walk) = sample_state(ctx, &g, t);
+        let walk;
+        (*st, *val, walk) = sample_state(ctx, &g, t);
+        if *st == STATE_VALID {
+            run.add(&walk);
+        } else if run.len > 0 {
+            run_parts.push(run.part());
+            run = RunVisits::default();
+        }
+    }
+    if run.len > 0 {
+        run_parts.push(run.part());
     }
     let mut spans = Vec::new();
-    extract_runs(ctx, &g, step, &state, &value, &walks, &mut spans);
+    extract_runs(ctx, &g, step, &state, &value, &run_parts, &mut spans);
     Ok(spans)
 }
 
@@ -1485,19 +1509,31 @@ mod tests {
         );
     }
 
+    fn visits(list: &[(u16, u32)]) -> Visits {
+        list.iter().copied().collect()
+    }
+
+    fn run_of(walks: &[Visits]) -> Option<u16> {
+        let mut run = RunVisits::default();
+        for w in walks {
+            run.add(w);
+        }
+        run.part()
+    }
+
     #[test]
-    fn the_run_part_is_the_dominant_part_when_a_quarter_of_the_samples_met_one() {
-        let met: Vec<(u16, u32)> = vec![(4, 2), (9, 1)];
-        let none: Vec<(u16, u32)> = Vec::new();
-        assert_eq!(run_part(&[]), None);
-        assert_eq!(run_part(&[none.clone(), none.clone()]), None);
+    fn the_run_part_needs_a_quarter_of_the_samples() {
+        let met = visits(&[(4, 2), (9, 1)]);
+        let none = Visits::new();
+        assert_eq!(run_of(&[]), None);
+        assert_eq!(run_of(&[none.clone(), none.clone()]), None);
         // 1 of 4 samples: just enough. 1 of 5: too few.
         assert_eq!(
-            run_part(&[met.clone(), none.clone(), none.clone(), none.clone()]),
+            run_of(&[met.clone(), none.clone(), none.clone(), none.clone()]),
             Some(4)
         );
         assert_eq!(
-            run_part(&[met, none.clone(), none.clone(), none.clone(), none]),
+            run_of(&[met, none.clone(), none.clone(), none.clone(), none]),
             None
         );
     }
@@ -1515,7 +1551,7 @@ mod tests {
         let below = walk_trajectory(&ctx, s, e, 1.1, 1.1);
         assert_eq!(below.fail, None);
         assert!(
-            below.parts.iter().all(|p| p.0 == 1) && !below.parts.is_empty(),
+            below.parts.keys().all(|p| *p == 1) && !below.parts.is_empty(),
             "{below:?}"
         );
         // The same part raised well above the window (6.0 to 7.0 m): it ends the walk of its
@@ -1537,22 +1573,72 @@ mod tests {
 
     #[test]
     fn the_dominant_part_is_the_most_visited_and_the_lowest_on_a_tie() {
-        let none: &[(u16, u32)] = &[];
-        assert_eq!(dominant_part([none]), None);
-        assert_eq!(dominant_part(std::iter::empty::<&[(u16, u32)]>()), None);
         // 7 seen 3 times in total, 5 twice.
         assert_eq!(
-            dominant_part([&[(5, 1), (7, 2)][..], &[(5, 1), (7, 1)][..]]),
+            run_of(&[visits(&[(5, 1), (7, 2)]), visits(&[(5, 1), (7, 1)])]),
             Some(7)
         );
         // A tie goes to the lower id, whatever the order.
-        assert_eq!(dominant_part([&[(9, 2), (4, 2)][..]]), Some(4));
-        assert_eq!(dominant_part([&[(4, 2), (9, 2)][..]]), Some(4));
+        assert_eq!(run_of(&[visits(&[(9, 2), (4, 2)])]), Some(4));
+        assert_eq!(run_of(&[visits(&[(4, 2), (9, 2)])]), Some(4));
         // Counts add up across walks and cannot overflow.
         assert_eq!(
-            dominant_part([&[(1, u32::MAX)][..], &[(1, 5)][..], &[(2, u32::MAX)][..]]),
+            run_of(&[
+                visits(&[(1, u32::MAX)]),
+                visits(&[(1, 5)]),
+                visits(&[(2, u32::MAX)])
+            ]),
             Some(1)
         );
+    }
+
+    /// Many hide parts: the totals of a run hold one entry per part met, not per visit, and the
+    /// result does not depend on how many there are.
+    #[test]
+    fn many_hide_parts_stay_bounded() {
+        let mut run = RunVisits::default();
+        for round in 0..3_u32 {
+            let walk: Visits = (1..=60_000_u16).map(|p| (p, 1 + round)).collect();
+            run.add(&walk);
+        }
+        assert_eq!(run.total.len(), 60_000);
+        // All equal: the lowest id.
+        assert_eq!(run.part(), Some(1));
+    }
+
+    /// Spec 6.4: a reverse merge does not move parts; each span keeps its own.
+    #[test]
+    fn reverse_merge_keeps_the_parts() {
+        let mut a = span(
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 0.0, 1.8],
+            [2.0, 0.0, 1.8],
+            0.5,
+        );
+        let mut b = span(
+            [0.0, 0.0, 1.8],
+            [2.0, 0.0, 1.8],
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            0.6,
+        );
+        a.part = Some(3);
+        b.part = Some(5);
+        let mut spans = [a, b];
+        reverse_merge(&mut spans, 0.1);
+        // Equal lengths: a is merged away, b is bidirectional; neither takes the other's part.
+        assert_eq!(spans.map(|s| s.validity), [0, 2]);
+        assert_eq!(spans.map(|s| s.part), [Some(3), Some(5)]);
+        // The longer span a stays and takes b's centre height, not its part.
+        let mut long_a = a;
+        long_a.s1 = [2.4, 0.0, 0.0];
+        long_a.e1 = [2.4, 0.0, 1.8];
+        let mut spans = [long_a, b];
+        reverse_merge(&mut spans, 0.1);
+        assert_eq!(spans.map(|s| s.validity), [2, 0]);
+        assert!(close(spans[0].center_h, 0.6));
+        assert_eq!(spans.map(|s| s.part), [Some(3), Some(5)]);
     }
 
     #[test]

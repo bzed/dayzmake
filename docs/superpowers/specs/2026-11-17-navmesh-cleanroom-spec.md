@@ -1400,18 +1400,33 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     * It is the trajectory walk (6.4 step 3.6). The solid heightfield keeps the part id of a hide part on spans that
       the filters made unwalkable (area 0), and a trajectory visits them. Matched by tile and start point, the 36
       connections in a hide part of four test blocks and the 2,818 that are in none agree with "the hide-part ids of
-      the spans the run's walks visited": every member has its part among them, no non-member has any.
-    * Which spans count: the spans the loop visits, including the one that blocks the trajectory, but **not** the first
+      the spans the run's walks visited": in those four blocks every member has its part among them and no
+      non-member has any (in the larger 115-tile set 91 non-members do visit a hide part, hence the threshold below).
+    * Which spans count: the spans the loop visits, but **not** the first
       span above the window that ends a column's walk (counting it moves connections to a neighbouring part of the
       same object in 5 tiles of 7 blocks), and not spans of area 10: trees carry a tree index in the same field, and
       that index can be the index of a hide part (without this, 79 of 160 connections in 17 test tiles were wrong).
     * Which id: the id with the most visits over the samples of the run. The last id seen is wrong where two parts of
       one object lie around a link (1 tile of 3 blocks), the lowest id in 2 of 13 blocks, the first id in 1 of 3.
-    * How many samples: a graze is not enough. Runs in which fewer than a quarter of the samples visit a hide part
-      are not in a part in the shipped meshes. The quarter is a fit: of the thresholds tried on 10,176 connections
-      of 115 tiles (55 that differed under a rule without it, 60 others), 1/5 to 1/4 are equal, 3/10 and above lose
-      members; the visits of the first and last sample only, or the visits of the whole run without a threshold, are
-      worse (167 and 122 wrong connections against 72 for the quarter in the 55 tiles that differed).
+    * How many samples: a graze is not enough. Runs in which few of the samples visit a hide part are not in a part
+      in the shipped meshes. The threshold (the fraction of a run's samples that must have visited a hide part) is a
+      fit and **cannot be pinned down from this data**: the fractions of members and non-members overlap over the
+      whole range (non-members at every fraction up to 1.0, members down to 0.1), and the 27 wrong-part connections
+      do not depend on it. Wrong connections (missing, extra or in another part) over the 10,176 connections of 115
+      tiles (55 that differed under an earlier rule, 60 others; the visit lists of this set may predate the tree and
+      break-span exclusions, so the numbers are indicative):
+
+      | Rule | Wrong |
+      |---|---|
+      | none | 122 |
+      | 0.20 to 0.25 | 72 |
+      | 0.27 | 64 |
+      | 0.30 | 66 |
+      | 0.35 to 0.50 | 76 to 80 |
+      | first, last or first + last sample | 167 to 183 |
+
+      Higher thresholds lose members and drop more false positives. 0.25 is kept (the ruling is a placeholder for a
+      missing condition, not an optimum); the whole central half gives differing inner tiles 98 for 0.25, 100 for 0.27 and 101 for 0.30 (of 52,441).
     Result, whole central half of the Badlands capture (inner tiles 49..277): tiles with a difference 448 to 98; the
     parts list classes: `extra` 397 to 47 tiles, `extra_data_size` 384 to 25. No class grew; `bmax`, the position,
     ground polygon and field classes are as before. The five validation sets of 14.15 match completely. Not explained:
