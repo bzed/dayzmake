@@ -696,7 +696,7 @@ behaviour, earlier versions swept one side):
 1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (if the 3-D length
    is `< FLT_EPSILON` use `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback
    `(dn.z, 1, -dn.x)`).
-2. `S0 = n*(-h) + A`; `dir = B - A` (one f32 subtraction of the end points; the algebraically equal `(n*(-h) + B) - S0` rounds the two sums independently, which occasionally differs by one ulp and does not match shipped meshes, see 14.15); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
+2. `S0 = n*(-h) + A`; `dir = fma(n, -h, B) - fma(n, -h, A)` (each sum a fused multiply-add, rounded once, then one f32 subtraction; neither `B - A` nor the difference of two sums of rounded products matches the shipped meshes, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
    **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
    about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
    `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
@@ -1351,3 +1351,26 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     exact rounding tie of `p0 + (p1 - p0)*t` at x of about 6510, and so both end points of two links by 1 mm. With the
     reciprocal all five validation sets match the shipped meshes completely (inner tiles); a lerp `p0*(1-t) + p1*t`
     for that point fixes the tile but breaks every set, and neither FMA nor a reciprocal in `normalize` changes it.
+18. **Pass direction by fused sums (ruling R16, #120).** `dir` is `fma(n, -h, B) - fma(n, -h, A)` (14.15 gave `B - A`). With the
+    exact difference, links of a few percent of the tiles had their two end points exchanged against the shipped mesh,
+    or a radius that differed in the fourth digit (4 of 121 inner tiles of a Badlands block). Both come from a one ulp difference in `dir`: the reverse merge (6.4) keeps the
+    longer of two mirrored spans and keeps the later one when their squared lengths are equal, and `dir.x` and `dir.z`
+    set the end points of every span of the pass. Pass 0 and pass 1 share `dir`, so the two spans of a pair are exact
+    mirrors unless `dir` carries noise; with the fused sums (the product `n*(-h)` is not rounded before the add) the
+    pair mirrors as in the shipped data. What identifies the rule:
+    * `(n*(-h) + B) - S0` with rounded products matches the five validation sets of 14.15 less well
+      than `B - A` in one of them (it breaks the tile that gave R13);
+    * the fused form matches those five sets and the inner tiles of an 11 x 11 block of Badlands tiles that the
+      exact difference missed (16 links in 4 tiles before, 3 links in 1 tile after, see 14.19);
+    * fusing `S0`, `P0`, `P1`, `Ebase`, `dir*t + S0`, the span end points or the emission does not help and breaks tiles
+      that matched; only `dir` uses the fused sums.
+    The shipped code probably computes this one expression with FMA while the rest is plain SSE; the data cannot say
+    more.
+19. **Open (#121, #119).** A link whose `pos` equals the shipped one can have a `center_height` one ulp of `bmin.y` away
+    (1.5e-5 where `bmin.y` is 128 to 256, 3.1e-5 from 256): 519 links in 118 Badlands tiles. In the tiles with several
+    affected links the shift has the same sign for all of them, and `float(hsel + 1)*ch + bmin.y` is exact in `f32` for the
+    cases checked, so no reordering or fusing of `float(hsel + 1)*ch + bmin.y - cy` changes it, nor does a lerp for
+    `cy`, nor FMA anywhere in the sample. It looks like a one ulp difference of `bmin.y` as the link code sees it, and
+    the source of that value is not known. After 14.18 the remaining differences in the blocks examined are this and
+    a few links whose span end points are one ulp off in `x`.
+

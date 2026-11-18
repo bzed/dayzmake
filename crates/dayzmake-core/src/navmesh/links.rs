@@ -489,6 +489,15 @@ pub(crate) struct PassGeometry {
     pub(crate) dir_len: f32,
 }
 
+/// `n*s + p` per component with a single rounding (a fused multiply-add).
+fn fused_offset(n: V, s: f32, p: V) -> V {
+    [
+        n[0].mul_add(s, p[0]),
+        n[1].mul_add(s, p[1]),
+        n[2].mul_add(s, p[2]),
+    ]
+}
+
 /// Spec 6.4 *Sampling* steps 1 and 2: `side` is +1 (pass 0) or -1 (pass 1).
 pub(crate) fn pass_geometry(edge: &Seg, side: f32, h: f32, l2: f32) -> PassGeometry {
     let a = edge.p0;
@@ -496,8 +505,9 @@ pub(crate) fn pass_geometry(edge: &Seg, side: f32, h: f32, l2: f32) -> PassGeome
     let dn = scale(normalize3(sub(b, a)), side);
     let n = normalize3([dn[2], 0.0, -dn[0]]);
     let s0 = add(scale(n, -h), a);
-    // Not `(n*(-h) + B) - S0`: the two sums round their ties independently (#116).
-    let dir = sub(b, a);
+    // `(n*(-h) + B) - (n*(-h) + A)` with each sum a fused multiply-add (rounded once, #120). Neither
+    // `B - A` nor the sums of rounded products give the shipped values (#116, #120).
+    let dir = sub(fused_offset(n, -h, b), fused_offset(n, -h, a));
     PassGeometry {
         a,
         n,
@@ -1175,6 +1185,27 @@ mod tests {
         let (s, _, _) = sample_at(&g, 1.0);
         assert_eq!(s.map(f32::to_bits), add(exact, g.s0).map(f32::to_bits));
         assert_ne!(s.map(f32::to_bits), add(naive, g.s0).map(f32::to_bits));
+    }
+
+    /// Found by a search over random edges (about one in a million is affected). `n.z*(-h)` is not a
+    /// float, so the fused sums `n*(-h) + B` and `n*(-h) + A` (rounded once) give a `dir.z` of
+    /// -1.0565796, while the difference of the end points is -1.0566406, and so are the sums of
+    /// rounded products (#120). The inputs are given as bit patterns of their exact values.
+    #[test]
+    fn dir_is_the_difference_of_fused_sums() {
+        let v = f32::from_bits;
+        let edge = seg(
+            [v(0x44c4_e973), 10.0, v(0x4480_4525)],
+            [v(0x44c4_a297), 10.0, v(0x4480_2355)],
+        );
+        let h = v(0x3ffa_98fd);
+        let g = pass_geometry(&edge, 1.0, h, 0.9);
+        let exact = sub(edge.p1, edge.p0);
+        let rounded = sub(add(scale(g.n, -h), edge.p1), add(scale(g.n, -h), edge.p0));
+        assert_eq!(rounded[2].to_bits(), exact[2].to_bits());
+        assert_eq!(exact[2].to_bits(), 0xbf87_4000);
+        assert_eq!(g.dir[2].to_bits(), 0xbf87_3e00);
+        assert_eq!(g.dir_len.to_bits(), len(g.dir).to_bits());
     }
 
     #[test]
