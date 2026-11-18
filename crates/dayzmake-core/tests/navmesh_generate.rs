@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureWriter};
+use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureFileOptions, CaptureWriter};
 use dayzmake_core::navmesh::client::{Host, RetryPolicy};
 use dayzmake_core::navmesh::detour::NavMeshSet;
 use dayzmake_core::navmesh::generate::{
@@ -68,6 +68,10 @@ fn sparse_capture(
     }
     let end = f.stream_position().expect("pos");
     f.set_len(end).expect("len");
+}
+
+fn open_file(path: &std::path::Path) -> io::Result<CaptureFile> {
+    CaptureFile::open(path, &CaptureFileOptions::new(), &mut Warnings::new())
 }
 
 fn bytes_of(set: &NavMeshSet) -> Vec<u8> {
@@ -578,18 +582,26 @@ fn a_base_that_does_not_match_the_world_is_refused() {
 
 #[test]
 fn a_range_of_a_huge_capture_reads_only_its_tiles() {
-    // Eight records of 192 MiB (1.5 GiB in all, sparse) outside the range: reading or parsing them would
+    // Five records of 300 MiB (1.5 GiB in all, sparse) outside the range: reading or parsing them would
     // exceed the address-space limit this test is run under (`prlimit --as=2000000000`) and take
     // minutes. Only the tiles of the range may be read.
     let (params, tiles) = synthetic_world();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("big.dzgeo");
-    let fake: Vec<(i32, i32)> = (0..8).map(|i| (1000 + i, 1000)).collect();
-    sparse_capture(&path, &params, &tiles, &fake, 192 << 20);
+    // On the grid, outside the range (0,0 to 1,1): indexed neither by position nor by size.
+    let real: Vec<_> = tiles
+        .iter()
+        .filter(|t| t.x < 2 && t.z < 2)
+        .cloned()
+        .collect();
+    let fake: Vec<(i32, i32)> = vec![(2, 0), (2, 1), (2, 2), (0, 2), (1, 2)];
+    sparse_capture(&path, &params, &real, &fake, 300 << 20);
     let mut options = opts();
     options.range = Some([0, 0, 1, 1]);
-    let file = CaptureFile::open(&path).expect("open");
-    assert_eq!(file.len(), tiles.len() + fake.len());
+    let mut o = CaptureFileOptions::new();
+    o.range = Some([0, 0, 1, 1]);
+    let file = CaptureFile::open(&path, &o, &mut Warnings::new()).expect("open");
+    assert_eq!(file.len(), 4);
     let (from_file, _) = run(Source::CaptureFile(file), &options);
     let (from_memory, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     assert_eq!(from_file.built, 4);
@@ -603,7 +615,7 @@ fn a_capture_file_without_a_range_builds_its_bounding_box() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("w.dzgeo");
     sparse_capture(&path, &params, &tiles, &[], 8);
-    let file = CaptureFile::open(&path).expect("open");
+    let file = open_file(&path).expect("open");
     let (report, _) = run(Source::CaptureFile(file), &opts());
     assert_eq!(report.built + report.empty, 9);
 }
@@ -655,4 +667,140 @@ fn every_connection_dead_still_fails_the_tiles_once_each() {
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen.len(), 9);
+}
+
+#[test]
+fn a_hand_back_reaches_fetchers_that_wait_in_the_claim_window() {
+    // Window 1: only the holder of index 0 may fetch, and it gets the closed connection 1 (0 was the
+    // probe). The holder of index 1 waits for the window; the hand-back of index 0 must wake it.
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 1));
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.retry.attempts = 1;
+    options.connections = Some(2);
+    options.window = Some(1);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.fetch_errors.len(), 0, "{:?}", report.fetch_errors);
+    assert_eq!(report.built + report.empty, 9);
+}
+
+#[test]
+fn a_tile_that_gets_a_wrong_answer_fails_alone_and_the_connections_live() {
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(
+        params,
+        tiles,
+        Faults::none().fault_tile((1, 1), Fault::WrongMessage),
+    );
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.connections = Some(3);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.fetch_errors.len(), 1, "{:?}", report.fetch_errors);
+    assert_eq!((report.fetch_errors[0].0, report.fetch_errors[0].1), (1, 1));
+    assert_eq!(report.built + report.empty, 8);
+}
+
+#[test]
+fn a_tile_that_kills_two_connections_fails_alone() {
+    // The server closes the connection on tile (1,1) every time: the first connection hands it back and
+    // stops, the second fails it for good and goes on, the third is untouched.
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(
+        params,
+        tiles,
+        Faults::none().fault_tile((1, 1), Fault::Close),
+    );
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.retry.attempts = 1;
+    options.connections = Some(3);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.fetch_errors.len(), 1, "{:?}", report.fetch_errors);
+    assert_eq!((report.fetch_errors[0].0, report.fetch_errors[0].1), (1, 1));
+    assert_eq!(report.built + report.empty, 8);
+}
+
+#[test]
+fn recording_over_the_capture_being_read_is_refused() {
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("w.dzgeo");
+    sparse_capture(&path, &params, &tiles, &[], 8);
+    let before = std::fs::read(&path).expect("read");
+    let mut options = opts();
+    options.record = Some(path.clone());
+    let source = Source::CaptureFile(open_file(&path).expect("open"));
+    let (result, _, _) = generate_watched(source, &options);
+    let e = result.expect_err("same file");
+    assert!(e.to_string().contains("capture being read"), "{e}");
+    assert_eq!(std::fs::read(&path).expect("read"), before);
+    // Also through a second name for the same file.
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("link.dzgeo");
+        std::fs::hard_link(&path, &link).expect("link");
+        options.record = Some(link);
+        let source = Source::CaptureFile(open_file(&path).expect("open"));
+        let (result, _, _) = generate_watched(source, &options);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).expect("read"), before);
+    }
+}
+
+#[test]
+fn a_malformed_record_fails_its_tile_and_the_run_goes_on() {
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("w.dzgeo");
+    let mut bytes = Vec::new();
+    {
+        let mut w = CaptureWriter::new(&mut bytes, &params).expect("header");
+        for t in tiles.iter().filter(|t| (t.x, t.z) != (0, 0)) {
+            w.add(t).expect("tile");
+        }
+    }
+    // Tile (0,0) with a trailing byte: it indexes, and fails to parse when it is read.
+    let mut bad = tiles
+        .iter()
+        .find(|t| (t.x, t.z) == (0, 0))
+        .expect("tile")
+        .encode();
+    bad.push(0);
+    bytes.extend_from_slice(&u32::try_from(bad.len()).expect("small").to_le_bytes());
+    bytes.extend_from_slice(&bad);
+    std::fs::write(&path, bytes).expect("write");
+    let (report, warnings) = run(
+        Source::CaptureFile(open_file(&path).expect("open")),
+        &opts(),
+    );
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!((report.failed[0].0, report.failed[0].1), (0, 0));
+    assert!(
+        report.failed[0].2.contains("capture tile (0,0)"),
+        "{:?}",
+        report.failed
+    );
+    assert_eq!(report.fetch_errors.len(), 0);
+    assert!(warning_names(&warnings).contains(&"navmesh-tile-failed"));
+}
+
+#[test]
+fn a_range_only_indexes_its_tiles() {
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("w.dzgeo");
+    sparse_capture(&path, &params, &tiles, &[], 8);
+    let mut o = CaptureFileOptions::new();
+    o.range = Some([0, 0, 1, 1]);
+    let file = CaptureFile::open(&path, &o, &mut Warnings::new()).expect("open");
+    assert_eq!(file.len(), 4);
+    let mut options = opts();
+    options.range = Some([0, 0, 1, 1]);
+    let (report, _) = run(Source::CaptureFile(file), &options);
+    assert_eq!(report.built + report.empty, 4);
 }

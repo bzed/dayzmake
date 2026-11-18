@@ -71,8 +71,9 @@ pub enum Source {
     Servers(Vec<Host>),
     /// A capture (`.dzgeo`); tiles it lacks are skipped silently.
     Capture(Capture),
-    /// A capture file that is indexed and read tile by tile (see [`CaptureFile`]); tiles it lacks are skipped
-    /// silently. Memory is proportional to the tiles of the range, not to the file.
+    /// A capture file that is indexed and read tile by tile (see [`CaptureFile`]); tiles it lacks, or that
+    /// the file was not asked to index (its range), are skipped silently. Memory is proportional to the
+    /// tiles of the range, not to the file. `record` must not name the file being read.
     CaptureFile(CaptureFile),
 }
 
@@ -307,100 +308,114 @@ struct FetchShared<'a> {
     policy: &'a RetryPolicy,
 }
 
-/// Plan indices whose connection died, and how many are being fetched.
+/// A tile handed back after its connection died.
+struct Handback {
+    /// The error of the first failed try (reported when the tile ends up failed).
+    why: String,
+    /// On how many connections the tile has failed.
+    failures: u32,
+}
+
+/// The tile is reported as failed when it failed on this many connections: the tile is the likely cause,
+/// not the connections.
+const TILE_FAILURES: u32 = 2;
+
+/// What the fetchers coordinate on, under one lock: how many plan indices the assembler has applied (the
+/// claim window), the hand-back queue and the number of indices in flight.
 #[derive(Default)]
 struct Work {
-    /// Indices to fetch again on another connection, with the error that ended the first try.
-    retry: VecDeque<(usize, String)>,
+    applied: usize,
+    /// Indices to fetch again on another connection.
+    retry: VecDeque<(usize, Handback)>,
     /// Indices claimed and not yet delivered or handed back.
     inflight: usize,
 }
 
-/// The claim window state (how many plan indices the assembler has applied) and the hand-back queue.
+/// The claim window and the hand-back queue, with one condition variable for both: a waiting fetcher
+/// wakes when the assembler advances, when a tile is handed back, when an index is delivered and on stop.
 struct Gate {
-    applied: Mutex<usize>,
-    changed: Condvar,
     work: Mutex<Work>,
-    work_changed: Condvar,
+    changed: Condvar,
 }
 
 impl Gate {
     fn new() -> Self {
         Self {
-            applied: Mutex::new(0),
-            changed: Condvar::new(),
             work: Mutex::new(Work::default()),
-            work_changed: Condvar::new(),
+            changed: Condvar::new(),
         }
-    }
-
-    /// Claims the next index: a handed-back one first, then the next unclaimed one. Waits while there is
-    /// none but another fetcher still has one in flight (its connection may die and hand it back).
-    /// `None` when everything is delivered or the run was stopped. The string is set for a handed-back
-    /// index (the error that ended its first try); a fresh index still has to enter the claim window.
-    fn claim(&self, shared: &FetchShared<'_>) -> Option<(usize, Option<String>)> {
-        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
-        loop {
-            if shared.stop.load(Ordering::Relaxed) {
-                return None;
-            }
-            if let Some((idx, why)) = work.retry.pop_front() {
-                work.inflight += 1;
-                return Some((idx, Some(why)));
-            }
-            let idx = shared.next.load(Ordering::Relaxed);
-            if idx < shared.plan.len() {
-                shared.next.store(idx + 1, Ordering::Relaxed);
-                work.inflight += 1;
-                return Some((idx, None));
-            }
-            if work.inflight == 0 {
-                return None;
-            }
-            work = self
-                .work_changed
-                .wait(work)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    /// An index was delivered (`hand_back` is `None`) or its connection died (`Some(error)`: it goes back
-    /// to the queue).
-    fn done(&self, idx: usize, hand_back: Option<String>) {
-        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
-        work.inflight = work.inflight.saturating_sub(1);
-        if let Some(why) = hand_back {
-            work.retry.push_back((idx, why));
-        }
-        drop(work);
-        self.work_changed.notify_all();
     }
 
     fn set_applied(&self, n: usize) {
-        *self.applied.lock().unwrap_or_else(PoisonError::into_inner) = n;
+        self.work
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .applied = n;
         self.changed.notify_all();
     }
 
     /// Wakes the waiting fetchers (after `stop` was set).
     fn wake(&self) {
         // Taking the lock orders this after any fetcher's check of `stop`, so no wake-up is lost.
-        drop(self.applied.lock().unwrap_or_else(PoisonError::into_inner));
-        self.changed.notify_all();
         drop(self.work.lock().unwrap_or_else(PoisonError::into_inner));
-        self.work_changed.notify_all();
+        self.changed.notify_all();
     }
 
-    /// Waits until index `idx` is inside the window. Returns false when the run was stopped.
-    fn enter(&self, idx: usize, window: usize, stop: &AtomicBool) -> bool {
-        let guard = self.applied.lock().unwrap_or_else(PoisonError::into_inner);
-        drop(
-            self.changed
-                .wait_while(guard, |applied| {
-                    idx >= applied.saturating_add(window) && !stop.load(Ordering::Relaxed)
-                })
-                .unwrap_or_else(PoisonError::into_inner),
-        );
-        !stop.load(Ordering::Relaxed)
+    /// Claims the next index: a handed-back one first, then the next unclaimed one, which has to be inside
+    /// the claim window unless `windowed` is false (the last fetcher reporting what is left). Waits while
+    /// there is none: the next index is outside the window, or another fetcher still has one in flight
+    /// (its connection may die and hand it back). `None` when everything is delivered or the run was
+    /// stopped. The second value is set for a handed-back index.
+    ///
+    /// `before_wait` runs once, before the first wait: the caller closes its connection there, because
+    /// a server that serves one client at a time would otherwise keep serving the idle connection while
+    /// the connections that hold the tiles in flight wait for it.
+    fn claim(
+        &self,
+        shared: &FetchShared<'_>,
+        windowed: bool,
+        before_wait: &mut dyn FnMut(),
+    ) -> Option<(usize, Option<Handback>)> {
+        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut waited = Some(());
+        loop {
+            if shared.stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some((idx, back)) = work.retry.pop_front() {
+                work.inflight += 1;
+                return Some((idx, Some(back)));
+            }
+            let idx = shared.next.load(Ordering::Relaxed);
+            if idx < shared.plan.len() {
+                if !windowed || idx < work.applied.saturating_add(shared.window) {
+                    shared.next.store(idx + 1, Ordering::Relaxed);
+                    work.inflight += 1;
+                    return Some((idx, None));
+                }
+            } else if work.inflight == 0 {
+                return None;
+            }
+            if waited.take().is_some() {
+                before_wait();
+            }
+            work = self
+                .changed
+                .wait(work)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// An index was delivered (`back` is `None`) or its connection died (`Some`: it goes back to the
+    /// queue).
+    fn done(&self, idx: usize, back: Option<Handback>) {
+        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
+        work.inflight = work.inflight.saturating_sub(1);
+        if let Some(back) = back {
+            work.retry.push_back((idx, back));
+        }
+        drop(work);
+        self.changed.notify_all();
     }
 }
 
@@ -417,37 +432,56 @@ impl Drop for StopOnDrop<'_> {
     }
 }
 
+/// What `fetch_one` found.
+enum Got {
+    /// A result for the plan index (a tile, a skipped tile, or an error of the tile or the capture that
+    /// leaves the connection usable).
+    Done(Fetch),
+    /// The connection is dead (its retries are used up); the message is the last error.
+    Dead(String),
+}
+
 fn fetch_one(
     shared: &FetchShared<'_>,
     slot: usize,
     client: &mut Option<Client>,
     at: (i32, i32),
-) -> Fetch {
+) -> Got {
     let (col, row) = at;
     match &shared.from {
-        FetchFrom::Capture(capture) => capture
-            .tile(col, row)
-            .map_or(Fetch::Skipped, |tile| Fetch::Tile(tile.clone())),
-        FetchFrom::CaptureFile(file) => match file.tile(col, row) {
+        FetchFrom::Capture(capture) => Got::Done(
+            capture
+                .tile(col, row)
+                .map_or(Fetch::Skipped, |tile| Fetch::Tile(tile.clone())),
+        ),
+        FetchFrom::CaptureFile(file) => Got::Done(match file.tile(col, row) {
             Ok(Some(tile)) => Fetch::Tile(tile),
             Ok(None) => Fetch::Skipped,
-            Err(e) => Fetch::Wire(e.to_string()),
-        },
+            // A malformed record fails the tile (it would fail again); anything else is a read error
+            // of the moment, so the tile is reported as not fetched and offered for a resume.
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => Fetch::Wire(e.to_string()),
+            Err(e) => Fetch::Net(e.to_string()),
+        }),
         FetchFrom::Servers(hosts) => {
             if client.is_none() {
                 let Some(host) = hosts.get(slot % hosts.len().max(1)) else {
-                    return Fetch::Net("no data server".to_owned());
+                    return Got::Dead("no data server".to_owned());
                 };
                 // Not connected yet, so the retry loop of `tile` covers the first connect too.
                 *client = Some(Client::lazy(host, shared.policy));
             }
             let Some(conn) = client.as_mut() else {
-                return Fetch::Net("not connected".to_owned());
+                return Got::Dead("not connected".to_owned());
             };
             match conn.tile(col, row, shared.world) {
-                Ok(tile) => Fetch::Tile(tile),
-                Err(FetchError::Wire(e)) => Fetch::Wire(e.to_string()),
-                Err(FetchError::Network(e)) => Fetch::Net(e.to_string()),
+                Ok(tile) => Got::Done(Fetch::Tile(tile)),
+                Err(FetchError::Wire(e)) => Got::Done(Fetch::Wire(e.to_string())),
+                // A complete but wrong answer: the tile is at fault. The failed try closed the
+                // connection, the next request opens a fresh one, so nothing is out of sync.
+                Err(FetchError::Network(e)) if conn.last_failure_was_answer() => {
+                    Got::Done(Fetch::Net(e.to_string()))
+                }
+                Err(FetchError::Network(e)) => Got::Dead(e.to_string()),
             }
         }
     }
@@ -477,36 +511,47 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         armed: true,
     };
     let mut client: Option<Client> = None;
-    while let Some((idx, handed_back)) = shared.gate.claim(shared) {
+    // The connection has delivered a tile: a failure on it then says something about the tile.
+    let mut delivered = false;
+    while let Some((idx, back)) = shared.gate.claim(shared, true, &mut || client = None) {
         let Some(&at) = shared.plan.get(idx) else {
             shared.gate.done(idx, None);
             break;
         };
-        // A handed-back index is older than the window's front: it needs no wait.
-        if handed_back.is_none() && !shared.gate.enter(idx, shared.window, shared.stop) {
-            break;
-        }
-        match fetch_one(shared, slot, &mut client, at) {
-            Fetch::Net(message) => {
-                // This connection is dead (its retries are used up). The tile goes back for the live
-                // connections; it fails only when none is left (the last fetcher reports it below).
-                shared.gate.done(idx, Some(message));
-                break;
-            }
-            what => {
-                if tx.send(Fetched { idx, what }).is_err() {
-                    return;
+        let what = match fetch_one(shared, slot, &mut client, at) {
+            Got::Done(what) => what,
+            Got::Dead(message) => {
+                // A connection that never delivered a tile (refused, reset at the start) says nothing
+                // about the tile, so only a connection that had worked counts against it.
+                let failures = back.as_ref().map_or(0, |b| b.failures) + u32::from(delivered);
+                let why = back.map_or(message, |b| b.why);
+                if failures < TILE_FAILURES {
+                    // This connection is dead. The tile goes back for the live connections and
+                    // fails only when none is left (the last fetcher reports it below).
+                    shared.gate.done(idx, Some(Handback { why, failures }));
+                    break;
                 }
-                shared.gate.done(idx, None);
+                // The tile failed on another connection too: report it and carry on with a fresh
+                // connection of our own.
+                client = None;
+                Fetch::Net(why)
             }
+        };
+        delivered |= matches!(what, Fetch::Tile(_) | Fetch::Skipped);
+        if tx.send(Fetched { idx, what }).is_err() {
+            return;
         }
+        shared.gate.done(idx, None);
     }
     exit.armed = false;
     // The last fetcher to stop reports every index that is left (handed back, or nobody claimed), so the
     // run still ends. No other fetcher is alive, so nothing is in flight and `claim` does not wait.
     if shared.alive.fetch_sub(1, Ordering::AcqRel) == 1 && !shared.stop.load(Ordering::Relaxed) {
-        while let Some((idx, why)) = shared.gate.claim(shared) {
-            let message = why.unwrap_or_else(|| "not fetched: every connection failed".to_owned());
+        while let Some((idx, back)) = shared.gate.claim(shared, false, &mut || {}) {
+            let message = back.map_or_else(
+                || "not fetched: every connection failed".to_owned(),
+                |b| b.why,
+            );
             let sent = tx.send(Fetched {
                 idx,
                 what: Fetch::Net(message),
@@ -832,6 +877,22 @@ fn check_worker_counts(options: &GenerateOptions, source: &Source) -> io::Result
     Ok(())
 }
 
+/// Whether two paths name the same existing file (by device and inode on Unix, by canonical path
+/// everywhere).
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(x), Ok(y)) = (std::fs::metadata(a), std::fs::metadata(b))
+            && x.dev() == y.dev()
+            && x.ino() == y.ino()
+        {
+            return true;
+        }
+    }
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
 /// The world params, the range, the fetch source and the default connection count of a source.
 fn open_source<'a>(
     source: &'a Source,
@@ -843,6 +904,15 @@ fn open_source<'a>(
             (c.params().clone(), range, FetchFrom::Capture(c), 1)
         }
         Source::CaptureFile(c) => {
+            if let (Some(record), Some(read)) = (&options.record, c.path())
+                && same_file(record, read)
+            {
+                // Creating the recording would truncate the capture that is being read.
+                return Err(error!(
+                    "the recording {} is the capture being read; give another file",
+                    record.display()
+                ));
+            }
             let range = options.range.or_else(|| c.bounds());
             (c.params().clone(), range, FetchFrom::CaptureFile(c), 1)
         }
@@ -1003,9 +1073,11 @@ mod tests {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         std::thread::scope(|scope| {
             let waiter = scope.spawn(|| {
+                // Index 0 is inside the window of 1; index 1 is outside it, so the second claim waits
+                // until the run is stopped.
+                assert_eq!(gate.claim(&shared, true, &mut || {}).map(|c| c.0), Some(0));
                 ready_tx.send(()).ok();
-                // Index 5 is far outside the window of 1: it waits until the run is stopped.
-                gate.enter(5, 1, &stop)
+                gate.claim(&shared, true, &mut || {}).is_none()
             });
             ready_rx.recv().expect("waiter started");
             let panicked = catch_unwind(AssertUnwindSafe(|| {
@@ -1016,7 +1088,7 @@ mod tests {
                 std::panic::resume_unwind(Box::new("boom"))
             }));
             assert!(panicked.is_err());
-            assert!(!waiter.join().expect("waiter"), "the waiter was released");
+            assert!(waiter.join().expect("waiter"), "the waiter was released");
         });
         assert!(stop.load(Ordering::Relaxed));
         assert_eq!(alive.load(Ordering::Relaxed), 1);

@@ -57,6 +57,8 @@ pub struct Faults {
     slow: Option<((i32, i32), std::time::Duration)>,
     /// Connections `first..first + count` (counting from 0) are closed as soon as they are accepted.
     refuse: (usize, usize),
+    /// A fault for one tile, whichever request it is.
+    tile_fault: Option<((i32, i32), Fault)>,
 }
 
 impl Faults {
@@ -72,6 +74,7 @@ impl Faults {
             then: fault,
             slow: None,
             refuse: (0, 0),
+            tile_fault: None,
         }
     }
 
@@ -82,7 +85,14 @@ impl Faults {
             then: Fault::None,
             slow: None,
             refuse: (0, 0),
+            tile_fault: None,
         }
+    }
+
+    /// Every request for tile `(x, z)` gets `fault`; the other requests follow the other rules.
+    pub fn fault_tile(mut self, tile: (i32, i32), fault: Fault) -> Self {
+        self.tile_fault = Some((tile, fault));
+        self
     }
 
     /// Closes the connections `first..first + count` (counting from 0) as soon as they are accepted.
@@ -269,7 +279,16 @@ fn serve(s: &mut TcpStream, shared: &Shared) -> io::Result<()> {
                     // Pacing a slow fake peer, not waiting for state.
                     thread::sleep(delay);
                 }
-                if !answer(s, shared, shared.faults.at(index), x, z)? {
+                if !answer(
+                    s,
+                    shared,
+                    match shared.faults.tile_fault {
+                        Some((tile, fault)) if tile == (x, z) => fault,
+                        _ => shared.faults.at(index),
+                    },
+                    x,
+                    z,
+                )? {
                     return Ok(());
                 }
             }

@@ -12,7 +12,7 @@ use crate::cli_io::open_input;
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::navmesh::build::DoorPolicy;
-use dayzmake_core::navmesh::capture::CaptureFile;
+use dayzmake_core::navmesh::capture::{CaptureFile, CaptureFileOptions};
 use dayzmake_core::navmesh::client::{Client, Host, RetryPolicy};
 use dayzmake_core::navmesh::detour::NavMeshSet;
 use dayzmake_core::navmesh::generate::{
@@ -354,10 +354,21 @@ fn load_base(path: &str) -> Result<NavMeshSet, Error> {
 
 /// Indexes the capture; the tiles are read from the file when they are built, so a range of a large
 /// capture needs memory in proportion to the range.
-fn load_capture(path: &str) -> Result<CaptureFile, Error> {
+///
+/// Only the tiles of `range` are indexed.
+fn load_capture(
+    path: &str,
+    range: Option<[i32; 4]>,
+    warnings: &mut dyn WarningSink,
+) -> Result<CaptureFile, Error> {
     // Opened once to name a missing or unreadable file the way every other input is named.
     open_input(Path::new(path), "capture")?;
-    CaptureFile::open(Path::new(path)).prepend_error(format!("Failed to read {path}:"))
+    CaptureFile::open(
+        Path::new(path),
+        &CaptureFileOptions::new().range(range),
+        warnings,
+    )
+    .prepend_error(format!("Failed to read {path}:"))
 }
 
 /// Seconds as `h:mm:ss`.
@@ -768,7 +779,7 @@ pub fn run_generate(
         options.base = Some(load_base(base)?);
     }
     let source = if let Some(path) = &args.capture {
-        Source::CaptureFile(load_capture(path)?)
+        Source::CaptureFile(load_capture(path, options.range, warnings)?)
     } else {
         let names: Vec<&str> = if args.servers.is_empty() {
             vec![DEFAULT_HOST]

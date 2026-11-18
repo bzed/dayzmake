@@ -227,3 +227,36 @@ fn navmesh_nm_seeds() -> io::Result<()> {
     assert!(flooded >= 3, "only {flooded} floods ran");
     Ok(())
 }
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_capture_index_seeds() -> io::Result<()> {
+    use dayzmake_core::navmesh::capture::{CaptureFile, CaptureFileOptions};
+    use dayzmake_core::warning::Warnings;
+    for data in seeds("navmesh_capture_index")? {
+        // Same as the fuzz target: the index agrees with reading the whole capture.
+        let indexed = CaptureFile::from_reader(
+            Cursor::new(data.clone()),
+            &CaptureFileOptions::new(),
+            &mut Warnings::new(),
+        );
+        let Ok(indexed) = indexed else {
+            continue;
+        };
+        let _ = indexed.bounds();
+        if let Ok(whole) = Capture::read(&mut &data[..]) {
+            for t in whole.tiles() {
+                if let Ok(Some(found)) = indexed.tile(t.x, t.z) {
+                    assert_eq!(found.encode(), t.encode());
+                }
+            }
+        } else {
+            for z in 0..4 {
+                for x in 0..4 {
+                    let _ = indexed.tile(x, z);
+                }
+            }
+        }
+    }
+    Ok(())
+}

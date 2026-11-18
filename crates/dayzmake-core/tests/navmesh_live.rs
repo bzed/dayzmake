@@ -16,7 +16,7 @@
 
 use std::fs::File;
 
-use dayzmake_core::navmesh::capture::Capture;
+use dayzmake_core::navmesh::capture::{CaptureFile, CaptureFileOptions};
 use dayzmake_core::navmesh::detour::{NavMeshSet, TileData};
 use dayzmake_core::navmesh::generate::{GenerateOptions, Progress, Source, generate};
 use dayzmake_core::warning::Warnings;
@@ -27,13 +27,18 @@ fn env(name: &str) -> String {
 
 /// Builds the capture without the island filter on `threads` builders; returns the mesh bytes and set.
 fn build(path: &str, threads: usize) -> (Vec<u8>, NavMeshSet) {
-    let capture = Capture::read(&mut File::open(path).expect("open the capture")).expect("capture");
+    let mut warnings = Warnings::new();
+    let capture = CaptureFile::open(
+        std::path::Path::new(path),
+        &CaptureFileOptions::new(),
+        &mut warnings,
+    )
+    .expect("capture");
     let mut options = GenerateOptions::default();
     options.island_filter = false;
     options.threads = Some(threads);
-    let mut warnings = Warnings::new();
     let report = generate(
-        Source::Capture(capture),
+        Source::CaptureFile(capture),
         &options,
         &mut |_: &Progress| {},
         &mut warnings,

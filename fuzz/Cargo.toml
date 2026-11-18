@@ -98,3 +98,10 @@ path = "fuzz_targets/navmesh_nm.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "navmesh_capture_index"
+path = "fuzz_targets/navmesh_capture_index.rs"
+test = false
+doc = false
+bench = false

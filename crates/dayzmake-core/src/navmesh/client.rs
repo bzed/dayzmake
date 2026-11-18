@@ -26,7 +26,9 @@ pub struct RetryPolicy {
     /// Attempts per tile (the first try included).
     pub attempts: u32,
     /// After failed attempt `n` (counting from 0) the client waits `delay_unit * (n + 1)`. With the
-    /// defaults (5 attempts, 1 s) that is 1, 2, 3 and 4 s: 10 s in all.
+    /// defaults (5 attempts, 1 s) that is 1, 2, 3 and 4 s: 10 s of waiting in all. Every attempt can also
+    /// take up to `connect_timeout` to connect, so a host that does not answer at all costs up to
+    /// 5 * `connect_timeout` more.
     pub delay_unit: Duration,
     /// Connect timeout.
     pub connect_timeout: Duration,
@@ -214,6 +216,9 @@ pub struct Client {
     host: Host,
     policy: RetryPolicy,
     stream: Option<TcpStream>,
+    /// The last failed try got a complete answer that was wrong (not a tile, the wrong tile, an unknown
+    /// cell class), as opposed to a connect, send or receive failure.
+    answer_failed: bool,
 }
 
 /// Names the server in an I/O error of an exchange; a stream that ends is "closed by the server".
@@ -259,6 +264,7 @@ impl Client {
             host: host.clone(),
             policy: policy.clone(),
             stream: Some(open(host, policy)?),
+            answer_failed: false,
         })
     }
 
@@ -269,7 +275,15 @@ impl Client {
             host: host.clone(),
             policy: policy.clone(),
             stream: None,
+            answer_failed: false,
         }
+    }
+
+    /// Whether the last failure of [`Client::tile`] was a complete but wrong answer. The frame was read
+    /// whole, so the stream is in sync (and the failed try closed the connection anyway): the fault is the
+    /// tile's, not the connection's.
+    pub(crate) fn last_failure_was_answer(&self) -> bool {
+        self.answer_failed
     }
 
     /// Requests the world params. One attempt, no retry.
@@ -324,17 +338,20 @@ impl Client {
     }
 
     fn try_tile(&mut self, x: i32, z: i32, world: &WorldParams) -> Result<TileInput, FetchError> {
+        self.answer_failed = false;
         let request = encode_tile_request(x, z, &world.world);
         let (id, payload) = self
             .exchange(MSG_TILE_REQUEST, &request)
             .map_err(FetchError::Network)?;
         if id != MSG_TILE {
+            self.answer_failed = true;
             return Err(FetchError::Network(error!(
                 "expected tile, got message {id}"
             )));
         }
         let tile = TileInput::parse(&payload).map_err(FetchError::Wire)?;
         if tile.x != x || tile.z != z {
+            self.answer_failed = true;
             return Err(FetchError::Network(error!(
                 "the server answered with tile ({},{})",
                 tile.x, tile.z
@@ -342,6 +359,7 @@ impl Client {
         }
         let class = usize::try_from(tile.cell_class).unwrap_or(usize::MAX);
         if class >= world.cell_classes.len() {
+            self.answer_failed = true;
             return Err(FetchError::Network(error!(
                 "unknown cell class {}",
                 tile.cell_class

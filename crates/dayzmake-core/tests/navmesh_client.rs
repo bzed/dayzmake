@@ -11,11 +11,12 @@ use std::io::{self, Cursor};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureWriter};
+use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureFileOptions, CaptureWriter};
 use dayzmake_core::navmesh::client::{Client, FetchError, Host, RetryPolicy};
 use dayzmake_core::navmesh::wire::{
     CellClass, DEFAULT_PORT, TileGroup, TileInput, TilePart, WorldBlock, WorldParams,
 };
+use dayzmake_core::warning::Warnings;
 
 #[path = "support/navmesh_server.rs"]
 mod navmesh_server;
@@ -393,6 +394,10 @@ fn capture_writer_flushes_every_tile() {
     assert!(sink.1 >= 3);
 }
 
+fn open_capture(path: &std::path::Path) -> io::Result<CaptureFile> {
+    CaptureFile::open(path, &CaptureFileOptions::new(), &mut Warnings::new())
+}
+
 fn capture_file(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("c.dzgeo");
@@ -404,7 +409,7 @@ fn capture_file(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
 fn capture_file_indexes_and_reads_tiles_on_demand() {
     let t = tiles();
     let (_dir, path) = capture_file(&capture_bytes(&world(), &t));
-    let c = CaptureFile::open(&path).expect("open");
+    let c = open_capture(&path).expect("open");
     assert_eq!(c.params(), &world());
     assert_eq!(c.len(), 3);
     assert_eq!(c.bounds(), Some([0, 0, 1, 1]));
@@ -422,12 +427,12 @@ fn capture_file_keeps_the_later_copy_and_ignores_a_cut_tail() {
     // Cut into the last record: it is dropped, the earlier copy of (1,1) stays.
     let cut = bytes.len() - 3;
     let (_d, path) = capture_file(&bytes[..cut]);
-    let c = CaptureFile::open(&path).expect("open");
+    let c = open_capture(&path).expect("open");
     assert_eq!(c.len(), 2);
     assert_ne!(c.tile(1, 1).expect("read"), Some(later.clone()));
     bytes.extend_from_slice(&[1, 2]); // a partial size field at the end
     let (_d, path) = capture_file(&bytes);
-    let c = CaptureFile::open(&path).expect("open");
+    let c = open_capture(&path).expect("open");
     assert_eq!(c.tile(1, 1).expect("read"), Some(later));
 }
 
@@ -448,7 +453,7 @@ fn capture_file_rejects_what_capture_read_rejects() {
         ),
     ] {
         let (_d, path) = capture_file(&data);
-        let e = CaptureFile::open(&path).expect_err(name);
+        let e = open_capture(&path).expect_err(name);
         assert!(e.to_string().contains(text), "{name}: {e}");
     }
     // A record too short for its coordinates, and a hostile block size.
@@ -457,7 +462,7 @@ fn capture_file_rejects_what_capture_read_rejects() {
     short.extend_from_slice(&[0; 4]);
     let (_d, path) = capture_file(&short);
     assert!(
-        CaptureFile::open(&path)
+        open_capture(&path)
             .expect_err("short")
             .to_string()
             .contains("message truncated")
@@ -466,7 +471,7 @@ fn capture_file_rejects_what_capture_read_rejects() {
     huge.extend_from_slice(&u32::MAX.to_le_bytes());
     let (_d, path) = capture_file(&huge);
     assert!(
-        CaptureFile::open(&path)
+        open_capture(&path)
             .expect_err("huge")
             .to_string()
             .contains("block size")
@@ -481,7 +486,115 @@ fn capture_file_reports_a_malformed_record_when_it_is_read() {
     bytes.extend_from_slice(&u32::try_from(payload.len()).expect("small").to_le_bytes());
     bytes.extend_from_slice(&payload);
     let (_d, path) = capture_file(&bytes);
-    let c = CaptureFile::open(&path).expect("open");
+    let c = open_capture(&path).expect("open");
     let e = c.tile(0, 0).expect_err("malformed");
     assert!(e.to_string().contains("unexpected bytes"), "{e}");
+}
+
+/// A reader that counts the bytes read through it.
+struct Counting {
+    inner: Cursor<Vec<u8>>,
+    read: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl io::Read for Counting {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read
+            .fetch_add(n as u64, std::sync::atomic::Ordering::SeqCst);
+        Ok(n)
+    }
+}
+
+impl io::Seek for Counting {
+    fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(to)
+    }
+}
+
+/// A capture of `fake` records of `size` bytes each (zeros after the coordinates) after the real tiles.
+fn capture_with_fillers(real: &[TileInput], fake: &[(i32, i32)], size: usize) -> Vec<u8> {
+    let mut bytes = capture_bytes(&world(), real);
+    for &(x, z) in fake {
+        bytes.extend_from_slice(&u32::try_from(size).expect("small").to_le_bytes());
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&z.to_le_bytes());
+        bytes.resize(bytes.len() + size - 8, 0);
+    }
+    bytes
+}
+
+#[test]
+fn indexing_a_range_reads_only_the_headers_and_the_tiles_of_the_range() {
+    use std::sync::atomic::Ordering;
+    // Two fillers of 1 MiB at (1,1) (the later copy wins), outside the range 0,0,0,0.
+    let fake = [(1, 1), (1, 1)];
+    let bytes = capture_with_fillers(&[tile(0, 0)], &fake, 1 << 20);
+    let total = bytes.len() as u64;
+    let read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let reader = Counting {
+        inner: Cursor::new(bytes),
+        read: read.clone(),
+    };
+    let mut options = CaptureFileOptions::new();
+    options.range = Some([0, 0, 0, 0]);
+    let c = CaptureFile::from_reader(reader, &options, &mut Warnings::new()).expect("index");
+    assert_eq!(c.len(), 1);
+    assert!(c.tile(1, 1).expect("outside").is_none());
+    // The scan read the header, the world block and 12 bytes per record (the 64-byte buffer reads a
+    // little more); the megabytes of the fillers were skipped, not read.
+    let scanned = read.load(Ordering::SeqCst);
+    assert!(scanned < 64 * 1024, "scan read {scanned} of {total} bytes");
+    assert!(c.tile(0, 0).expect("read").is_some());
+    let after = read.load(Ordering::SeqCst);
+    assert!(
+        after - scanned < 64 * 1024,
+        "one tile read {} bytes",
+        after - scanned
+    );
+}
+
+#[test]
+fn records_outside_the_grid_are_ignored_with_a_note() {
+    let mut bytes = capture_bytes(&world(), &[tile(0, 0)]);
+    for (x, z) in [(2, 0), (0, -1), (i32::MAX, i32::MIN)] {
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&z.to_le_bytes());
+    }
+    let mut warnings = Warnings::new();
+    let c = CaptureFile::from_reader(
+        Cursor::new(bytes),
+        &CaptureFileOptions::new(),
+        &mut warnings,
+    )
+    .expect("index");
+    assert_eq!(c.len(), 1);
+    let text: Vec<_> = warnings
+        .warnings()
+        .iter()
+        .map(|w| w.message.clone())
+        .collect();
+    assert!(
+        text.iter().any(|m| m.contains("3 records outside")),
+        "{text:?}"
+    );
+}
+
+#[test]
+fn more_records_than_tiles_is_refused() {
+    // The grid has 4 tiles; 5 records.
+    let fake: Vec<(i32, i32)> = (0..5).map(|_| (0, 0)).collect();
+    let bytes = capture_with_fillers(&[], &fake, 16);
+    let e = CaptureFile::from_reader(
+        Cursor::new(bytes),
+        &CaptureFileOptions::new(),
+        &mut Warnings::new(),
+    )
+    .expect_err("too many");
+    assert!(
+        e.to_string()
+            .contains("more records than the world has tiles"),
+        "{e}"
+    );
 }

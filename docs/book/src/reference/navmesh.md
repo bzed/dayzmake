@@ -33,10 +33,17 @@ navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-c
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
 first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
-wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1, 2, 3 and 4 seconds between them (10 seconds at most). When a connection is still
-failing after its five attempts (a server that refuses it or resets it, as a server that serves one client at a
-time does for the others), that connection stops and its tile goes back to the queue for the connections that are
-left. A tile is reported as not fetched only when no connection is left.
+wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1, 2, 3 and 4 seconds between them
+(10 seconds of waiting; an attempt that cannot connect can also wait up to the 10 second connect timeout, so a host
+that does not answer at all costs about a minute). When a connection is still failing after its five attempts
+(a server that refuses or resets it, as a server that serves one client at a time does for the others), that
+connection stops and its tile goes back to the queue for the connections that are left. A connection that had not
+yet delivered a tile does not count against the tile. A tile that fails on two connections that had worked is
+reported as not fetched and the second connection carries on, so one bad tile costs one tile, not the run. A
+complete answer that is wrong (not a tile, another tile, an unknown cell class) is a failure of that tile alone: the
+connection is not dead, because the whole frame was read and the next request uses a fresh connection. A tile is
+reported as not fetched because of dead connections only when no connection is left; the text of its error is that of
+the first failed try.
 A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 
@@ -46,9 +53,10 @@ change of the generator, or on another machine, without starting the game.
 
 `generate --capture` does not load the file. It reads the world parameters and the position of every tile record
 (a few bytes per record, found by skipping over the tile data), and then reads only the tiles of the range when they
-are built. A range of a capture of many gigabytes needs memory in proportion to the tiles in that range, plus the
-index (a few dozen bytes per tile in the capture); a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few
-seconds and about 300 MB. The format is unchanged, so existing captures work. A tile that is
+are built. Only the tiles of `--range` are put into the index, so a range of a capture of many gigabytes needs memory in
+proportion to the tiles in that range; a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few
+seconds and about 300 MB. The format is unchanged, so existing captures work. Records that lie outside the world grid are ignored (one message says how many); a capture with more
+records than the world has tiles is refused. A tile that is
 cut off at the end of a capture is ignored; a malformed tile record is reported when its tile is built, as a failed
 tile, not when the file is opened.
 
@@ -134,7 +142,7 @@ dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--
 | `-f`, `--force` | off | Overwrite an existing `<target>` and an existing `--record` file. Without it, an existing target is an error that is reported before anything is fetched. |
 | `--server <host>` | `127.0.0.1` | A data server, `host` or `host:port`. Repeatable: the connections are spread over the servers, which must serve the same world (several `DayZDiag_x64.exe` on several machines build faster). The world parameters come from the first one. Not together with `--capture`. |
 | `--capture <dzgeo>` | none | Build from this capture instead of a server. Tiles the capture does not have are left out. Without `--range` the range is the bounding box of the captured tiles. |
-| `--record <dzgeo>` | none | Also write the fetched tiles to a capture file. |
+| `--record <dzgeo>` | none | Also write the fetched tiles to a capture file. It must not be the file read with `--capture` (the run is refused: writing it would destroy the capture). |
 | `--range <x0,z0,x1,z1>` | the whole world | The tiles to build: columns `x0` to `x1` and rows `z0` to `z1`, inclusive. Values below 0 or beyond the grid are cut to the world; an upper bound below 0 means the last tile. A range with nothing left is the error `empty tile range`. |
 | `--base <nm>` | none | Start from this navmesh: its grid is kept, and the new tiles replace the tiles of their cells. It must fit the world (grid, tile size and origin), or the run fails with `base navmesh does not match the world`. |
 | `--skip-existing` | off | Leave out the tiles that `--base` already has. Needs `--base` (`--skip-existing needs --base`). |
