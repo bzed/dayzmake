@@ -6,58 +6,16 @@ use std::io;
 use std::path::Path;
 
 use dayzmake_core::navmesh::wire::{
-    CellClass, DEFAULT_PORT, LinkClass, PROTOCOL_VERSION, TileGroup, TileInput, TilePart,
-    WorldBlock, WorldParams, encode_tile_request,
+    DEFAULT_PORT, PROTOCOL_VERSION, TileGroup, TileInput, TilePart, WorldBlock, WorldParams,
+    encode_tile_request,
 };
+
+#[path = "support/navmesh_world.rs"]
+mod navmesh_world;
 
 /// The synthetic world of spec 13.2.
 fn synthetic_world() -> WorldParams {
-    let mut world = WorldBlock::default();
-    world.world_size_x = 150.0;
-    world.world_size_z = 150.0;
-    world.tile_width = 50.0;
-    world.tile_height = 50.0;
-    world.tiles_x = 3;
-    world.tiles_z = 3;
-    world.deep_sea_height = 0.75;
-    world.deep_water_depth = 1.5;
-    world.contour_max_error = 0.3;
-    world.obstacles = true;
-    world.block_size = 4;
-    world.filter_isolated_islands = true;
-    world.seed_position = [60.0, 10.0, 60.0];
-    world.stand_height = 1.5;
-    world.crouch_height = 1.0;
-    world.prone_height = 0.5;
-    world.diameter = 0.6;
-    world.max_step_height = 0.45;
-    world.max_slope = 45.0;
-    let mut c0 = CellClass::default();
-    c0.cells = 200;
-    c0.cells2 = 200;
-    c0.width = 50.0;
-    let mut c1 = CellClass::default();
-    c1.cells = 500;
-    c1.cells2 = 500;
-    c1.width = 50.0;
-    let mut link = LinkClass::default();
-    link.index = 0;
-    link.name_hash = 0x1234_5678;
-    link.type_id = -1;
-    link.jump_height = 1.2;
-    link.jump_length = 1.8;
-    link.min_center_height = 0.4;
-    link.agent_height = 1.5;
-    link.max_step_height = 0.45;
-    link.agent_radius = 0.3;
-    link.flags = 0x100;
-    link.area = 48;
-    link.color = -1;
-    let mut params = WorldParams::default();
-    params.world = world;
-    params.cell_classes = vec![c0, c1];
-    params.link_classes = vec![link];
-    params
+    navmesh_world::world_params()
 }
 
 fn err_of<T>(r: io::Result<T>) -> String {

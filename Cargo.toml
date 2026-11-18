@@ -69,3 +69,8 @@ workspace = true
 
 [profile.release]
 overflow-checks = true
+
+# The navmesh tile builder is slow without optimisation; its synthetic-world tests need this to stay
+# under 20 s in debug builds.
+[profile.dev.package.dayzmake-core]
+opt-level = 2
