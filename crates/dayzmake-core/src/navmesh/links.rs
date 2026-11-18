@@ -33,6 +33,8 @@ pub(crate) type V = [f32; 3];
 const FLT_EPSILON: f32 = f32::EPSILON;
 /// C `FLT_MAX`.
 const FLT_MAX: f32 = f32::MAX;
+/// The facing limit of spec 6.3 step 4: `cosf(2.3561945f)`, compared in `f32` (ruling R12).
+const COS_135: f32 = f32::from_bits(0xBF35_04F3); // cosf(2.3561945f)
 /// The most trajectory samples `nT` of a link class (the check of one sample costs `nT` steps).
 pub(crate) const MAX_TRAJECTORY_SAMPLES: i32 = 4096;
 /// The most samples `nS` along one edge in one pass.
@@ -236,7 +238,6 @@ pub(crate) fn refine_edge(s: &Seg, depth: f32, width: f32, segs: &[Seg], cs: f32
     };
     let box_min = [0.0, -width * 0.5, 0.0];
     let box_max = [length, width * 0.5, depth];
-    let cos_limit = 2.356_194_5_f32.cos();
 
     // 3. and 4. The candidates.
     let mut recs: Vec<Rec> = Vec::new();
@@ -247,7 +248,7 @@ pub(crate) fn refine_edge(s: &Seg, depth: f32, width: f32, segs: &[Seg], cs: f32
             continue;
         };
         let v = normalize3([q.p1[0] - q.p0[0], 0.0, q.p1[2] - q.p0[2]]);
-        if dot(v, u) <= cos_limit && recs.len() < MAX_RECORDS {
+        if dot(v, u) <= COS_135 && recs.len() < MAX_RECORDS {
             recs.push(Rec {
                 group: 0,
                 seg: k,
@@ -1062,6 +1063,74 @@ mod tests {
         assert_eq!(refine_edge(&s, 100.0, 1.0, &dense, 0.1).len(), 1);
     }
 
+    #[test]
+    fn edge_segments_flags_direction_height_and_length() {
+        use crate::navmesh::recast::contour::{Contour, RC_BORDER_VERTEX};
+        let b = RC_AREA_BORDER;
+        let cset = ContourSet {
+            cs: 0.5,
+            ch: 0.5,
+            bmin: [10.0, 20.0, 30.0],
+            contours: vec![
+                Contour {
+                    // The flag of the previous vertex `vj` decides, not the flag of `vi`: edge
+                    // v0 -> v3 (vj = v3, flagged) and v2 -> v1 (vj = v1, flagged) come out; v1 -> v0 and
+                    // v3 -> v2 do not, although v1 and v3 carry the flag themselves.
+                    verts: vec![[0, 0, 0, 0], [4, 1, 0, b], [4, 2, 4, 0], [0, 3, 4, b]],
+                    ..Contour::default()
+                },
+                Contour {
+                    // Squared length exactly 1.5 (dx = dz = 1 cell, dy = 2 voxels: 0.25 * 6) is kept;
+                    // with dy = 1 it is 0.75 and dropped. Other flag bits do not count.
+                    verts: vec![[0, 0, 0, b], [1, 2, 1, 0], [1, 3, 1, RC_BORDER_VERTEX]],
+                    ..Contour::default()
+                },
+            ],
+            ..ContourSet::default()
+        };
+        let segs = edge_segments(&cset);
+        // Heights: (y + 2) * 0.5 + 20.
+        let at = |x: i32, y: i32, z: i32| -> V {
+            [
+                10.0 + 0.5 * i32_to_f32(x),
+                20.0 + 0.5 * i32_to_f32(y + 2),
+                30.0 + 0.5 * i32_to_f32(z),
+            ]
+        };
+        let got: Vec<(V, V)> = segs.iter().map(|s| (s.p0, s.p1)).collect();
+        assert_eq!(
+            got,
+            vec![
+                (at(0, 0, 0), at(0, 3, 4)),
+                (at(4, 2, 4), at(4, 1, 0)),
+                // Contour 2: i = 1, vj = v0 (flagged): P(v1) -> P(v0), dy = 2.
+                (at(1, 2, 1), at(0, 0, 0)),
+            ]
+        );
+        assert_eq!(contour_point(&cset, [4, 1, 0, 0]), at(4, 1, 0));
+        // With dy = 1 the same edge is too short.
+        let mut short = cset.clone();
+        short.contours.remove(0);
+        if let Some(v) = short.contours[0].verts.get_mut(1) {
+            *v = [1, 1, 1, 0];
+        }
+        assert_eq!(edge_segments(&short).len(), 0);
+    }
+
+    #[test]
+    fn refine_edge_45_degree_facing_is_accepted() {
+        // A grid-diagonal segment faces `s` at exactly 135 degrees: its normalised direction dotted
+        // with `s`'s is `-0.70710677`, the `f32` value of `COS_135`, and `<=` accepts it (ruling R12).
+        let s = seg([0.0, 0.0, 0.0], [4.0, 0.0, 0.0]);
+        let diag = seg([3.0, 0.0, -0.5], [2.0, 0.0, -1.5]);
+        let out = refine_edge(&s, 1.8, 1.0, &[s, diag], 0.1);
+        assert_eq!(out.len(), 1, "{out:?}");
+        // A slightly less opposed direction (dot above the limit) is rejected.
+        let steep = seg([3.0, 0.0, -0.5], [2.0, 0.0, -1.5 - 0.1]);
+        assert_eq!(refine_edge(&s, 1.8, 1.0, &[s, steep], 0.1).len(), 0);
+        assert_eq!(COS_135.to_bits(), 0xBF35_04F3);
+    }
+
     /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search:
     /// about 29 % of random edges differ).
     fn bug_one_edge() -> (Seg, f32, f32) {
@@ -1081,6 +1150,19 @@ mod tests {
         assert_ne!(good.map(f32::to_bits), bad.map(f32::to_bits));
         // ...and the sample uses the first.
         assert_eq!(e.map(f32::to_bits), good.map(f32::to_bits));
+    }
+
+    #[test]
+    fn ebase_order_changes_the_cell_lookup() {
+        // Found by a search: here the two association orders land `E.x` in different cells of a
+        // 0.25 m grid (22 against 23), so the floor lookup of the sample depends on the order.
+        let edge = seg([11.85, 10.3, 14.55], [0.85, 10.3, 6.3]);
+        let (h, t, cs) = (1.0_f32, 0.5_f32, 0.25_f32);
+        let g = pass_geometry(&edge, 1.0, h, 0.9);
+        let (_, e, _) = sample_at(&g, t);
+        let bad = add(add(scale(g.dir, t), scale(g.n, h)), edge.p0);
+        assert_eq!(floor_i32(e[0] / cs), 22);
+        assert_eq!(floor_i32(bad[0] / cs), 23);
     }
 
     #[test]
