@@ -700,7 +700,15 @@ fn open_recorder(path: &Path, params: &WorldParams) -> io::Result<CaptureWriter<
 }
 
 /// Refuses more than [`MAX_WORKERS`] builder threads or connections, before anything is allocated or spawned.
-fn check_worker_counts(options: &GenerateOptions) -> io::Result<()> {
+fn check_worker_counts(options: &GenerateOptions, source: &Source) -> io::Result<()> {
+    if let Source::Servers(hosts) = source
+        && options.connections.is_none()
+        && hosts.len() > MAX_WORKERS
+    {
+        return Err(error!(
+            "hosts: at most {MAX_WORKERS} data servers (one connection each)"
+        ));
+    }
     if options.threads.is_some_and(|n| n > MAX_WORKERS) {
         return Err(error!("threads: at most {MAX_WORKERS} builder threads"));
     }
@@ -722,8 +730,9 @@ fn check_worker_counts(options: &GenerateOptions) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// "--skip-existing needs --base"; `threads` or `connections` above [`MAX_WORKERS`] (checked before anything
-/// is allocated or spawned); "empty tile range"; an unusable base or world grid; a world
+/// "--skip-existing needs --base"; `threads` or `connections` above [`MAX_WORKERS`], or more than
+/// [`MAX_WORKERS`] hosts without an explicit `connections` (the default is one connection per host); both
+/// are checked before anything is allocated, spawned or connected; "empty tile range"; an unusable base or world grid; a world
 /// params request that fails; "tile range too large"; a capture file that cannot be created.
 #[expect(
     clippy::needless_pass_by_value,
@@ -736,7 +745,7 @@ pub fn generate(
     warnings: &mut dyn WarningSink,
 ) -> io::Result<GenerateReport> {
     let start = Instant::now();
-    check_worker_counts(options)?;
+    check_worker_counts(options, &source)?;
     if options.skip_existing && options.base.is_none() {
         return Err(error!("--skip-existing needs --base"));
     }

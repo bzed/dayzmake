@@ -268,6 +268,22 @@ fn absurd_thread_and_connection_counts_are_refused_quickly() {
 }
 
 #[test]
+fn absurd_host_count_is_refused_before_any_connection() {
+    // The default connection count is one per host: 1000 hosts would spawn 1000 fetchers. The check
+    // comes before the world params request, so nothing connects (the hosts are not reachable).
+    let hosts: Vec<_> = (0..1000)
+        .map(|_| Host::parse("127.0.0.1:1").expect("host"))
+        .collect();
+    let (result, _, _) = generate_watched(Source::Servers(hosts), &opts());
+    let e = result.expect_err("too many hosts");
+    let text = e.to_string();
+    assert!(
+        text.contains("hosts") && text.contains("at most 256"),
+        "{text}"
+    );
+}
+
+#[test]
 fn failed_tile_reported_and_run_continues() {
     let (params, mut tiles) = synthetic_world();
     let bad = tiles
