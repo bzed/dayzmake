@@ -4,7 +4,9 @@
 //! `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a `.dzgeo` capture of the same world
 //! and `DAYZ_NAVMESH_INNER` the tile range `x0,z0,x1,z1` to compare. Only inner tiles can match: a
 //! link whose far end is in a tile outside the capture is not made. The island filter is off, so the
-//! polygon flags are not compared.
+//! polygon flags are not compared. The optional `DAYZ_NAVMESH_RANGE` (`x0,z0,x1,z1`) limits the build to
+//! that tile range, which makes a block of a capture that is too big to build whole usable; build one
+//! tile more than `DAYZ_NAVMESH_INNER` on each side.
 
 #![cfg(feature = "navmesh")]
 #![expect(
@@ -26,7 +28,7 @@ fn env(name: &str) -> String {
 }
 
 /// Builds the capture without the island filter on `threads` builders; returns the mesh bytes and set.
-fn build(path: &str, threads: usize) -> (Vec<u8>, NavMeshSet) {
+fn build(path: &str, threads: usize, range: Option<[i32; 4]>) -> (Vec<u8>, NavMeshSet) {
     let mut warnings = Warnings::new();
     let capture = CaptureFile::open(
         std::path::Path::new(path),
@@ -37,6 +39,7 @@ fn build(path: &str, threads: usize) -> (Vec<u8>, NavMeshSet) {
     let mut options = GenerateOptions::default();
     options.island_filter = false;
     options.threads = Some(threads);
+    options.range = range;
     let report = generate(
         Source::CaptureFile(capture),
         &options,
@@ -57,6 +60,22 @@ fn build(path: &str, threads: usize) -> (Vec<u8>, NavMeshSet) {
     let mut bytes = Vec::new();
     report.set.write(&mut bytes).expect("write");
     (bytes, report.set)
+}
+
+/// Parses `x0,z0,x1,z1` from the environment variable `name`.
+fn rect(name: &str, text: &str) -> [i32; 4] {
+    let n: Vec<i32> = text
+        .split(',')
+        .map(|n| {
+            n.trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("{name} is x0,z0,x1,z1"))
+        })
+        .collect();
+    let [x0, z0, x1, z1] = n[..] else {
+        panic!("{name} is x0,z0,x1,z1");
+    };
+    [x0, z0, x1, z1]
 }
 
 /// Describes how our tile differs from the shipped one, section by section; empty when equal. The
@@ -170,18 +189,15 @@ fn sections<T: PartialEq + std::fmt::Debug>(out: &mut Vec<String>, name: &str, a
 fn capture_matches_shipped_inner_tiles() {
     let shipped_path = env("DAYZ_NAVMESH");
     let capture_path = env("DAYZ_NAVMESH_CAPTURE");
-    let inner: Vec<i32> = env("DAYZ_NAVMESH_INNER")
-        .split(',')
-        .map(|n| n.trim().parse().expect("DAYZ_NAVMESH_INNER is x0,z0,x1,z1"))
-        .collect();
-    let [x0, z0, x1, z1] = inner[..] else {
-        panic!("DAYZ_NAVMESH_INNER is x0,z0,x1,z1");
-    };
+    let [x0, z0, x1, z1] = rect("DAYZ_NAVMESH_INNER", &env("DAYZ_NAVMESH_INNER"));
+    let range = std::env::var("DAYZ_NAVMESH_RANGE")
+        .ok()
+        .map(|r| rect("DAYZ_NAVMESH_RANGE", &r));
     let shipped = NavMeshSet::read(&mut File::open(&shipped_path).expect("open the navmesh"))
         .expect("read the navmesh");
 
-    let (bytes, ours) = build(&capture_path, 1);
-    let (bytes8, _) = build(&capture_path, 8);
+    let (bytes, ours) = build(&capture_path, 1, range);
+    let (bytes8, _) = build(&capture_path, 8, range);
     assert!(
         bytes == bytes8,
         "the build is not deterministic: 1 and 8 threads give different bytes"
