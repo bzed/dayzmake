@@ -128,8 +128,6 @@ struct Record {
 
 /// The most tiles a [`CaptureFile`] indexes (the size of the largest plan of the generator).
 const MAX_INDEXED: usize = 1 << 22;
-/// The read buffer of the index scan: it only has to hold a size field and the coordinates.
-const SCAN_BUFFER: usize = 64;
 
 /// What a [`CaptureFile`] can be read from: a file, or anything seekable.
 trait ReadSeek: Read + Seek + Send {}
@@ -170,6 +168,8 @@ pub struct CaptureFile {
     index: BTreeMap<(i32, i32), Record>,
     file: Mutex<Box<dyn ReadSeek>>,
     path: Option<PathBuf>,
+    /// The part of the grid that was indexed (`None`: the requested range was empty).
+    indexed: Option<[i32; 4]>,
 }
 
 impl std::fmt::Debug for CaptureFile {
@@ -232,7 +232,7 @@ impl CaptureFile {
         let mut reader: Box<dyn ReadSeek> = Box::new(reader);
         let len = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
-        let mut r = BufReader::with_capacity(SCAN_BUFFER, reader);
+        let mut r = BufReader::new(reader);
         let truncated = || error!("capture truncated");
         let mut magic = [0u8; 4];
         if r.read_exact(&mut magic).is_err() || &magic != MAGIC {
@@ -308,7 +308,29 @@ impl CaptureFile {
             index,
             file: Mutex::new(r.into_inner()),
             path: None,
+            indexed: wanted,
         })
+    }
+
+    /// The part of the world grid that was indexed, `[x0, z0, x1, z1]` inclusive: the range the file was
+    /// opened with, clipped to the grid. `None` when that range was empty.
+    #[must_use]
+    pub fn indexed_range(&self) -> Option<[i32; 4]> {
+        self.indexed
+    }
+
+    /// Whether every tile of `range` (clipped to the grid like the range of a run; `None` is the whole
+    /// grid) was indexed, so that a tile this capture does not return is really missing from the file.
+    #[must_use]
+    pub fn covers(&self, range: Option<[i32; 4]>) -> bool {
+        let (tiles_x, tiles_z) = (self.params.world.tiles_x, self.params.world.tiles_z);
+        match (clip(range, tiles_x, tiles_z), self.indexed) {
+            (Some([x0, z0, x1, z1]), Some([ix0, iz0, ix1, iz1])) => {
+                x0 >= ix0 && z0 >= iz0 && x1 <= ix1 && z1 <= iz1
+            }
+            (None, _) => true,
+            (Some(_), None) => false,
+        }
     }
 
     /// The path of the file this was opened from; `None` for [`CaptureFile::from_reader`].

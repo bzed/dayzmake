@@ -301,6 +301,8 @@ struct FetchShared<'a> {
     next: &'a AtomicUsize,
     stop: &'a AtomicBool,
     alive: &'a AtomicUsize,
+    /// The number of fetchers.
+    connections: usize,
     gate: &'a Gate,
     window: usize,
     world: &'a WorldParams,
@@ -367,6 +369,10 @@ impl Gate {
     /// (its connection may die and hand it back). `None` when everything is delivered or the run was
     /// stopped. The second value is set for a handed-back index.
     ///
+    /// `prefer_fresh` takes a fresh index before a handed-back one when both are available: a connection
+    /// that has not delivered a tile yet should prove itself on a tile nobody failed before, or a late
+    /// starter would fail the tile of a connection that had worked.
+    ///
     /// `before_wait` runs once, before the first wait: the caller closes its connection there, because
     /// a server that serves one client at a time would otherwise keep serving the idle connection while
     /// the connections that hold the tiles in flight wait for it.
@@ -374,6 +380,7 @@ impl Gate {
         &self,
         shared: &FetchShared<'_>,
         windowed: bool,
+        prefer_fresh: bool,
         before_wait: &mut dyn FnMut(),
     ) -> Option<(usize, Option<Handback>)> {
         let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
@@ -382,18 +389,21 @@ impl Gate {
             if shared.stop.load(Ordering::Relaxed) {
                 return None;
             }
-            if let Some((idx, back)) = work.retry.pop_front() {
+            let next = shared.next.load(Ordering::Relaxed);
+            let fresh = next < shared.plan.len()
+                && (!windowed || next < work.applied.saturating_add(shared.window));
+            if !(prefer_fresh && fresh)
+                && let Some((idx, back)) = work.retry.pop_front()
+            {
                 work.inflight += 1;
                 return Some((idx, Some(back)));
             }
-            let idx = shared.next.load(Ordering::Relaxed);
-            if idx < shared.plan.len() {
-                if !windowed || idx < work.applied.saturating_add(shared.window) {
-                    shared.next.store(idx + 1, Ordering::Relaxed);
-                    work.inflight += 1;
-                    return Some((idx, None));
-                }
-            } else if work.inflight == 0 {
+            if fresh {
+                shared.next.store(next + 1, Ordering::Relaxed);
+                work.inflight += 1;
+                return Some((next, None));
+            }
+            if next >= shared.plan.len() && work.inflight == 0 {
                 return None;
             }
             if waited.take().is_some() {
@@ -505,6 +515,19 @@ impl Drop for FetcherExit<'_> {
     }
 }
 
+/// Whether another fetcher uses the server of fetcher `slot` (fetcher `k` uses host `k mod hosts`).
+fn shares_host(shared: &FetchShared<'_>, slot: usize) -> bool {
+    match &shared.from {
+        FetchFrom::Servers(hosts) if !hosts.is_empty() => {
+            (0..shared.connections)
+                .filter(|k| k % hosts.len() == slot % hosts.len())
+                .count()
+                > 1
+        }
+        _ => false,
+    }
+}
+
 fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
     let mut exit = FetcherExit {
         shared,
@@ -513,7 +536,15 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
     let mut client: Option<Client> = None;
     // The connection has delivered a tile: a failure on it then says something about the tile.
     let mut delivered = false;
-    while let Some((idx, back)) = shared.gate.claim(shared, true, &mut || client = None) {
+    let others_on_host = shares_host(shared, slot);
+    while let Some((idx, back)) = shared.gate.claim(shared, true, !delivered, &mut || {
+        // Only a fetcher that shares its server with others closes the connection before it waits:
+        // nobody else can be waiting for a server that only this fetcher uses.
+        if others_on_host {
+            client = None;
+            delivered = false;
+        }
+    }) {
         let Some(&at) = shared.plan.get(idx) else {
             shared.gate.done(idx, None);
             break;
@@ -534,6 +565,7 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
                 // The tile failed on another connection too: report it and carry on with a fresh
                 // connection of our own.
                 client = None;
+                delivered = false;
                 Fetch::Net(why)
             }
         };
@@ -547,7 +579,7 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
     // The last fetcher to stop reports every index that is left (handed back, or nobody claimed), so the
     // run still ends. No other fetcher is alive, so nothing is in flight and `claim` does not wait.
     if shared.alive.fetch_sub(1, Ordering::AcqRel) == 1 && !shared.stop.load(Ordering::Relaxed) {
-        while let Some((idx, back)) = shared.gate.claim(shared, false, &mut || {}) {
+        while let Some((idx, back)) = shared.gate.claim(shared, false, false, &mut || {}) {
             let message = back.map_or_else(
                 || "not fetched: every connection failed".to_owned(),
                 |b| b.why,
@@ -808,6 +840,7 @@ fn run_pipeline(
         next: &next,
         stop,
         alive: &alive,
+        connections,
         gate,
         window,
         world,
@@ -914,6 +947,21 @@ fn open_source<'a>(
                 ));
             }
             let range = options.range.or_else(|| c.bounds());
+            if !c.covers(range) {
+                // The tiles outside the indexed range would read as absent: a mesh without them and
+                // no error. The caller opened the capture for another range.
+                let fmt = |r: Option<[i32; 4]>| {
+                    r.map_or_else(
+                        || "no tiles".to_owned(),
+                        |[x0, z0, x1, z1]| format!("{x0},{z0},{x1},{z1}"),
+                    )
+                };
+                return Err(error!(
+                    "the capture was indexed for the range {} but the run asks for {}; open the capture with the range of the run",
+                    fmt(c.indexed_range()),
+                    fmt(range)
+                ));
+            }
             (c.params().clone(), range, FetchFrom::CaptureFile(c), 1)
         }
         Source::Servers(hosts) => {
@@ -1064,6 +1112,7 @@ mod tests {
             next: &next,
             stop: &stop,
             alive: &alive,
+            connections: 1,
             gate: &gate,
             window: 1,
             world: &world,
@@ -1075,9 +1124,12 @@ mod tests {
             let waiter = scope.spawn(|| {
                 // Index 0 is inside the window of 1; index 1 is outside it, so the second claim waits
                 // until the run is stopped.
-                assert_eq!(gate.claim(&shared, true, &mut || {}).map(|c| c.0), Some(0));
+                assert_eq!(
+                    gate.claim(&shared, true, false, &mut || {}).map(|c| c.0),
+                    Some(0)
+                );
                 ready_tx.send(()).ok();
-                gate.claim(&shared, true, &mut || {}).is_none()
+                gate.claim(&shared, true, false, &mut || {}).is_none()
             });
             ready_rx.recv().expect("waiter started");
             let panicked = catch_unwind(AssertUnwindSafe(|| {
@@ -1109,6 +1161,7 @@ mod tests {
             next: &next,
             stop: &stop,
             alive: &alive,
+            connections: 1,
             gate: &gate,
             window: 1,
             world: &world,

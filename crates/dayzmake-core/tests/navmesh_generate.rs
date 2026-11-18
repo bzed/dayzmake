@@ -804,3 +804,47 @@ fn a_range_only_indexes_its_tiles() {
     let (report, _) = run(Source::CaptureFile(file), &options);
     assert_eq!(report.built + report.empty, 4);
 }
+
+#[test]
+fn a_run_wider_than_the_indexed_range_is_refused() {
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("w.dzgeo");
+    sparse_capture(&path, &params, &tiles, &[], 8);
+    let mut o = CaptureFileOptions::new();
+    o.range = Some([0, 0, 1, 1]);
+    let open = || CaptureFile::open(&path, &o, &mut Warnings::new()).expect("open");
+    assert_eq!(open().indexed_range(), Some([0, 0, 1, 1]));
+    for range in [Some([0, 0, 2, 2]), Some([1, 1, 2, 1]), Some([0, 0, -1, -1])] {
+        let mut options = opts();
+        options.range = range;
+        let (result, _, _) = generate_watched(Source::CaptureFile(open()), &options);
+        let e = result.expect_err("wider than the index");
+        let text = e.to_string();
+        assert!(text.contains("indexed for the range 0,0,1,1"), "{text}");
+        assert!(text.contains("the run asks for"), "{text}");
+    }
+    // Inside the indexed range, and the default range (the bounds of what was indexed), are fine.
+    for range in [Some([0, 0, 1, 1]), Some([1, 0, 1, 1]), None] {
+        let mut options = opts();
+        options.range = range;
+        let (report, _) = run(Source::CaptureFile(open()), &options);
+        assert!(report.built + report.empty > 0);
+    }
+}
+
+#[test]
+fn a_single_connection_is_not_closed_and_reopened_while_it_waits() {
+    // Window 1: the fetcher waits for the assembler after every tile. With one connection nobody else
+    // can use the server, so the connection stays: the probe and the fetcher, two connections in all.
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none());
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.connections = Some(1);
+    options.window = Some(1);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.built + report.empty, 9);
+    assert_eq!(server.connections(), 2);
+}
