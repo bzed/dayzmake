@@ -197,6 +197,10 @@ The acceptance check for tasks 6–11 is the live test (`navmesh_live.rs`) on th
 
 **Files:** the parts or extra-section code (`dayz/areas.rs`, `build.rs`, `detour/create.rs`); spec §5. Examples: 183,62 (1700/1724), 185,60, 183,63.
 
+### Task 8b: Off-mesh hide-part assignment residuals (#127)
+
+R17 (Task 8) is a placeholder rule. Find the missing condition behind the residual cases listed in #127: the 27 wrong-part cases (the shipped mesh uses the next part index), the class-4 false positives, the remaining extra and missing connections, and the 14 tiles whose ground-polygon part lists differ. The data is `/var/tmp/dznavbad.AX9NDF/t8c.cmp`, and the reviewer's sweep scripts are in `/var/tmp/rv8`. Run it after Task 9, because #124 overlaps.
+
 ### Task 9: Header bmax y (#123) and ground polygon cluster (#124)
 
 **Files:** found by investigation. Examples: 171,210, 172,210 (bmax); 172,211, 191,188, 202,187 (ground). Find out what is special in the 171–177 × 210–229 area first.
@@ -211,4 +215,4 @@ Re-run the synthetic-world examples in `docs/book/src/guides/navmesh.md` and `re
 
 ### Task 12: Whole central half from the capture
 
-Rebuild `48,48,278,278` from `big.dzgeo` under `systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0` and compare the inner tiles. Target: every inner tile matches, apart from polygon flags and the link array. Report anything left over as issues.
+Rebuild the binary from HEAD first; shared binaries in /var/tmp must never be left as experiment builds. Then rebuild `48,48,278,278` from `big.dzgeo` under `systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0` and compare the inner tiles. Target: every inner tile matches, apart from polygon flags and the link array. Report anything left over as issues.
