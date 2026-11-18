@@ -31,7 +31,7 @@ is maintained here.
 
 ### Unreleased
 
-- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default).
+- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default). A tile that needs more than 2^26 heightfield spans fails instead of exhausting memory, `--base` must match the world's grid and tile size, `navmesh info` shows the file version read (7 or 9), and the MCP `sea_level` takes a number or a string.
 
 ### 3.1.0
 
@@ -585,7 +585,7 @@ the result, so a cut never drops them, and failures are results with `isError: t
 `dayzmake navmesh generate` builds the navmesh (`.nm`) of a terrain mod. It asks the navmesh data server of
 `DayZDiag_x64.exe` (started with `-server -startNavmeshDataServer`, port 36533) for the geometry of the world, tile by
 tile, builds the mesh with a Rust port of Recast and Detour including the changes DayZ made to them, and writes the file
-atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file.
+atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file. Relinking and the island filter have been compared byte for byte with navmeshes shipped with DayZ; the per-tile builder has not yet been compared with the output of a live `DayZDiag_x64.exe`.
 
 ```
 dayzmake navmesh probe
@@ -597,10 +597,10 @@ dayzmake navmesh info --tiles mymap.nm
 
 When a run is stopped, or tiles could not be fetched and none failed to build, it ends with the command that continues
 it; the command repeats the first run's options except `--record` (a repeated recording would be overwritten) and
-`--base`, and is quoted for a POSIX shell (`cmd.exe` users adapt the quotes). The same input
+`--base`, and is quoted for a POSIX shell (PowerShell and `cmd.exe` users adapt the quotes). The same input
 gives the same bytes for any number of threads and connections; a failed tile does not stop the run
 (the file is saved and the exit status is 1). On x86 and x86_64 the generator uses the same approximate reciprocal square
-root as DayZ; other processors may classify a slope that is almost exactly the maximum slope differently. The guide
+root as DayZ; other processors (and Intel versus AMD) may classify a slope that is almost exactly the maximum slope differently. The guide
 walks through a terrain mod, DayZDiag under Windows and Proton included:
 <https://bzed.github.io/dayzmake/guides/navmesh.html>, and the reference is at
 <https://bzed.github.io/dayzmake/reference/navmesh.html>.

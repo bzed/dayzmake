@@ -278,7 +278,7 @@ Raised by: `navmesh generate`.
 A tile could not be built or added to the mesh, or its data from the server was malformed. The run goes on without that tile, saves the mesh and exits with status 1; the tile is listed in the report. One warning per tile.
 
 ```text
-warning: tile (7,3): tile 7 3 has unknown cell class 99 [navmesh-tile-failed]
+warning: tile (1,0): unknown cell class 99 [navmesh-tile-failed]
 ```
 
 ## non-utf8-filename

@@ -10,7 +10,7 @@
 //! - [`odol`]: binarized ODOL v56 models, read for what a listing needs (LODs, textures, materials, proxies).
 //! - [`paa`]: PAA textures, with conversion from and to images (feature `image`).
 //! - `sign`: BI keys and `.bisign` signatures (feature `sign`).
-//! - `navmesh`: DayZ navmesh generation, starting with the data-server wire format (feature `navmesh`).
+//! - `navmesh`: DayZ navmesh generation: data-server client, tile builder and `.nm` reader and writer (feature `navmesh`).
 //! - [`binarize`]: BI's `binarize.exe`, natively on Windows or under Proton.
 //! - [`warning`]: the warnings library calls raise.
 //!

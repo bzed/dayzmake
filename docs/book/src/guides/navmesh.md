@@ -5,6 +5,8 @@ from the terrain files alone: it asks a running `DayZDiag_x64.exe` for the geome
 `dayzmake navmesh generate` does that and builds the `.nm` file. This guide goes from a built terrain mod to a navmesh
 in the mod. The [reference](../reference/navmesh.md) lists every command and option.
 
+Relinking and the island filter have been compared byte for byte with navmeshes shipped with DayZ; the per-tile builder has not yet been compared with the output of a live `DayZDiag_x64.exe`. Check the first mesh you build in the game before you ship it.
+
 > The steps that start the game could not be run for this manual, because they need DayZ and a terrain mod, which
 > are not part of the repository. The `dayzmake` outputs shown here are real: they were produced against a test
 > server that serves a small synthetic world. The description of the game side follows the way the game is started
@@ -171,7 +173,8 @@ The output does not depend on the number of threads, connections or servers.
 ### When a run is interrupted
 
 The mesh is written even when the run was partial, and `--checkpoint <n>` writes it after every `n` tiles, so a
-long run can be killed without losing much. To continue, give the file as the base and skip what it has:
+long run can be killed without losing much. Each checkpoint rewrites the whole file, so give a large `n` (hundreds
+or thousands of tiles), not a small one. To continue, give the file as the base and skip what it has:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,2,0 --threads 2 --record rec.dzgeo part.nm
@@ -235,7 +238,8 @@ A capture holds the geometry of a whole world, so it is large; keep it with your
 - On x86 and x86_64 computers the generator uses the same approximate reciprocal square root as DayZ, so the mesh
   is what DayZ itself would make. On other processors (ARM) it uses an exact division instead: a slope that is
   almost exactly the maximum slope can then be classified differently, and the file differs in a few polygons.
-  Both are valid meshes.
+  The approximate instruction itself can also give different results on Intel and AMD CPUs, so two x86 machines
+  can differ in such a polygon too. All of them are valid meshes.
 - The generator never modifies the game, the server or your mod: it only reads from the data server and writes
   the files you name.
 - Warnings are explained in [Warnings](../reference/warnings.md): `navmesh-tile-failed`, `navmesh-stray-part` and

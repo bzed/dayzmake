@@ -497,14 +497,14 @@ Build the navmesh (`.nm`) of a terrain mod from a navmesh data server or a captu
 | `checkpoint` | integer (&ge; 0) | no | Save the target after every n finished tiles (0: off). |
 | `threads` | integer (&ge; 0) | no | Builder threads, 1 to 256; 0 or absent: cores - 1, at least 1. |
 | `connections` | integer (&ge; 0) | no | Connections to the data servers, 1 to 256; 0 or absent: one per server. |
-| `sea_level` | string | no | Sea level in metres instead of the server's deep sea height. |
+| `sea_level` | number or string | no | Sea level in metres instead of the server's deep sea height. |
 | `doors` | string | no | Door state baked into the mesh: `closed` (default), `open` or `enabled`. |
 | `seed` | string | no | Island filter seed as `"x,y,z"` instead of the world's seed position. |
 | `no_links` | boolean | no | No jump, climb or ladder links. |
 | `no_island_filter` | boolean | no | Do not flag polygons that the seed cannot reach. |
 | `force` | boolean | no | Overwrite existing target and record files. |
 
-Result: the summary of `dayzmake navmesh generate` (`built <n> tiles, ...`, `wrote <target>`), after the warnings; no progress is reported. A run that was stopped or that lost tiles is an error result that starts with the same summary and ends with `failed: <reason>`; the partial mesh is saved all the same, and the text ends with the `navmesh_generate` arguments that continue it (`to continue with navmesh_generate: target=..., base=..., skip_existing=true, force=true, ...`). More than 256 `threads` or `connections` is an error. See [navmesh](navmesh.md).
+Result: the summary of `dayzmake navmesh generate` (`built <n> tiles, ...`, `wrote <target>`), after the warnings; no progress is reported. A run that was stopped or that lost tiles is an error result that starts with the same summary, then (when a continuation makes sense) has the `navmesh_generate` arguments that continue it (`to continue with navmesh_generate: target=..., base=..., skip_existing=true, force=true, ...`), and ends with `failed: <reason>`; the partial mesh is saved all the same. More than 256 `threads` or `connections` is an error. See [navmesh](navmesh.md).
 
 ### navmesh_info
 

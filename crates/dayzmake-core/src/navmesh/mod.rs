@@ -1,5 +1,5 @@
-//! Navmesh generation for DayZ: the data-server wire format, and (in later modules) the tile builder
-//! and the `.nm` writer.
+//! Navmesh generation for DayZ: the data-server client and wire format, captures, the Recast/Detour tile
+//! builder, the `.nm` reader and writer, and the generator that ties them together ([`generate`]).
 //!
 //! Feature `navmesh`. The wire format ([`wire`]) is what DayZDiag's navmesh data server sends: world
 //! parameters and one geometry record per tile. Every reader treats its input as hostile and returns

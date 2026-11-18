@@ -760,7 +760,9 @@ fn check_worker_counts(options: &GenerateOptions, source: &Source) -> io::Result
 /// failing checkpoint or capture write stops the run but is not an `Err`: the report has
 /// [`GenerateReport::stopped`], and the caller should save `set` and then fail. A failed tile does not stop the run: it is in [`GenerateReport::failed`] and raises the warning
 /// `navmesh-tile-failed`. `progress` is called on the calling thread after each applied tile and once
-/// at the end. The result does not depend on `threads` or `connections`.
+/// at the end. The result does not depend on `threads` or `connections`. Memory: the queues between
+/// fetchers, builders and the assembler are bounded in tiles, not in bytes; a tile input can be large (frames up
+/// to 1 GiB) and there is no aggregate byte budget.
 ///
 /// # Errors
 ///

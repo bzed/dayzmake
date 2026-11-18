@@ -9,7 +9,9 @@ terrain mod to a mesh in the game; this page lists every command.
 The generator is a Rust port of the Recast and Detour libraries with the changes DayZ made to them. Its output is
 independent of the number of threads and connections: the same input gives the same bytes. On x86 and x86_64
 it uses the same approximate reciprocal square root instruction as DayZ; on other CPUs (ARM, for example) a plain
-division is used, and a slope very close to the maximum slope can be classified differently there.
+division is used, and a slope very close to the maximum slope can be classified differently there. The
+instruction is approximate, and its result can differ between x86 CPU makers (Intel and AMD), so the same
+slope case can also be classified differently on two x86 machines.
 
 The examples use a small synthetic world of 3 by 3 tiles of 50 by 50 m, served by a test server and saved as the
 capture `world.dzgeo`. Against the game, use the address of the machine that runs `DayZDiag_x64.exe`; the port is
@@ -25,7 +27,7 @@ server listens on TCP port 36533 (fixed by the game). A host is written `host` o
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
 first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
 wrong answer) is repeated on a fresh connection, five attempts in all, waiting 2, 4, 6 and 8 seconds between them.
-A server that sends nothing for 10 minutes counts as failed. A malformed answer is
+A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 
 A **capture** (`.dzgeo`) is a recording of the geometry that a server sent. `generate --record` writes one while it
@@ -116,9 +118,9 @@ dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--
 | `--capture <dzgeo>` | none | Build from this capture instead of a server. Tiles the capture does not have are left out. Without `--range` the range is the bounding box of the captured tiles. |
 | `--record <dzgeo>` | none | Also write the fetched tiles to a capture file. |
 | `--range <x0,z0,x1,z1>` | the whole world | The tiles to build: columns `x0` to `x1` and rows `z0` to `z1`, inclusive. Values below 0 or beyond the grid are cut to the world; an upper bound below 0 means the last tile. A range with nothing left is the error `empty tile range`. |
-| `--base <nm>` | none | Start from this navmesh: its grid is kept, and the new tiles replace the tiles of their cells. |
+| `--base <nm>` | none | Start from this navmesh: its grid is kept, and the new tiles replace the tiles of their cells. It must fit the world (grid, tile size and origin), or the run fails with `base navmesh does not match the world`. |
 | `--skip-existing` | off | Leave out the tiles that `--base` already has. Needs `--base` (`--skip-existing needs --base`). |
-| `--checkpoint <n>` | 0 (off) | Write the target after every `n` finished tiles (built, empty or failed). A negative value is an error; 0 means off. A checkpoint that cannot be written stops the run, which is then a failure (see below). |
+| `--checkpoint <n>` | 0 (off) | Write the target after every `n` finished tiles (built, empty or failed). Each checkpoint rewrites the whole file, so use a large `n` (hundreds or thousands of tiles) for a big world. A negative value is an error; 0 means off. A checkpoint that cannot be written stops the run, which is then a failure (see below). |
 | `--threads <n>` | cores - 1, at least 1 | Builder threads, at most 256. 0 means the default; a negative number is an error. |
 | `--connections <n>` | one per server (1 for a capture) | Connections to the servers, at most 256. 0 means the default; a negative number is an error. |
 | `--sea-level <m>` | the server's deep sea height | The sea level in metres. |
@@ -150,6 +152,8 @@ be built is *failed* and raises the warning `navmesh-tile-failed`; it does not s
 runs over the whole mesh at the end, so a resumed run (below) filters the merged mesh. When the seed finds no
 polygon the filter is skipped with the warning `navmesh-seed`.
 
+Memory: the tiles fetched but not yet built or applied wait in queues whose length is limited, not their size. A tile record can be large (a frame may be up to 1 GiB) and nothing limits the total bytes, so a world with huge tiles needs memory in proportion; `--record` keeps each fetched tile until it has been written.
+
 The target is written **even when the run was partial**. The exit status is 0 when every tile was handled, and 1 when
 a tile failed, a tile could not be fetched, or a checkpoint or `--record` write failed.
 
@@ -158,7 +162,7 @@ that failed to build, ends with the command that continues it. The command repea
 `--record` (with `-f` it would overwrite the first recording) and `--base`, which becomes the target, so the rest is
 built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail
 again. The printed command is quoted for a POSIX shell (single quotes around anything but letters, digits and
-`_@%+=:,./-`); that works in bash, zsh and PowerShell, while a `cmd.exe` user has to adapt the quotes. With a server that closes every connection, one tile (retried five times, 20 seconds in all) gives:
+`_@%+=:,./-`); that works in bash and zsh; PowerShell and `cmd.exe` users adapt the quotes (`'\''` does not work in PowerShell). With a server that closes every connection, one tile (five attempts, 2+4+6+8 s between them, 20 seconds in all) gives:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm

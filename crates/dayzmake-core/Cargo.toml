@@ -22,7 +22,7 @@ default = ["sign", "image", "navmesh"]
 sign = ["dep:rsa", "dep:getrandom", "dep:zeroize"]
 # PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
 image = ["dep:image"]
-# Navmesh generation (`navmesh` module): the data-server wire format and, later, the tile builder and `.nm` writer.
+# Navmesh generation (`navmesh` module): the data-server client and wire format, the tile builder and the `.nm` reader and writer.
 navmesh = ["dep:safe_arch"]
 
 [dependencies]
