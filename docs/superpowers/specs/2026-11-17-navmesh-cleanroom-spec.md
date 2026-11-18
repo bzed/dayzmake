@@ -1331,12 +1331,12 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
 14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
-15. **Pass direction `dir` (ruling R13, #116).** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*h` is a tie
-    between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
+15. **Pass direction `dir` (ruling R13, #116).** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
+    the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
     moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
-   power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
+    power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
     gives the same value in the observed case but is not needed. dayzmake uses `dir = B - A`; with it all five validation
-    sets match the shipped meshes completely (inner tiles).
+    sets match the shipped meshes byte for byte (inner tiles), apart from the polygon flags and the link array.
 16. **Shallow water depth (ruling R14, #117).** The first water pass (area 2) uses `waterDepth = walkableClimb`, not 0. With 0
     the shallow band reaches ground that is only a voxel under the surface, and on a sloped shore it is 1 m to 2 m too wide
     (Livonia tiles 130,220, 131,220, 131,221 and 131,222: the shipped shallow-water polygons end where the ground is 5 voxels

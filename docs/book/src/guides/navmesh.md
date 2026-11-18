@@ -9,8 +9,10 @@ The generator has been compared with the navmeshes shipped with DayZ 1.30 (see [
 Check the first mesh you build in the game before you ship it all the same.
 
 > The `dayzmake` outputs shown here are real: they were produced against a test server that serves a small synthetic
-> world. The command lines that start the game were run with DayZ 1.30 under GE-Proton, but they need DayZ and are
-> not part of the automated tests.
+> world. The Linux command line that starts the game was run with DayZ 1.30 under GE-Proton11-1 (the example below
+> names `Proton - Experimental` as a generic path; any Proton build should do, GE-Proton11-1 is the one tested). The
+> Windows command line has the same options but was not run on Windows. Neither is part of the automated tests,
+> because they need DayZ.
 
 ## What you need
 
@@ -36,9 +38,10 @@ on Windows and `~/dayz-navmesh` on Linux. It holds
 - `serverDZ_navmesh.cfg`: a copy of the stock `serverDZ.cfg` that does not check signatures and does not start
   BattlEye, so it has the lines `verifySignatures = 0;` and `BattlEye = 0;`, and whose mission `template` names your
   mission, for example `template="dayzOffline.mymap";`;
-- the mission, a **complete copy** of a stock mission folder (`DayZServer/mpmissions/dayzOffline.enoch`, `.nasdara`
-  or the full mission of your mod, named `dayzOffline.<yourworld>`), in which only `init.c` is replaced by an empty
-  `main()`:
+- the mission, in the folder `mpmissions` of that folder: a **complete copy** of a mission folder, in which only
+  `init.c` is replaced by an empty `main()`. For a stock map this is a copy of its own stock mission under its own
+  name (`DayZServer/mpmissions/dayzOffline.enoch`, `dayzOffline.nasdara`); for your terrain it is a copy of your
+  mod's own full mission (`dayzOffline.<yourworld>`):
 
 ```text
 void main()
@@ -63,7 +66,7 @@ generate, and wait for the data server before you use it (see *Check the connect
 
 ### On Linux, under Proton
 
-<!-- verified: no -->
+<!-- verified: GE-Proton11-1, DayZ 1.30 -->
 
 The Windows program runs through Proton, from the **client** installation (`steamapps/common/DayZ`), which has
 `DayZDiag_x64.exe`. Run it the way Steam would, with the environment of the game. The program is a Windows program:
@@ -267,10 +270,11 @@ The generator was compared with the navmeshes that ship with DayZ 1.30, using ca
   183-186 x 198-201), whose floors are walkable below the surface.
 
 Every inner tile built from a capture is identical to the shipped one, byte for byte, with two exceptions that are
-not errors: the polygon flags (they come from the island filter, which was off in the comparison) and the link
-table, which the game rebuilds when it loads the mesh. Only inner tiles can match, because the far end of a link
-into a neighbouring tile is snapped only when that neighbour is loaded; the tiles at the edge of a block have
-links that need tiles outside it. The comparison covers these blocks, not a whole map, so the first mesh of your
+not errors: the polygon flags (they come from the island filter, which was off in the comparison) and the Detour
+link array between polygons, which stock Detour builds when a tile is added to the mesh, so the stored links are not
+meaningful for a comparison. Only inner tiles can match for a different reason: an off-mesh connection (jump or
+climb link) that leads into a neighbouring tile has its far end snapped only when that neighbour exists, and the
+tiles at the edge of a block have neighbours outside the capture. The comparison covers these blocks, not a whole map, so the first mesh of your
 own terrain is still worth a look in the game.
 
 You can repeat the comparison with your own copy of the game data. The test is ignored by default, because it needs

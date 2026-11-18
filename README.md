@@ -585,7 +585,7 @@ the result, so a cut never drops them, and failures are results with `isError: t
 `dayzmake navmesh generate` builds the navmesh (`.nm`) of a terrain mod. It asks the navmesh data server of
 `DayZDiag_x64.exe` (started with `-server -startNavmeshDataServer`, port 36533) for the geometry of the world, tile by
 tile, builds the mesh with a Rust port of Recast and Detour including the changes DayZ made to them, and writes the file
-atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file. The builder has been compared with the navmeshes shipped with DayZ 1.30 (Livonia and Badlands, including the Badlands irrigation tunnels): tiles built from live `DayZDiag_x64.exe` captures match byte for byte, apart from the polygon flags of the island filter and the link table, which the game rebuilds at load time. See the guide for what was compared.
+atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file. The builder has been compared with the navmeshes shipped with DayZ 1.30 (Livonia and Badlands, including the Badlands irrigation tunnels): the inner tiles of five blocks of tiles (not whole maps) built from live `DayZDiag_x64.exe` captures match byte for byte, apart from the polygon flags of the island filter and the polygon link array. See [Validation](https://bzed.github.io/dayzmake/guides/navmesh.html#validation) in the guide.
 
 ```
 dayzmake navmesh probe
