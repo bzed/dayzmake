@@ -33,6 +33,7 @@ fn built(outcome: TileOutcome) -> (TileData, usize, usize) {
             data,
             stray_part_ids,
             obstacles,
+            ..
         } => (data, stray_part_ids, obstacles),
         other => panic!("expected a built tile, got {other:?}"),
     }
@@ -124,10 +125,8 @@ fn unknown_cell_class() {
     input.z = 4;
     input.cell_class = 7;
     let e = build_tile(&p, &input, &BuildOptions::default()).unwrap_err();
-    assert!(
-        e.to_string().contains("tile 3 4 has unknown cell class 7"),
-        "{e}"
-    );
+    // The caller names the tile; the error does not.
+    assert_eq!(e.to_string(), "unknown cell class 7");
 }
 
 #[test]

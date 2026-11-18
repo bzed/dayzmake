@@ -93,7 +93,8 @@ pub struct GenerateOptions {
     pub checkpoint: Option<(usize, PathBuf)>,
     /// Write a capture of the fetched tiles to this path. Tiles are recorded by the assembler in plan
     /// order, so the capture is deterministic, and a crash loses the tiles that were fetched but not
-    /// yet applied.
+    /// yet applied. Queued tile inputs can be large (a frame may be up to 1 GiB) and there is no
+    /// aggregate byte budget: the memory of a run grows with the largest tiles in flight.
     pub record: Option<PathBuf>,
     /// The number of builder threads, at most [`MAX_WORKERS`]; `None`: the cores minus one, at least 1.
     pub threads: Option<usize>,
@@ -162,8 +163,9 @@ pub struct GenerateReport {
     pub empty: usize,
     /// Tiles that failed: `(x, z, message)`, in plan order.
     pub failed: Vec<(i32, i32, String)>,
-    /// Tiles that could not be fetched (final network errors): `tile (x,z): message`, in plan order.
-    pub fetch_errors: Vec<String>,
+    /// Tiles that could not be fetched (final network errors): `(x, z, message)`, in plan order. The
+    /// message does not name the tile.
+    pub fetch_errors: Vec<(i32, i32, String)>,
     /// Tiles that had out-of-range door part ids (spec 12.3); the ids were ignored.
     pub stray_tiles: usize,
     /// The island filter result; `None` when it did not run or found no polygon near the seed.
@@ -299,17 +301,6 @@ struct FetchShared<'a> {
     policy: &'a RetryPolicy,
 }
 
-/// `tile (x,z): message`, unless the message (a client error) already names the tile.
-fn net_message(x: i32, z: i32, e: &dyn std::fmt::Display) -> String {
-    let text = e.to_string();
-    let prefix = format!("tile ({x},{z})");
-    if text.starts_with(&prefix) || text.starts_with(&format!("tile {x} {z} ")) {
-        text
-    } else {
-        format!("{prefix}: {text}")
-    }
-}
-
 /// The claim window state: how many plan indices the assembler has applied.
 struct Gate {
     applied: Mutex<usize>,
@@ -370,24 +361,46 @@ fn fetch_one(
         FetchFrom::Servers(hosts) => {
             if client.is_none() {
                 let Some(host) = hosts.get(slot % hosts.len().max(1)) else {
-                    return Fetch::Net(net_message(col, row, &"no data server"));
+                    return Fetch::Net("no data server".to_owned());
                 };
                 // Not connected yet, so the retry loop of `tile` covers the first connect too.
                 *client = Some(Client::lazy(host, shared.policy));
             }
             let Some(conn) = client.as_mut() else {
-                return Fetch::Net(net_message(col, row, &"not connected"));
+                return Fetch::Net("not connected".to_owned());
             };
             match conn.tile(col, row, shared.world) {
                 Ok(tile) => Fetch::Tile(tile),
                 Err(FetchError::Wire(e)) => Fetch::Wire(e.to_string()),
-                Err(FetchError::Network(e)) => Fetch::Net(net_message(col, row, &e)),
+                Err(FetchError::Network(e)) => Fetch::Net(e.to_string()),
             }
         }
     }
 }
 
+/// Armed for the life of a fetcher. When the fetcher leaves any way but its normal end (a panic, or the
+/// assembler being gone), the run is stopped, the waiting fetchers are woken and the fetcher is no longer
+/// counted as alive, so nothing waits for a tile that will never come.
+struct FetcherExit<'a> {
+    shared: &'a FetchShared<'a>,
+    armed: bool,
+}
+
+impl Drop for FetcherExit<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.shared.stop.store(true, Ordering::Relaxed);
+            self.shared.gate.wake();
+            self.shared.alive.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
 fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
+    let mut exit = FetcherExit {
+        shared,
+        armed: true,
+    };
     let mut client: Option<Client> = None;
     loop {
         if shared.stop.load(Ordering::Relaxed) {
@@ -410,14 +423,15 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
             break;
         }
     }
+    exit.armed = false;
     // The last fetcher to stop reports every index nobody claimed, so the run still ends.
     if shared.alive.fetch_sub(1, Ordering::AcqRel) == 1 && !shared.stop.load(Ordering::Relaxed) {
         loop {
             let idx = shared.next.fetch_add(1, Ordering::Relaxed);
-            let Some(&(x, z)) = shared.plan.get(idx) else {
+            if shared.plan.get(idx).is_none() {
                 break;
-            };
-            let what = Fetch::Net(net_message(x, z, &"not fetched: every connection failed"));
+            }
+            let what = Fetch::Net("not fetched: every connection failed".to_owned());
             if tx.send(Fetched { idx, what }).is_err() {
                 return;
             }
@@ -503,7 +517,7 @@ impl Assembler<'_> {
     fn fail(&mut self, (x, z): (i32, i32), message: String, warnings: &mut dyn WarningSink) {
         warnings.warn(Warning::new(
             Some("navmesh-tile-failed"),
-            net_message(x, z, &message),
+            format!("tile ({x},{z}): {message}"),
         ));
         self.report.failed.push((x, z, message));
     }
@@ -520,7 +534,7 @@ impl Assembler<'_> {
         }
         match msg.outcome {
             Outcome::Skipped => self.skipped += 1,
-            Outcome::Net(m) => self.report.fetch_errors.push(m),
+            Outcome::Net(m) => self.report.fetch_errors.push((at.0, at.1, m)),
             Outcome::Failed(m) => self.fail(at, m, warnings),
             Outcome::Tile(outcome) => match *outcome {
                 TileOutcome::Empty => {
@@ -593,6 +607,26 @@ fn capture_range(capture: &Capture) -> Option<[i32; 4]> {
 /// Creates the target mesh (spec 2.3 step 3, 8.1) and its grid size.
 fn create_mesh(world: &WorldBlock, base: Option<&NavMeshSet>) -> io::Result<(NavMesh, (i32, i32))> {
     if let Some(set) = base {
+        let p = &set.params;
+        let mismatch = p.tile_width.to_bits() != world.tile_width.to_bits()
+            || p.tile_height.to_bits() != world.tile_height.to_bits()
+            || p.orig.iter().any(|c| c.to_bits() & 0x7fff_ffff != 0)
+            || set.tiles_x != world.tiles_x
+            || set.tiles_z != world.tiles_z;
+        if mismatch {
+            return Err(error!(
+                "base navmesh does not match the world (base: {} x {} tiles of {} x {} m at {:?}; world: {} x {} tiles of {} x {} m at [0.0, 0.0, 0.0])",
+                set.tiles_x,
+                set.tiles_z,
+                p.tile_width,
+                p.tile_height,
+                p.orig,
+                world.tiles_x,
+                world.tiles_z,
+                world.tile_width,
+                world.tile_height
+            ));
+        }
         return Ok((
             NavMesh::from_set(set).prepend_error("cannot use the base mesh")?,
             (set.tiles_x, set.tiles_z),
@@ -828,7 +862,7 @@ pub fn generate(
             ));
         }
     }
-    report.set = mesh.to_set(grid.0, grid.1);
+    report.set = mesh.into_set(grid.0, grid.1);
     report.seconds = start.elapsed().as_secs_f64();
     progress(&Progress {
         done: report.built
@@ -848,6 +882,87 @@ pub fn generate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fetcher that panics must stop the run, wake the fetchers waiting for the window and stop
+    /// counting as alive, or the run would hang (the assembler waits for the tile it claimed).
+    #[test]
+    fn a_panicking_fetcher_stops_the_run_and_wakes_the_waiters() {
+        let world = WorldParams::default();
+        let policy = RetryPolicy::default();
+        let plan = [(0, 0), (1, 0)];
+        let (next, stop, alive) = (
+            AtomicUsize::new(0),
+            AtomicBool::new(false),
+            AtomicUsize::new(2),
+        );
+        let gate = Gate {
+            applied: Mutex::new(0),
+            changed: Condvar::new(),
+        };
+        let shared = FetchShared {
+            plan: &plan,
+            next: &next,
+            stop: &stop,
+            alive: &alive,
+            gate: &gate,
+            window: 1,
+            world: &world,
+            from: FetchFrom::Servers(&[]),
+            policy: &policy,
+        };
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            let waiter = scope.spawn(|| {
+                ready_tx.send(()).ok();
+                // Index 5 is far outside the window of 1: it waits until the run is stopped.
+                gate.enter(5, 1, &stop)
+            });
+            ready_rx.recv().expect("waiter started");
+            let panicked = catch_unwind(AssertUnwindSafe(|| {
+                let _exit = FetcherExit {
+                    shared: &shared,
+                    armed: true,
+                };
+                std::panic::resume_unwind(Box::new("boom"))
+            }));
+            assert!(panicked.is_err());
+            assert!(!waiter.join().expect("waiter"), "the waiter was released");
+        });
+        assert!(stop.load(Ordering::Relaxed));
+        assert_eq!(alive.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_fetcher_that_ends_normally_does_not_stop_the_run() {
+        let world = WorldParams::default();
+        let policy = RetryPolicy::default();
+        let (next, stop, alive) = (
+            AtomicUsize::new(0),
+            AtomicBool::new(false),
+            AtomicUsize::new(1),
+        );
+        let gate = Gate {
+            applied: Mutex::new(0),
+            changed: Condvar::new(),
+        };
+        let shared = FetchShared {
+            plan: &[],
+            next: &next,
+            stop: &stop,
+            alive: &alive,
+            gate: &gate,
+            window: 1,
+            world: &world,
+            from: FetchFrom::Servers(&[]),
+            policy: &policy,
+        };
+        drop(FetcherExit {
+            shared: &shared,
+            armed: false,
+        });
+        assert!(!stop.load(Ordering::Relaxed));
+        assert_eq!(alive.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn a_panicking_build_becomes_a_failed_tile() {

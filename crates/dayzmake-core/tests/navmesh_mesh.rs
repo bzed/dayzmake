@@ -286,6 +286,15 @@ fn real_two_tile_set() -> NavMeshSet {
 }
 
 #[test]
+fn into_set_equals_to_set() {
+    for set in [two_tile_set(), real_two_tile_set()] {
+        let mesh = NavMesh::from_set(&set).unwrap();
+        let expected = mesh.to_set(set.tiles_x, set.tiles_z);
+        assert_eq!(mesh.into_set(set.tiles_x, set.tiles_z), expected);
+    }
+}
+
+#[test]
 fn from_set_roundtrip() {
     for set in [two_tile_set(), real_two_tile_set()] {
         let mesh = NavMesh::from_set(&set).unwrap();

@@ -650,7 +650,12 @@ fn write_summary(report: &GenerateReport, out: &mut dyn Write) -> Result<(), Err
         .failed
         .iter()
         .map(|(x, z, message)| format!("tile ({x},{z}): {message}"))
-        .chain(report.fetch_errors.iter().cloned())
+        .chain(
+            report
+                .fetch_errors
+                .iter()
+                .map(|(x, z, message)| format!("tile ({x},{z}): {message}")),
+        )
         .chain(report.stopped.iter().cloned())
         .collect();
     for line in errors.iter().take(LISTED_ERRORS) {

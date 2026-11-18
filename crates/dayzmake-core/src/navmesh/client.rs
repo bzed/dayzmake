@@ -335,14 +335,14 @@ impl Client {
         let tile = TileInput::parse(&payload).map_err(FetchError::Wire)?;
         if tile.x != x || tile.z != z {
             return Err(FetchError::Network(error!(
-                "asked for tile ({x},{z}), got ({},{})",
+                "the server answered with tile ({},{})",
                 tile.x, tile.z
             )));
         }
         let class = usize::try_from(tile.cell_class).unwrap_or(usize::MAX);
         if class >= world.cell_classes.len() {
             return Err(FetchError::Network(error!(
-                "tile ({x},{z}): unknown cell class {}",
+                "unknown cell class {}",
                 tile.cell_class
             )));
         }

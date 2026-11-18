@@ -635,6 +635,30 @@ impl NavMesh {
         }
     }
 
+    /// Like [`NavMesh::to_set`], but consumes the mesh and moves the tiles instead of cloning them,
+    /// so the final save of a large run does not double the peak memory.
+    #[must_use]
+    pub fn into_set(self, tiles_x: i32, tiles_z: i32) -> NavMeshSet {
+        NavMeshSet {
+            version: SET_VERSION,
+            tiles_x,
+            tiles_z,
+            params: self.params,
+            tiles: self
+                .slots
+                .into_iter()
+                .filter_map(|(slot, s)| {
+                    let salt = s.salt;
+                    s.tile.map(|t| SetTile {
+                        tile_ref: encode_poly_ref(salt, slot, 0),
+                        padding: t.padding,
+                        data: t.data,
+                    })
+                })
+                .collect(),
+        }
+    }
+
     /// The tiles of the grid cells `min..=max` (`x`, `y`), with their reference bases, row by row
     /// (`y` outer, `x` inner) as `dtNavMeshQuery::queryPolygons` visits them.
     pub(crate) fn tiles_in_range(

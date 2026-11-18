@@ -298,9 +298,10 @@ fn failed_tile_reported_and_run_continues() {
     assert_eq!(report.failed.len(), 1);
     assert_eq!((report.failed[0].0, report.failed[0].1), (2, 0));
     assert!(warning_names(&warnings).contains(&"navmesh-tile-failed"));
+    // One wording: the report keeps the bare reason and the warning names the tile once.
+    assert_eq!(report.failed[0].2, "unknown cell class 99");
     let text = &warnings.warnings()[0].message;
-    // The build error already names the tile; the warning does not say it twice.
-    assert_eq!(text.matches("tile").count(), 1, "{text}");
+    assert_eq!(text, "tile (2,0): unknown cell class 99");
 }
 
 #[test]
@@ -403,13 +404,21 @@ fn dead_connections_end_the_run_with_fetch_errors_in_plan_order() {
     assert_eq!(report.built, 0);
     assert_eq!(report.fetch_errors.len(), 9);
     // The first tile of the plan comes first, whichever fetcher claimed it.
-    assert!(
-        report.fetch_errors[0].starts_with("tile (0,0):"),
+    assert_eq!(
+        (report.fetch_errors[0].0, report.fetch_errors[0].1),
+        (0, 0),
         "{:?}",
         report.fetch_errors
     );
+    assert_eq!(
+        (report.fetch_errors[8].0, report.fetch_errors[8].1),
+        (2, 2),
+        "{:?}",
+        report.fetch_errors
+    );
+    // The message does not repeat the tile; the callers add it.
     assert!(
-        report.fetch_errors[8].starts_with("tile (2,2):"),
+        !report.fetch_errors[0].2.starts_with("tile"),
         "{:?}",
         report.fetch_errors
     );
@@ -500,4 +509,39 @@ fn the_claim_window_bounds_the_reorder_buffer_and_the_output_is_unchanged() {
     assert!(report.peak_pending <= 2, "peak {}", report.peak_pending);
     assert_eq!(report.built, 4);
     assert_eq!(bytes_of(&report.set), bytes_of(&reference.set));
+}
+
+/// A base mesh made for another grid or tile size is refused, not silently mixed with new tiles.
+#[test]
+fn a_base_that_does_not_match_the_world_is_refused() {
+    let (params, tiles) = synthetic_world();
+    let mut options = opts();
+    options.range = Some([0, 0, 0, 0]);
+    let (first, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    let mismatches: [fn(&mut NavMeshSet); 5] = [
+        |s| s.params.tile_width += 1.0,
+        |s| s.params.tile_height += 1.0,
+        |s| s.params.orig[0] = 5.0,
+        |s| s.tiles_x += 1,
+        |s| s.tiles_z += 1,
+    ];
+    for change in mismatches {
+        let mut base = first.set.clone();
+        change(&mut base);
+        let mut options = opts();
+        options.base = Some(base);
+        let (result, _, _) =
+            generate_watched(Source::Capture(capture_of(&params, &tiles)), &options);
+        let text = result.expect_err("mismatch").to_string();
+        assert!(
+            text.contains("base navmesh does not match the world"),
+            "{text}"
+        );
+    }
+    // The matching base is still fine.
+    let mut options = opts();
+    options.base = Some(first.set.clone());
+    options.range = Some([1, 0, 1, 0]);
+    let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    assert_eq!(report.set.tiles.len(), 2);
 }

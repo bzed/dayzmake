@@ -166,6 +166,7 @@ pub fn tile_config(
 )]
 pub enum TileOutcome {
     /// A tile blob.
+    #[non_exhaustive]
     Built {
         /// The Detour tile.
         data: TileData,
@@ -495,7 +496,7 @@ fn extra_section(extras: &[ExtraPart], obstacles: Vec<Obstacle>) -> io::Result<T
 ///
 /// # Errors
 ///
-/// Returns an error for an unknown cell class ("tile X Z has unknown cell class N"), an invalid
+/// Returns an error for an unknown cell class ("unknown cell class N"; the caller names the tile), an invalid
 /// grid, or a failure of one of the pipeline stages.
 pub fn build_tile(
     world: &WorldParams,
@@ -522,18 +523,10 @@ pub fn build_tile_with_span_limit(
     let class = usize::try_from(input.cell_class)
         .ok()
         .and_then(|i| world.cell_classes.get(i))
-        .ok_or_else(|| {
-            error!(
-                "tile {} {} has unknown cell class {}",
-                input.x, input.z, input.cell_class
-            )
-        })?;
+        .ok_or_else(|| error!("unknown cell class {}", input.cell_class))?;
     let cfg = tile_config(world, class, options);
     if cfg.cells <= 0 || !cfg.cs.is_finite() || cfg.cs <= 0.0 {
-        return Err(error!(
-            "tile {} {}: cell class has {} cells of {} m",
-            input.x, input.z, cfg.cells, cfg.cs
-        ));
+        return Err(error!("cell class has {} cells of {} m", cfg.cells, cfg.cs));
     }
     let obstacles_on = world.world.obstacles;
 
