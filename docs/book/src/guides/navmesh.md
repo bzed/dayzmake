@@ -5,12 +5,12 @@ from the terrain files alone: it asks a running `DayZDiag_x64.exe` for the geome
 `dayzmake navmesh generate` does that and builds the `.nm` file. This guide goes from a built terrain mod to a navmesh
 in the mod. The [reference](../reference/navmesh.md) lists every command and option.
 
-Relinking and the island filter have been compared byte for byte with navmeshes shipped with DayZ; the per-tile builder has not yet been compared with the output of a live `DayZDiag_x64.exe`. Check the first mesh you build in the game before you ship it.
+The generator has been compared with the navmeshes shipped with DayZ 1.30 (see [Validation](#validation) at the end).
+Check the first mesh you build in the game before you ship it all the same.
 
-> The steps that start the game could not be run for this manual, because they need DayZ and a terrain mod, which
-> are not part of the repository. The `dayzmake` outputs shown here are real: they were produced against a test
-> server that serves a small synthetic world. The description of the game side follows the way the game is started
-> for such work.
+> The `dayzmake` outputs shown here are real: they were produced against a test server that serves a small synthetic
+> world. The command lines that start the game were run with DayZ 1.30 under GE-Proton, but they need DayZ and are
+> not part of the automated tests.
 
 ## What you need
 
@@ -33,9 +33,11 @@ normal game port is not, and must not be the default, so that a real server on t
 Keep the files of the data server in a folder of your own, **outside the game installation**: here `C:\dayz-navmesh`
 on Windows and `~/dayz-navmesh` on Linux. It holds
 
-- `serverDZ_navmesh.cfg`: a normal `serverDZ.cfg` that does not check signatures and does not start BattlEye, so it
-  has the lines `verifySignatures = 0;` and `BattlEye = 0;` (its `Missions` class names the mission folder);
-- an empty mission, a folder `empty.<yourworld>` (the name after the dot is the world) whose `init.c` has an empty
+- `serverDZ_navmesh.cfg`: a copy of the stock `serverDZ.cfg` that does not check signatures and does not start
+  BattlEye, so it has the lines `verifySignatures = 0;` and `BattlEye = 0;`, and whose mission `template` names your
+  mission, for example `template="dayzOffline.mymap";`;
+- the mission, a **complete copy** of a stock mission folder (`DayZServer/mpmissions/dayzOffline.enoch`, `.nasdara`
+  or the full mission of your mod, named `dayzOffline.<yourworld>`), in which only `init.c` is replaced by an empty
   `main()`:
 
 ```text
@@ -44,16 +46,20 @@ void main()
 }
 ```
 
+Do not shorten the mission to the `init.c` alone: a folder that contains only `init.c` makes the server log
+`[Server] :: termination in: 10` and exit about 7 seconds after the start, before the data server opens.
+
 ### On Windows
 
 Start the server from the DayZ folder, with full paths, your mod and a game port that is not 2302:
 
 ```text
-DayZDiag_x64.exe -server -startNavmeshDataServer -config=C:\dayz-navmesh\serverDZ_navmesh.cfg -mission=C:\dayz-navmesh\empty.mymap -port=2402 "-mod=@MyTerrain"
+DayZDiag_x64.exe -server -startNavmeshDataServer -config=C:\dayz-navmesh\serverDZ_navmesh.cfg -mission=C:\dayz-navmesh\mpmissions\dayzOffline.mymap -profiles=C:\dayz-navmesh\profiles -port=2402 -dologs -adminlog -nosplash -nopause "-mod=@MyTerrain"
 ```
 
-`@MyTerrain` is the folder of your mod in the DayZ folder. Leave out `-profiles=`. Wait until the log shows the world
-loaded, and keep the window open while you generate.
+`@MyTerrain` is the folder of your mod in the DayZ folder. `-profiles=` puts the RPT and the script logs into that
+folder. A stock DLC map such as Badlands (`dayzOffline.nasdara`) needs no `-mod`. Keep the window open while you
+generate, and wait for the data server before you use it (see *Check the connection* below).
 
 ### On Linux, under Proton
 
@@ -74,23 +80,29 @@ cd "$STEAM_COMPAT_INSTALL_PATH"
 "$STEAM_ROOT/steamapps/common/Proton - Experimental/proton" run ./DayZDiag_x64.exe \
     -server -startNavmeshDataServer \
     "-config=Z:\home\you\dayz-navmesh\serverDZ_navmesh.cfg" \
-    "-mission=Z:\home\you\dayz-navmesh\empty.mymap" \
-    -port=2402 "-mod=@MyTerrain"
+    "-mission=Z:\home\you\dayz-navmesh\mpmissions\dayzOffline.mymap" \
+    "-profiles=Z:\home\you\dayz-navmesh\profiles" \
+    -port=2402 -dologs -adminlog -nosplash -nopause "-mod=@MyTerrain"
 ```
+
+For a stock map such as Badlands leave out `-mod`.
 
 Some points that are easy to get wrong:
 
 - **The mod must be inside the DayZ folder.** A `-mod=` path outside it fails with `Cannot open file`. Make a
   symbolic link `@MyTerrain` in `steamapps/common/DayZ` that points to your mod folder, and **remove it when you
   are done**. Do not change or delete any other file of the installation.
-- The server files stay in your own folder (see above); give `-config=` and `-mission=` as `Z:\` paths, as shown.
-- Leave out `-profiles=`: a Linux path does not work for the Windows program, and the `Z:\` form is not needed for
-  it. The logs end up in the Proton prefix,
-  `compatdata/221100/pfx/drive_c/users/steamuser/AppData/Local/DayZ/`.
+- The server files stay in your own folder (see above); give `-config=`, `-mission=` and `-profiles=` as `Z:\`
+  paths, as shown. A plain Linux path does not work for the Windows program. With `-profiles=` the RPT and the
+  script logs end up in that folder.
 - Use a game port other than the default 2302 (`-port=2402` above). The data server port 36533 cannot be changed.
 - Start only one game at a time, and stop `DayZDiag_x64.exe` when you have your navmesh.
 
 ## 2. Check the connection with `probe`
+
+The data server opens port 36533 about 25 seconds after the start. A connection made while the world is still
+loading can be reset (`Connection reset by peer`), so run `probe` until it answers instead of connecting as soon as
+the port shows up.
 
 `dayzmake navmesh probe` connects, asks for the world parameters and prints them. If it works, the data server is up
 and the world is the one you expect (the size and the tile grid):
@@ -244,3 +256,28 @@ A capture holds the geometry of a whole world, so it is large; keep it with your
   the files you name.
 - Warnings are explained in [Warnings](../reference/warnings.md): `navmesh-tile-failed`, `navmesh-stray-part` and
   `navmesh-seed`.
+
+## Validation
+
+The generator was compared with the navmeshes that ship with DayZ 1.30, using captures made from a live
+`DayZDiag_x64.exe` (GE-Proton) on Livonia and on Badlands:
+
+- Livonia, open terrain (tiles 128-131 x 128-131) and the town block (128-131 x 220-223);
+- Badlands, a dense block (136-139 x 100-103) and two blocks with the irrigation tunnels (180-183 x 186-189 and
+  183-186 x 198-201), whose floors are walkable below the surface.
+
+Every inner tile built from a capture is identical to the shipped one, byte for byte, with two exceptions that are
+not errors: the polygon flags (they come from the island filter, which was off in the comparison) and the link
+table, which the game rebuilds when it loads the mesh. Only inner tiles can match, because the far end of a link
+into a neighbouring tile is snapped only when that neighbour is loaded; the tiles at the edge of a block have
+links that need tiles outside it. The comparison covers these blocks, not a whole map, so the first mesh of your
+own terrain is still worth a look in the game.
+
+You can repeat the comparison with your own copy of the game data. The test is ignored by default, because it needs
+files that are not part of the repository: `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a capture
+(`--record`) of the same world and `DAYZ_NAVMESH_INNER` the inner tile range `x0,z0,x1,z1` to compare:
+
+```text
+DAYZ_NAVMESH=navmesh.nm DAYZ_NAVMESH_CAPTURE=world.dzgeo DAYZ_NAVMESH_INNER=128,128,131,131 \
+    cargo test -p dayzmake-core --test navmesh_live -- --ignored
+```

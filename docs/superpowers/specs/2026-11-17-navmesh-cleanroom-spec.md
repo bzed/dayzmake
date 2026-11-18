@@ -659,7 +659,8 @@ Find all other segments that face `s` across an obstacle within `depth`, group t
 3. For every segment `k` in `segs` (including `s` itself): transform its endpoints `a`, `b` to local, `e = b - a`;
    clip the parametric segment `a + t*e` against the box: `tmin = 0`, `tmax = FLT_MAX`; for each axis: if `|e| < 1e-6`
    reject when `a` lies outside `[min,max]` on that axis; else `ood = 1.0f/e`, `t1 = (min - a)*ood`,
-   `t2 = (max - a)*ood` (a multiplication by the reciprocal, ruling R15), swap so `t1 <= t2`, `tmin = max(tmin, t1)`, `tmax = min(tmax, t2)`, reject if `tmax < tmin`. Accept if not rejected and
+   `t2 = (max - a)*ood` (a multiplication by the reciprocal, ruling R15), swap so `t1 <= t2`, `tmin = max(tmin, t1)`,
+   `tmax = min(tmax, t2)`, reject if `tmax < tmin`. Accept if not rejected and
    `tmin <= 1` and `tmax >= 0`.
 4. For accepted segments compute the world direction of segment `k` flattened to y = 0: `v = (p1.x - p0.x, 0, p1.z -
    p0.z)`, normalised if the 2-D length is `>= FLT_EPSILON` (else `v.y = 1`). Require `dot(v, u) <= cos(2.3561945f)`
@@ -1332,7 +1333,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
 15. **Pass direction `dir` (ruling R13, #116).** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*h` is a tie
     between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
-    (the same happens when A and B straddle a power of two, where their ulps differ) moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The shipped value is the single f32 subtraction `B - A`; `FMA`
+    moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
+   power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
     gives the same value in the observed case but is not needed. dayzmake uses `dir = B - A`; with it all five validation
     sets match the shipped meshes completely (inner tiles).
 16. **Shallow water depth (ruling R14, #117).** The first water pass (area 2) uses `waterDepth = walkableClimb`, not 0. With 0

@@ -23,6 +23,13 @@ always 36533. The outputs below were produced by the program.
 server listens on TCP port 36533 (fixed by the game). A host is written `host` or `host:port`; the port defaults to
 36533, and the host to `127.0.0.1`. Names are resolved to IPv4 addresses (IPv6 is not supported).
 
+The data server opens its port about 25 seconds after `DayZDiag_x64.exe` starts, and a connection made while the world
+is still loading can be reset (`Connection reset by peer`): repeat `probe` until it answers. The command line, the
+mission and the config the server needs are in the [guide](../guides/navmesh.md). The builder was compared with the
+navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-core` repeats the comparison (variables
+`DAYZ_NAVMESH`, `DAYZ_NAVMESH_CAPTURE` and `DAYZ_NAVMESH_INNER`, run with
+`cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared.
+
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
 first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
