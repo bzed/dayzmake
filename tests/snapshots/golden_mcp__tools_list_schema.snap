@@ -1024,7 +1024,10 @@ expression: "r.result(2)[\"tools\"]"
         },
         "sea_level": {
           "description": "Sea level in metres instead of the server's deep sea height.",
-          "type": "string"
+          "type": [
+            "number",
+            "string"
+          ]
         },
         "seed": {
           "description": "Island filter seed as \"x,y,z\" instead of the world's seed position.",
