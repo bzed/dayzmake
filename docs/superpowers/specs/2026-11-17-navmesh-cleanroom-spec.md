@@ -1313,8 +1313,9 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 3. **BV tree tie order. Answered (#114).** `createBVTree` sorts with the C library `qsort`, which is not stable, and the
    shipped meshes show MSVC's order for equal keys: Livonia tile 128,128 has four polygons that all have `bmin.x = 0`, and
    its nodes are the root, then `[2, 1]`, then `[0, 3]`; a stable sort gives `[0, 1]`, `[2, 3]`. `msvc_qsort` in
-   `detour/create.rs` has that observable order: a selection sort for ranges of up to 8 items, else a median-of-three
+   `navmesh/qsort.rs` (generic since R18) has that observable order: a selection sort for ranges of up to 8 items, else a median-of-three
    partition. Built from live captures, the inner tiles of all five validation sets then match the shipped BV trees.
+   The two sorts of the contour builder have the same order (ruling R18, item 20).
 4. **Cell class fields 4 and 12** (observed `u32` equal to `cells`, and `u32` 0). The doc names them `cellsZ` and `height`; the
    generator ignores both and uses only `cells` and `width`.
 5. **Door state** is not sent by the server (references have random "disabled" bits for about 30 % of door parts), so the
@@ -1434,4 +1435,12 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     part (for example Badlands 162,176, where the shipped mesh puts four connections into the box part next to the
     part the walk visits); the shipped rule has more conditions than the above. 14 more tiles differ in the part lists
     of ground polygons (not off-mesh polygons); that is not part of this ruling.
-
+20. **MSVC `qsort` in the contour builder (ruling R18, #118, #124).** `mergeRegionHoles` calls `qsort` twice, for the
+    holes of a region (`compareHoles`: `minx`, then `minz`) and for the candidate diagonals of a hole
+    (`compareDiagDist`: the squared distance). The candidate distances are squared grid integers, so ties are common, and
+    the first diagonal that crosses neither the outline nor the other holes is the bridge, so the order of equal
+    distances chooses the bridge. A stable sort (outline order) chose a different bridge than the shipped meshes in
+    Badlands tile 216,184 (a hole merged into a 31-vertex outline): the triangulation of the merged contour then
+    differed (3 polygons for the 2 of the shipped mesh) while the outline was the same. With the order of
+    `msvc_qsort` (item 3: a selection sort up to 8 items, a median-of-three partition above) for both sorts, that
+    tile matches. `msvc_qsort` is generic now and lives in `navmesh/qsort.rs`; the BV tree uses it as before.

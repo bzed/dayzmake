@@ -35,8 +35,8 @@
 //!   that carry `RC_AREA_BORDER` or `RC_BORDER_VERTEX` (ruling R10). The widened gate covers both the
 //!   horizontal and the vertical tracking of the loop; the gate of the `max_edge_len` split is stock.
 //!
-//! Hole merging is iterative, as upstream. `qsort` calls are replaced by stable sorts, so ties keep
-//! their index order (a known difference from the MSVC `qsort` tie order).
+//! Hole merging is iterative, as upstream. The two `qsort` calls (holes, diagonal candidates) use the
+//! order of the MSVC `qsort` for equal keys (ruling R18).
 
 #![expect(
     clippy::similar_names,
@@ -49,6 +49,7 @@ use std::io;
 use super::compact::CompactHeightfield;
 use super::region::BORDER_REG;
 use crate::navmesh::num::i32_to_f32;
+use crate::navmesh::qsort::msvc_qsort;
 
 /// `RC_BORDER_VERTEX`: the vertex lies on a tile border.
 pub const RC_BORDER_VERTEX: i32 = 0x10000;
@@ -650,12 +651,11 @@ fn find_left_most_vertex(verts: &[[i32; 4]]) -> (i32, i32, usize) {
 /// `mergeRegionHoles`: merges the holes of one region into its outline, one by one. A hole for
 /// which no merge point is found stays a separate contour (upstream logs and continues).
 fn merge_region_holes(outline: &mut Vec<[i32; 4]>, holes: &mut [Hole]) {
-    // Sort holes from left to right. Upstream uses `qsort`; the stable sort keeps contour order for
-    // equal keys.
+    // Sort holes from left to right (`compareHoles`) with the order of the MSVC `qsort` for equal keys.
     for h in holes.iter_mut() {
         (h.minx, h.minz, h.leftmost) = find_left_most_vertex(&h.verts);
     }
-    holes.sort_by_key(|h| (h.minx, h.minz));
+    msvc_qsort(holes, |a, b| (a.minx, a.minz).cmp(&(b.minx, b.minz)));
 
     // Each merge adds the hole's vertices plus two (the bridge), so this bounds the final outline.
     let max_verts =
@@ -686,9 +686,9 @@ fn merge_region_holes(outline: &mut Vec<[i32; 4]>, holes: &mut [Hole]) {
                 }
             }
             // Sort the potential diagonals by distance: the connection should be as short as
-            // possible. Stable, so equal distances keep outline order.
+            // possible (`compareDiagDist`, the order of the MSVC `qsort` for equal distances).
             if let Some(found) = diags.get_mut(..ndiags) {
-                found.sort_by_key(|d| d.1);
+                msvc_qsort(found, |a, b| a.1.cmp(&b.1));
             }
 
             // Find a diagonal that intersects neither the outline nor the remaining holes.
@@ -927,4 +927,48 @@ fn merge_holes(cset: &mut ContourSet, nregions: usize) -> io::Result<()> {
     // The merged holes are empty now; upstream leaves them in the set with zero vertices.
     cset.contours.retain(|c| !c.verts.is_empty());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Hole, merge_region_holes};
+
+    fn pt(x: i32, z: i32) -> [i32; 4] {
+        [x, 0, z, 0]
+    }
+
+    /// A hole whose leftmost vertex is the origin, as the merge expects.
+    fn hole(verts: Vec<[i32; 4]>) -> Hole {
+        Hole {
+            contour: 0,
+            verts,
+            minx: 0,
+            minz: 0,
+            leftmost: 0,
+            merged: false,
+        }
+    }
+
+    #[test]
+    fn equal_diagonals_take_the_msvc_qsort_order() {
+        // Eight outline vertices on a circle of radius 5, all at the squared distance 25 from the hole's
+        // leftmost vertex at the origin, and all of them in its cone. The sort of eight equal
+        // candidates is the short sort, which moves the first one to the end (R18): the bridge goes to
+        // the second vertex, not to the first, which the stable sort took. Both diagonals are free.
+        let mut outline = vec![
+            pt(3, -4),
+            pt(0, -5),
+            pt(-3, -4),
+            pt(-5, 0),
+            pt(-3, 4),
+            pt(0, 5),
+            pt(3, 4),
+            pt(5, 0),
+        ];
+        let mut holes = vec![hole(vec![pt(0, 0), pt(1, -1), pt(1, 1)])];
+        merge_region_holes(&mut outline, &mut holes);
+        assert!(holes[0].merged);
+        assert_eq!(outline.len(), 8 + 3 + 2);
+        assert_eq!(outline[0], pt(0, -5));
+    }
 }
