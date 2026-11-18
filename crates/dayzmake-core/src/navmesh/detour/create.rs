@@ -318,6 +318,8 @@ fn msvc_qsort(items: &mut [BvItem], cmp: impl Fn(&BvItem, &BvItem) -> Ordering) 
                 }
             }
         }
+        // Not `else`: when the loop above ran down to `mid`, the items below the pivot that equal it
+        // are skipped too, which changes the order for equal keys. The shipped meshes confirm it.
         if mid >= higuy {
             loop {
                 higuy = higuy.saturating_sub(1);
@@ -326,12 +328,17 @@ fn msvc_qsort(items: &mut [BvItem], cmp: impl Fn(&BvItem, &BvItem) -> Ordering) 
                 }
             }
         }
-        if lo < higuy {
-            stack.push((lo, higuy));
-        }
-        if loguy < hi {
-            stack.push((loguy, hi));
-        }
+        // The ranges are disjoint, so the order they are sorted in does not change the result. The
+        // smaller one is popped first, which keeps the stack at O(log n) entries.
+        let left = (lo < higuy).then_some((lo, higuy));
+        let right = (loguy < hi).then_some((loguy, hi));
+        let len = |r: &(usize, usize)| r.1 - r.0;
+        let (first, second) = match (left, right) {
+            (Some(l), Some(r)) if len(&l) < len(&r) => (Some(r), Some(l)),
+            other => other,
+        };
+        stack.extend(first);
+        stack.extend(second);
     }
 }
 
@@ -750,13 +757,24 @@ mod tests {
             order(&[8, 7, 6, 5, 4, 3, 2, 1, 0]),
             vec![8, 7, 6, 5, 4, 3, 2, 1, 0]
         );
-        // Twenty items with many equal keys: sorted, a permutation, and always the same order.
-        let keys: Vec<u16> = (0..20u16).map(|i| (i * 7) % 4).collect();
-        let got = order(&keys);
-        let mut seen = got.clone();
-        seen.sort_unstable();
-        assert_eq!(seen, (0..20).collect::<Vec<i32>>());
-        assert_eq!(got, order(&keys));
+        // Twelve items, keys 1,0,1,0,..., by hand (ids are the positions before the sort):
+        // - lo=0, hi=11, mid=6 (key 1). cmp(lo, hi) is Greater: swap, so 11 is first and 0 last.
+        //   Then loguy runs to 12 and higuy stops at 10, so the loop ends at once. The tail
+        //   skips the equal 10, stops at 9: range [0, 9] is left, and 10, 0 stay.
+        // - [0, 9]: mid=5 (id 5, key 0). swap(2, 7) and swap(4, 5); the second one has
+        //   mid == higuy, so the pivot follows to index 4. loguy=5, higuy=4 end the loop, the tail
+        //   gives higuy=5, then 4, and the second check runs, since mid >= higuy: it skips the
+        //   equal ids 3, 7, 1 and stops at lo. The ranges are [] and [5, 9], which the short sort
+        //   orders as 9, 2, 8, 6, 4.
+        assert_eq!(
+            order(&[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]),
+            vec![11, 1, 7, 3, 5, 9, 2, 8, 6, 4, 10, 0]
+        );
+        // Thirteen items; the expected order is from an independent port of the same description.
+        assert_eq!(
+            order(&[0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0]),
+            vec![0, 8, 12, 4, 3, 5, 2, 7, 1, 9, 10, 11, 6]
+        );
     }
 
     #[test]

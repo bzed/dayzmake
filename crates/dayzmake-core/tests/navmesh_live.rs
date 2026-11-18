@@ -116,12 +116,20 @@ fn differences(ours: &TileData, shipped: &TileData) -> Vec<String> {
         &shipped.detail_tris,
     );
     sections(&mut out, "bv node", &ours.bv_tree, &shipped.bv_tree);
-    sections(
-        &mut out,
-        "off-mesh connection",
-        &ours.off_mesh,
-        &shipped.off_mesh,
-    );
+    // By f32 bits: (pos, centre height, reserved, radius, poly, flags, side, user id).
+    let bits = |t: &TileData| {
+        t.off_mesh
+            .iter()
+            .map(|c| {
+                (
+                    c.pos.map(f32::to_bits),
+                    [c.center_height, c.reserved, c.rad].map(f32::to_bits),
+                    (c.poly, c.flags, c.side, c.user_id),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    sections(&mut out, "off-mesh connection", &bits(ours), &bits(shipped));
     if ours.extra != shipped.extra {
         out.push(format!(
             "extra section: ours {:?}, shipped {:?}",
@@ -185,7 +193,16 @@ fn capture_matches_shipped_inner_tiles() {
                     compared += 1;
                     let d = differences(&a, &b);
                     if !d.is_empty() {
-                        bad.push(format!("tile {x},{z}: {}", d[..d.len().min(4)].join("; ")));
+                        let more = d.len().saturating_sub(4);
+                        let note = if more > 0 {
+                            format!(" (+{more} more differences left out)")
+                        } else {
+                            String::new()
+                        };
+                        bad.push(format!(
+                            "tile {x},{z}: {}{note}",
+                            d[..d.len().min(4)].join("; ")
+                        ));
                     }
                 }
                 (a, b) => bad.push(format!(
@@ -196,6 +213,10 @@ fn capture_matches_shipped_inner_tiles() {
             }
         }
     }
+    assert!(
+        compared > 0,
+        "no tile of the inner range exists in both meshes"
+    );
     println!("compared {compared} tiles, {} differ", bad.len());
     assert!(
         bad.is_empty(),

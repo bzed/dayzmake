@@ -826,7 +826,7 @@ Behaviour (stock Detour with these differences):
   `rad`, `poly`, `flags = 1 if direction value != 0 else 0`, `side` = classification of the end point (0xff = in this
   tile), `userId`.
 * No dummy detail mesh; the area of the detail section is empty.
-* The BV tree is built over ground polygons with stock `createBVTree` (see open questions on `qsort` tie order).
+* The BV tree is built over ground polygons with stock `createBVTree` with the MSVC `qsort` tie order (section 14 item 3, answered).
 * The extra section is appended after the off-mesh connections.
 * The links array is left zeroed (linking happens in `addTile`).
 * Section sizes use `dtAlign4`; all section element sizes (104, 12, 32, 16, 12, 12, 4, 16, 44) make the layout
