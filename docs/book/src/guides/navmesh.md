@@ -26,11 +26,15 @@ in the mod. The [reference](../reference/navmesh.md) lists every command and opt
 your world and then listens on TCP port **36533** for requests for geometry. The port is fixed by the game; the
 normal game port is not, and must not be the default, so that a real server on the same machine is not disturbed.
 
-### On Windows
+### The server files (both systems)
 
-Make a server configuration file, `serverDZ_navmesh.cfg`, next to the game, that does not check signatures and
-does not start BattlEye, and an empty mission: a folder `empty.<yourworld>` (the name after the dot is the world)
-whose `init.c` has an empty `main()`:
+Keep the files of the data server in a folder of your own, **outside the game installation**: here `C:\dayz-navmesh`
+on Windows and `~/dayz-navmesh` on Linux. It holds
+
+- `serverDZ_navmesh.cfg`: a normal `serverDZ.cfg` that does not check signatures and does not start BattlEye, so it
+  has the lines `verifySignatures = 0;` and `BattlEye = 0;` (its `Missions` class names the mission folder);
+- an empty mission, a folder `empty.<yourworld>` (the name after the dot is the world) whose `init.c` has an empty
+  `main()`:
 
 ```text
 void main()
@@ -38,27 +42,25 @@ void main()
 }
 ```
 
-The configuration needs these lines (the rest is a normal `serverDZ.cfg`; its `Missions` class names the mission
-folder):
+### On Windows
+
+Start the server from the DayZ folder, with full paths, your mod and a game port that is not 2302:
 
 ```text
-verifySignatures = 0;
-BattlEye = 0;
+DayZDiag_x64.exe -server -startNavmeshDataServer -config=C:\dayz-navmesh\serverDZ_navmesh.cfg -mission=C:\dayz-navmesh\empty.mymap -port=2402 "-mod=@MyTerrain"
 ```
 
-Start the server from the DayZ folder, with your mod and a game port that is not 2302:
-
-```text
-DayZDiag_x64.exe -server -startNavmeshDataServer -config=serverDZ_navmesh.cfg -mission=<path of the mission folder> -port=2402 "-mod=@MyTerrain"
-```
-
-`@MyTerrain` is the folder of your mod in the DayZ folder. Wait until the log shows the world loaded. Keep the
-window open while you generate.
+`@MyTerrain` is the folder of your mod in the DayZ folder. Leave out `-profiles=`. Wait until the log shows the world
+loaded, and keep the window open while you generate.
 
 ### On Linux, under Proton
 
+<!-- verified: no -->
+
 The Windows program runs through Proton, from the **client** installation (`steamapps/common/DayZ`), which has
-`DayZDiag_x64.exe`. Run it the way Steam would, with the environment of the game:
+`DayZDiag_x64.exe`. Run it the way Steam would, with the environment of the game. The program is a Windows program:
+it sees the Linux file system as drive `Z:`, so `/home/you/dayz-navmesh/serverDZ_navmesh.cfg` is written
+`Z:\home\you\dayz-navmesh\serverDZ_navmesh.cfg`.
 
 ```text
 export STEAM_ROOT="$HOME/.local/share/Steam"            # your Steam folder
@@ -68,8 +70,10 @@ export STEAM_COMPAT_INSTALL_PATH="$STEAM_ROOT/steamapps/common/DayZ"
 export STEAM_COMPAT_APP_ID=221100 SteamAppId=221100 SteamGameId=221100
 cd "$STEAM_COMPAT_INSTALL_PATH"
 "$STEAM_ROOT/steamapps/common/Proton - Experimental/proton" run ./DayZDiag_x64.exe \
-    -server -startNavmeshDataServer -config=serverDZ_navmesh.cfg \
-    -mission=<path of the mission folder> -port=2402 "-mod=@MyTerrain"
+    -server -startNavmeshDataServer \
+    "-config=Z:\home\you\dayz-navmesh\serverDZ_navmesh.cfg" \
+    "-mission=Z:\home\you\dayz-navmesh\empty.mymap" \
+    -port=2402 "-mod=@MyTerrain"
 ```
 
 Some points that are easy to get wrong:
@@ -77,10 +81,10 @@ Some points that are easy to get wrong:
 - **The mod must be inside the DayZ folder.** A `-mod=` path outside it fails with `Cannot open file`. Make a
   symbolic link `@MyTerrain` in `steamapps/common/DayZ` that points to your mod folder, and **remove it when you
   are done**. Do not change or delete any other file of the installation.
-- Use the files from the Windows section: `verifySignatures = 0;`, `BattlEye = 0;` and the empty mission. Put them in
-  a folder of their own (not in the game folder), and give `-config=` and `-mission=` full paths.
-- Do **not** pass `-profiles=` with a Linux path: the Windows program cannot use it. Its logs end up in the Proton
-  prefix, `compatdata/221100/pfx/drive_c/users/steamuser/AppData/Local/DayZ/`.
+- The server files stay in your own folder (see above); give `-config=` and `-mission=` as `Z:\` paths, as shown.
+- Leave out `-profiles=`: a Linux path does not work for the Windows program, and the `Z:\` form is not needed for
+  it. The logs end up in the Proton prefix,
+  `compatdata/221100/pfx/drive_c/users/steamuser/AppData/Local/DayZ/`.
 - Use a game port other than the default 2302 (`-port=2402` above). The data server port 36533 cannot be changed.
 - Start only one game at a time, and stop `DayZDiag_x64.exe` when you have your navmesh.
 
@@ -180,10 +184,15 @@ wrote part.nm
 ```
 
 The second run built only the six tiles the first did not, and filtered islands over the whole mesh. The result is the
-same as an uninterrupted run. When a run ends with failed tiles or a failed checkpoint, the last line prints the
-command to continue (`to continue: dayzmake navmesh generate --base ... --skip-existing ...`). A short run
-before the full one (`--range`) shows a warning that the island filter was skipped when the seed is not in the
-built tiles: that is expected, and the full run does it.
+same as an uninterrupted run. When a run is **stopped** (a checkpoint or `--record` file that cannot be written) or
+some tiles **could not be fetched** (and none failed to build), the summary ends with the command to continue, for
+example `to continue: dayzmake navmesh generate --base mymap.nm --skip-existing -f --server a --range 0,0,9,9 mymap.nm`.
+It repeats every option of the first run (`--doors`, `--sea-level`, `--no-links`, `--seed`, ...) except `--record`
+and `--base`: the options must stay the same, or the rest of the mesh would be built differently from the first part,
+and a repeated `--record` with `-f` would overwrite the first recording. A tile that failed to *build* is not offered
+for a retry, because it would fail again; look at the error that was listed for it. A short run before the full
+one (`--range`) shows a warning that the island filter was skipped when the seed is not in the built tiles: that is
+expected, and the full run does it.
 
 ## 4. Put the file into the mod and rebuild
 

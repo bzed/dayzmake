@@ -282,6 +282,7 @@ fn generate_existing_target_is_checked_before_fetching() {
     fs::write(&nm, b"keep me").expect("write");
     let out = env.run(&["navmesh", "generate", "--server", &addr, s(&nm)]);
     assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("already exists"), "{}", out.stderr);
     assert_eq!(server.connections(), 0);
 }
 
@@ -431,4 +432,25 @@ fn generate_failed_tiles_exit_1_but_save_the_mesh() {
     assert!(out.stdout.contains("wrote "), "{}", out.stdout);
     assert!(out.stderr.contains("could not be built"), "{}", out.stderr);
     assert!(nm.is_file(), "the partial mesh is saved");
+}
+
+/// A `--record` file that cannot be created fails the run before anything is built or saved.
+#[test]
+fn generate_record_in_a_missing_directory_fails() {
+    let env = Env::new();
+    let cap = env.capture();
+    let nm = env.path("out.nm");
+    let record = env.path("no-such-dir/rec.dzgeo");
+    let out = env.run(&[
+        "navmesh",
+        "generate",
+        "--capture",
+        s(&cap),
+        "--record",
+        s(&record),
+        s(&nm),
+    ]);
+    assert_eq!(out.code, 1, "{}{}", out.stdout, out.stderr);
+    assert!(out.stderr.contains("cannot create"), "{}", out.stderr);
+    assert!(!nm.exists());
 }

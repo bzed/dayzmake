@@ -21,9 +21,11 @@ always 36533. The outputs below were produced by the program.
 server listens on TCP port 36533 (fixed by the game). A host is written `host` or `host:port`; the port defaults to
 36533, and the host to `127.0.0.1`. Names are resolved to IPv4 addresses (IPv6 is not supported).
 
-A request that fails on the network (a closed connection, a timeout, a wrong answer) is repeated on a fresh
-connection, five attempts in all, waiting 2, 4, 6 and 8 seconds between them. A connection that cannot be made
-within 10 seconds fails at once. A server that sends nothing for 10 minutes counts as failed. A malformed answer is
+`probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
+cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
+first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
+wrong answer) is repeated on a fresh connection, five attempts in all, waiting 2, 4, 6 and 8 seconds between them.
+A server that sends nothing for 10 minutes counts as failed. A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 
 A **capture** (`.dzgeo`) is a recording of the geometry that a server sent. `generate --record` writes one while it
@@ -149,16 +151,20 @@ runs over the whole mesh at the end, so a resumed run (below) filters the merged
 polygon the filter is skipped with the warning `navmesh-seed`.
 
 The target is written **even when the run was partial**. The exit status is 0 when every tile was handled, and 1 when
-a tile failed, a tile could not be fetched, or a checkpoint or `--record` write failed. A partial run ends with the
-command that continues it. With a server that closes every connection, one tile (retried five times, 20 seconds
-in all) gives:
+a tile failed, a tile could not be fetched, or a checkpoint or `--record` write failed.
+
+A run that was **stopped** (a checkpoint or `--record` write failed), or that had tiles it could not fetch and no tile
+that failed to build, ends with the command that continues it. The command repeats every option of the run except
+`--record` (with `-f` it would overwrite the first recording) and `--base`, which becomes the target, so the rest is
+built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail
+again. With a server that closes every connection, one tile (retried five times, 20 seconds in all) gives:
 
 ```text
-$ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 lost.nm
+$ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
 built 0 tiles, 0 empty, 0 failed in 20.0 s
-  tile (0,0): failed to fill whole buffer
+  tile (0,0): connection to 127.0.0.1:36533 closed by the server
 wrote lost.nm
-to continue: dayzmake navmesh generate --base lost.nm --skip-existing -f --server 127.0.0.1:36533 --range 0,0,0,0 lost.nm
+to continue: dayzmake navmesh generate --base lost.nm --skip-existing -f --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
 error: 0 tiles could not be built and 1 could not be fetched; the mesh was saved without them
 ```
 

@@ -1,5 +1,6 @@
 //! `dayzmake navmesh probe`, `generate` and `info`.
 
+use std::cell::Cell;
 use std::fmt::Write as _;
 use std::io::{self, BufReader, Error, IsTerminal, Write};
 use std::path::Path;
@@ -18,7 +19,7 @@ use dayzmake_core::navmesh::generate::{
     GenerateOptions, GenerateReport, Progress, Source, generate,
 };
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
-use dayzmake_core::warning::WarningSink;
+use dayzmake_core::warning::{Warning, WarningSink};
 
 /// The host used when no `--server` is given.
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -386,20 +387,20 @@ fn progress_line(p: &Progress) -> String {
 }
 
 /// Prints progress to stderr: rewritten with `\r` on a terminal, otherwise one line per 5 % of the run.
-struct ProgressPrinter {
+struct ProgressPrinter<'a> {
     terminal: bool,
-    /// Something was printed without a final newline.
-    pending_line: bool,
+    /// Something was printed without a final newline; the warning sink ends the line before it prints.
+    pending_line: &'a Cell<bool>,
     last_percent: usize,
     last_print: Duration,
     last_done: Option<usize>,
 }
 
-impl ProgressPrinter {
-    fn new() -> Self {
+impl<'a> ProgressPrinter<'a> {
+    fn new(pending_line: &'a Cell<bool>) -> Self {
         Self {
             terminal: io::stderr().is_terminal(),
-            pending_line: false,
+            pending_line,
             last_percent: 0,
             last_print: Duration::ZERO,
             last_done: None,
@@ -424,7 +425,7 @@ impl ProgressPrinter {
         let line = progress_line(p);
         // a failed write to stderr cannot be reported anywhere
         let _ = if self.terminal {
-            self.pending_line = !finished;
+            self.pending_line.set(!finished);
             write!(
                 io::stderr(),
                 "\r{line}   {}",
@@ -437,10 +438,29 @@ impl ProgressPrinter {
 
     /// Ends a rewritten line that was left open (a stopped run).
     fn finish(&mut self) {
-        if self.pending_line {
+        if self.pending_line.replace(false) {
             let _ = writeln!(io::stderr());
-            self.pending_line = false;
         }
+    }
+}
+
+/// Ends the open progress line before a warning is printed, so the warning does not start in the middle of it.
+struct LineEnding<'a> {
+    inner: &'a mut dyn WarningSink,
+    pending_line: &'a Cell<bool>,
+}
+
+impl WarningSink for LineEnding<'_> {
+    fn warn(&mut self, warning: Warning) {
+        if !self.inner.is_suppressed(warning.name) && self.pending_line.replace(false) {
+            // a failed write to stderr cannot be reported anywhere
+            let _ = writeln!(io::stderr());
+        }
+        self.inner.warn(warning);
+    }
+
+    fn is_suppressed(&self, name: Option<&str>) -> bool {
+        self.inner.is_suppressed(name)
     }
 }
 
@@ -451,28 +471,53 @@ fn existing_target_error(path: &Path) -> Error {
     )
 }
 
-/// The command that continues a partial run.
+/// `text` as one shell word: unchanged when it only has safe characters, else in single quotes.
+fn shell_word(text: &str) -> String {
+    let safe = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c));
+    if safe {
+        text.to_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+/// The command that continues a partial run: every option of the run except `--record` (with `-f` it would
+/// overwrite the first recording) and `--base`, which becomes the target.
 fn resume_hint(args: &GenerateArgs, target: &Path) -> String {
-    let t = target.display();
+    let t = shell_word(&target.display().to_string());
     let mut hint = format!("dayzmake navmesh generate --base {t} --skip-existing -f");
-    if let Some(capture) = &args.capture {
-        let _ = write!(hint, " --capture {capture}");
-    }
+    let mut option = |name: &str, value: Option<&String>| {
+        if let Some(value) = value {
+            let _ = write!(hint, " {name} {}", shell_word(value));
+        }
+    };
+    option("--capture", args.capture.as_ref());
     for server in &args.servers {
-        let _ = write!(hint, " --server {server}");
+        option("--server", Some(server));
     }
-    if let Some(range) = &args.range {
-        let _ = write!(hint, " --range {range}");
+    option("--range", args.range.as_ref());
+    option("--checkpoint", args.checkpoint.as_ref());
+    option("--threads", args.threads.as_ref());
+    option("--connections", args.connections.as_ref());
+    option("--sea-level", args.sea_level.as_ref());
+    option("--doors", args.doors.as_ref());
+    option("--seed", args.seed.as_ref());
+    for (given, name) in [
+        (args.no_links, "--no-links"),
+        (args.no_island_filter, "--no-island-filter"),
+    ] {
+        if given {
+            let _ = write!(hint, " {name}");
+        }
     }
     let _ = write!(hint, " {t}");
     hint
 }
 
-fn write_summary(
-    report: &GenerateReport,
-    seed: Option<[f32; 3]>,
-    out: &mut dyn Write,
-) -> Result<(), Error> {
+fn write_summary(report: &GenerateReport, out: &mut dyn Write) -> Result<(), Error> {
     let prefix = if report.stopped.is_some() {
         "stopped: "
     } else {
@@ -507,7 +552,7 @@ fn write_summary(
         )?;
     }
     if let Some(islands) = &report.islands {
-        let at = seed.map_or_else(String::new, |s| {
+        let at = report.seed.map_or_else(String::new, |s| {
             format!("seed ({:.1} {:.1} {:.1}) -> ", s[0], s[1], s[2])
         });
         writeln!(
@@ -577,34 +622,29 @@ pub fn cmd_navmesh_generate(
     if let Some(base) = &args.base {
         options.base = Some(load_base(base)?);
     }
-    let mut seed = options.seed;
     let source = if let Some(path) = &args.capture {
-        let capture = load_capture(path)?;
-        seed = seed.or(Some(capture.params().world.seed_position));
-        Source::Capture(capture)
+        Source::Capture(load_capture(path)?)
     } else {
         let names: Vec<&str> = if args.servers.is_empty() {
             vec![DEFAULT_HOST]
         } else {
             args.servers.iter().map(String::as_str).collect()
         };
-        let hosts = names
-            .into_iter()
-            .map(Host::parse)
-            .collect::<Result<Vec<_>, _>>()?;
-        if seed.is_none() {
-            // only to print the seed of the island filter; a failed probe fails the run below, with a better message
-            if let Some(first) = hosts.first()
-                && let Ok(params) = dayzmake_core::navmesh::generate::probe(first, &options.retry)
-            {
-                seed = Some(params.world.seed_position);
-            }
-        }
-        Source::Servers(hosts)
+        Source::Servers(
+            names
+                .into_iter()
+                .map(Host::parse)
+                .collect::<Result<Vec<_>, _>>()?,
+        )
     };
 
-    let mut printer = ProgressPrinter::new();
-    let result = generate(source, &options, &mut |p| printer.update(p), warnings);
+    let pending_line = Cell::new(false);
+    let mut printer = ProgressPrinter::new(&pending_line);
+    let mut sink = LineEnding {
+        inner: warnings,
+        pending_line: &pending_line,
+    };
+    let result = generate(source, &options, &mut |p| printer.update(p), &mut sink);
     printer.finish();
     let report = result?;
 
@@ -612,7 +652,7 @@ pub fn cmd_navmesh_generate(
         .set
         .write_atomic(target)
         .prepend_error(format!("Failed to save {}:", target.display()))?;
-    write_summary(&report, seed, out)?;
+    write_summary(&report, out)?;
     writeln!(out, "wrote {}", target.display())?;
     let partial =
         report.stopped.is_some() || (report.failed.is_empty() && !report.fetch_errors.is_empty());
@@ -731,4 +771,57 @@ pub fn cmd_navmesh_info(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_words_are_quoted_when_needed() {
+        assert_eq!(shell_word("a/b-c_1.nm"), "a/b-c_1.nm");
+        assert_eq!(shell_word("0,0,2,0"), "0,0,2,0");
+        assert_eq!(shell_word("my map.nm"), "'my map.nm'");
+        assert_eq!(shell_word("it's"), "'it'\\''s'");
+        assert_eq!(shell_word("a;b$c"), "'a;b$c'");
+        assert_eq!(shell_word(""), "''");
+    }
+
+    #[test]
+    fn resume_hint_repeats_every_option_but_record_and_base() {
+        let args = GenerateArgs {
+            force: false,
+            servers: vec!["10.0.0.1".into(), "10.0.0.2:40000".into()],
+            capture: None,
+            record: Some("first.dzgeo".into()),
+            range: Some("0,0,9,9".into()),
+            base: Some("old.nm".into()),
+            skip_existing: false,
+            checkpoint: Some("50".into()),
+            threads: Some("4".into()),
+            connections: Some("2".into()),
+            sea_level: Some("1.5".into()),
+            doors: Some("open".into()),
+            no_links: true,
+            no_island_filter: true,
+            seed: Some("1,2,3".into()),
+        };
+        let hint = resume_hint(&args, Path::new("out dir/my map.nm"));
+        assert_eq!(
+            hint,
+            "dayzmake navmesh generate --base 'out dir/my map.nm' --skip-existing -f \
+             --server 10.0.0.1 --server 10.0.0.2:40000 --range 0,0,9,9 --checkpoint 50 --threads 4 \
+             --connections 2 --sea-level 1.5 --doors open --seed 1,2,3 --no-links --no-island-filter \
+             'out dir/my map.nm'"
+        );
+        assert!(!hint.contains("--record") && !hint.contains("old.nm"));
+        let capture = GenerateArgs {
+            capture: Some("w.dzgeo".into()),
+            ..GenerateArgs::default()
+        };
+        assert_eq!(
+            resume_hint(&capture, Path::new("o.nm")),
+            "dayzmake navmesh generate --base o.nm --skip-existing -f --capture w.dzgeo o.nm"
+        );
+    }
 }
