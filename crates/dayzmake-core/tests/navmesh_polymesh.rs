@@ -140,8 +140,7 @@ fn poly_mesh_nvp6_merges_and_keeps_border_verts() {
         assert!(poly_verts(&m, i).len() <= 6);
     }
 
-    // A tile-sized region inside a border keeps its border vertices (DayZ; stock removes
-    // flagged vertices when it can). The contour of the region is flagged along the border.
+    // A tile-sized region inside a border keeps its 4 corner vertices.
     let m = mesh_of(24, 24, 2, |_, _| (1, 0));
     assert_eq!(m.verts.len(), 4);
     assert_eq!(m.border_size, 2);
@@ -273,10 +272,28 @@ fn degenerate_contour_skipped_not_panicking() {
     let set = set_of(vec![cont(&two, 9, 1, 0)], 0);
     let m = build_poly_mesh(&set, 6).unwrap();
     assert!(m.areas.is_empty() && m.verts.is_empty() && m.polys.is_empty());
-    // A bow tie has no triangulation: no panic.
+    // Contours that cannot be triangulated completely still add their vertices (stock logs
+    // "Bad triangulation" and carries on). This one yields no triangle at all.
+    let none = [[1, 0, 0, 0], [2, 0, 3, 0], [1, 0, 2, 0], [0, 0, 1, 0]];
+    let set = set_of(vec![cont(&none, 1, 1, 0)], 0);
+    let m = build_poly_mesh(&set, 3).unwrap();
+    assert_eq!((m.verts.len(), m.areas.len()), (4, 0));
+    // This one yields a partial triangulation (1 triangle instead of 3), which is kept.
+    let partial = [
+        [2, 0, 0, 0],
+        [3, 0, 3, 0],
+        [1, 0, 2, 0],
+        [2, 0, 3, 0],
+        [0, 0, 0, 0],
+    ];
+    let set = set_of(vec![cont(&partial, 1, 1, 0)], 0);
+    let m = build_poly_mesh(&set, 3).unwrap();
+    assert_eq!((m.verts.len(), m.areas.len()), (5, 1));
+    // A bow tie: its 4 vertices are in the mesh and it gives 2 triangles.
     let bow = [[0, 0, 0, 0], [20, 0, 20, 0], [20, 0, 0, 0], [0, 0, 20, 0]];
     let set = set_of(vec![cont(&bow, 1, 1, 0)], 0);
-    assert!(build_poly_mesh(&set, 6).is_ok());
+    let m = build_poly_mesh(&set, 6).unwrap();
+    assert_eq!((m.verts.len(), m.areas.len()), (4, 2));
 }
 
 #[test]
@@ -290,22 +307,90 @@ fn vertices_within_two_cells_of_height_are_merged() {
     assert_eq!(m.verts.len(), 7);
     assert_eq!(m.verts[3], [10, 5, 0]);
     assert!(m.verts.contains(&[10, 8, 20]));
-    // The (10,20) corners differ, so the edge x = 10 is not shared.
+    // The (10,20) corners are different vertices, so the edge x = 10 is not shared.
     assert!(poly_neis(&m, 0).iter().all(|&n| n == NIL));
-    // The vertex hash looks at x and z only: the same x, z at a different height beyond 2 is new.
     assert_eq!(m.polys[0..4], [0, 1, 2, 3]);
+}
+
+/// `n` triangles with distinct coordinates, then `last`.
+fn triangle_soup(n: usize, last: &[[i32; 4]]) -> ContourSet {
+    let mut contours = Vec::with_capacity(n + 1);
+    for k in 0..n {
+        let (x, z) = (
+            i32::try_from(k % 200).unwrap() * 3,
+            i32::try_from(k / 200).unwrap() * 3,
+        );
+        let tri = [[x, 0, z, 0], [x, 0, z + 1, 0], [x + 1, 0, z, 0]];
+        contours.push(cont(&tri, 1, 1, 0));
+    }
+    contours.push(cont(last, 2, 1, 0));
+    set_of(contours, 0)
 }
 
 #[test]
 fn too_many_vertices_is_an_error() {
-    let big: Vec<[i32; 4]> = vec![[0, 0, 0, 0]; 0xfffe];
-    let set = set_of(vec![cont(&big, 1, 1, 0)], 0);
-    let e = build_poly_mesh(&set, 6).unwrap_err();
+    // 21843 triangles are 65529 vertices; a pentagon makes 65534 = 0xfffe (error), a square 65533
+    // (fine). Many small contours keep a regression of the limit fast.
+    let pentagon = [
+        [700, 0, 0, 0],
+        [700, 0, 10, 0],
+        [710, 0, 20, 0],
+        [720, 0, 10, 0],
+        [720, 0, 0, 0],
+    ];
+    let e = build_poly_mesh(&triangle_soup(21_843, &pentagon), 6).unwrap_err();
     assert!(
         e.to_string()
             .contains("Too many vertices per tile 65534 (max: 65535)"),
         "{e}"
     );
+    let square = [
+        [700, 0, 0, 0],
+        [700, 0, 10, 0],
+        [720, 0, 10, 0],
+        [720, 0, 0, 0],
+    ];
+    let m = build_poly_mesh(&triangle_soup(21_843, &square), 6).unwrap();
+    assert_eq!(m.verts.len(), 65_533);
+    assert_eq!(m.areas.len(), 21_844);
+}
+
+#[test]
+fn vertex_outside_u16_is_an_error() {
+    for bad in [[-1, 0, 0, 0], [0, 0x1_0000, 0, 0], [0, 0, i32::MAX, 0]] {
+        let tri = [[0, 0, 0, 0], [0, 0, 5, 0], [5, 0, 0, 0]];
+        let mut pts = tri.to_vec();
+        pts.push(bad);
+        let set = set_of(vec![cont(&pts, 1, 1, 0)], 0);
+        assert!(build_poly_mesh(&set, 6).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn non_square_tile_portals_use_width_and_height() {
+    let mut set = set_of(
+        vec![cont(
+            &[[0, 0, 0, 0], [0, 0, 20, 0], [30, 0, 20, 0], [30, 0, 0, 0]],
+            1,
+            1,
+            0,
+        )],
+        2,
+    );
+    set.width = 30;
+    set.height = 20;
+    let m = build_poly_mesh(&set, 6).unwrap();
+    let vs = poly_verts(&m, 0);
+    for (j, &n) in poly_neis(&m, 0).iter().enumerate() {
+        let (a, b) = (xz(&m, vs[j]), xz(&m, vs[(j + 1) % vs.len()]));
+        let want = match (a, b) {
+            ((0, _), (0, _)) => 0x8000,
+            ((_, 20), (_, 20)) => 0x8001,
+            ((30, _), (30, _)) => 0x8002,
+            _ => 0x8003,
+        };
+        assert_eq!(n, want, "{a:?} -> {b:?}");
+    }
 }
 
 #[test]

@@ -404,8 +404,9 @@ fn merge_poly_verts(pa: &[u16], pb: &[u16], ea: usize, eb: usize, nvp: usize) ->
 }
 
 /// Merges the triangles in `polys` (`nvp` values each, `npolys` of them) greedily, the longest
-/// shared edge first. `on_merge(a, b)` is called for every merge, before `b` is replaced by the
-/// last polygon. Returns the new polygon count.
+/// shared edge first. `on_merge(a, b, last)` is called for every merge (`a` and `b` are the merged
+/// polygons, `last` the index of the last polygon, which then replaces `b`), before that happens.
+/// Returns the new polygon count.
 fn merge_polys(
     polys: &mut [u16],
     mut npolys: usize,
@@ -888,14 +889,19 @@ fn build(cset: &ContourSet, nvp: usize, mark_border_vertices: bool) -> io::Resul
     }
     let mut max_vertices = 0_usize;
     let mut max_tris = 0_usize;
-    let mut max_verts_per_cont = 0_usize;
     for c in &cset.contours {
         if c.verts.len() < 3 {
             continue;
         }
         max_vertices += c.verts.len();
         max_tris += c.verts.len() - 2;
-        max_verts_per_cont = max_verts_per_cont.max(c.verts.len());
+    }
+    for c in &cset.contours {
+        for v in &c.verts {
+            if v.iter().take(3).any(|&k| !(0..=0xffff).contains(&k)) {
+                return Err(crate::error!("Contour vertex {v:?} is outside 0..=65535"));
+            }
+        }
     }
     if max_vertices >= 0xfffe {
         return Err(too_many_vertices(max_vertices));
@@ -937,7 +943,7 @@ fn build(cset: &ContourSet, nvp: usize, mark_border_vertices: bool) -> io::Resul
         }
 
         // Build the initial polygons.
-        let mut polys = vec![NULL_IDX; max_verts_per_cont * nvp];
+        let mut polys = vec![NULL_IDX; cont.verts.len() * nvp];
         let mut npolys = 0;
         for t in &tris {
             if t[0] != t[1] && t[0] != t[2] && t[1] != t[2] {
