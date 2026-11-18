@@ -41,6 +41,14 @@ A **capture** (`.dzgeo`) is a recording of the geometry that a server sent. `gen
 fetches, and `generate --capture` builds from one without any server. A capture lets you rebuild the mesh after a
 change of the generator, or on another machine, without starting the game.
 
+`generate --capture` does not load the file. It reads the world parameters and the position of every tile record
+(a few bytes per record, found by skipping over the tile data), and then reads only the tiles of the range when they
+are built. A range of a capture of many gigabytes needs memory in proportion to the tiles in that range, plus the
+index (a few dozen bytes per tile in the capture); a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few
+seconds and about 300 MB. The format is unchanged, so existing captures work. A tile that is
+cut off at the end of a capture is ignored; a malformed tile record is reported when its tile is built, as a failed
+tile, not when the file is opened.
+
 ## dayzmake navmesh probe
 
 Ask the data server for the world parameters, and optionally for one tile.

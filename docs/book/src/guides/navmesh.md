@@ -246,7 +246,8 @@ $ dayzmake navmesh generate --server 127.0.0.1:36533 --record mymap.dzgeo mymap.
 $ dayzmake navmesh generate --capture mymap.dzgeo --doors open -f mymap-open.nm
 ```
 
-A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO.
+A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO. A capture of a whole map can be tens of gigabytes; building a
+`--range` from it reads only the tiles of that range, so a small range stays fast and small.
 
 ## Good to know
 

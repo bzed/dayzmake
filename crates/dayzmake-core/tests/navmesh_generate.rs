@@ -12,7 +12,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
+use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureWriter};
 use dayzmake_core::navmesh::client::{Host, RetryPolicy};
 use dayzmake_core::navmesh::detour::NavMeshSet;
 use dayzmake_core::navmesh::generate::{
@@ -38,6 +38,36 @@ fn capture_of(params: &WorldParams, tiles: &[TileInput]) -> Capture {
         }
     }
     Capture::read(&mut bytes.as_slice()).expect("read capture")
+}
+
+/// Writes a capture file with the `real` tiles and then `fake` records of `fake_size` bytes each whose
+/// payload is a hole (a sparse file): their `(x, z)` are valid, the rest is zeros that nobody may read.
+fn sparse_capture(
+    path: &std::path::Path,
+    params: &WorldParams,
+    real: &[TileInput],
+    fake: &[(i32, i32)],
+    fake_size: u32,
+) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut bytes = Vec::new();
+    {
+        let mut w = CaptureWriter::new(&mut bytes, params).expect("header");
+        for t in real {
+            w.add(t).expect("tile");
+        }
+    }
+    let mut f = std::fs::File::create(path).expect("create");
+    f.write_all(&bytes).expect("write");
+    for &(x, z) in fake {
+        f.write_all(&fake_size.to_le_bytes()).expect("size");
+        f.write_all(&x.to_le_bytes()).expect("x");
+        f.write_all(&z.to_le_bytes()).expect("z");
+        f.seek(SeekFrom::Current(i64::from(fake_size) - 8))
+            .expect("seek");
+    }
+    let end = f.stream_position().expect("pos");
+    f.set_len(end).expect("len");
 }
 
 fn bytes_of(set: &NavMeshSet) -> Vec<u8> {
@@ -544,4 +574,36 @@ fn a_base_that_does_not_match_the_world_is_refused() {
     options.range = Some([1, 0, 1, 0]);
     let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     assert_eq!(report.set.tiles.len(), 2);
+}
+
+#[test]
+fn a_range_of_a_huge_capture_reads_only_its_tiles() {
+    // Eight records of 192 MiB (1.5 GiB in all, sparse) outside the range: reading or parsing them would
+    // exceed the address-space limit this test is run under (`prlimit --as=2000000000`) and take
+    // minutes. Only the tiles of the range may be read.
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("big.dzgeo");
+    let fake: Vec<(i32, i32)> = (0..8).map(|i| (1000 + i, 1000)).collect();
+    sparse_capture(&path, &params, &tiles, &fake, 192 << 20);
+    let mut options = opts();
+    options.range = Some([0, 0, 1, 1]);
+    let file = CaptureFile::open(&path).expect("open");
+    assert_eq!(file.len(), tiles.len() + fake.len());
+    let (from_file, _) = run(Source::CaptureFile(file), &options);
+    let (from_memory, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    assert_eq!(from_file.built, 4);
+    assert_eq!(from_file.built, from_memory.built);
+    assert_eq!(bytes_of(&from_file.set), bytes_of(&from_memory.set));
+}
+
+#[test]
+fn a_capture_file_without_a_range_builds_its_bounding_box() {
+    let (params, tiles) = synthetic_world();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("w.dzgeo");
+    sparse_capture(&path, &params, &tiles, &[], 8);
+    let file = CaptureFile::open(&path).expect("open");
+    let (report, _) = run(Source::CaptureFile(file), &opts());
+    assert_eq!(report.built + report.empty, 9);
 }

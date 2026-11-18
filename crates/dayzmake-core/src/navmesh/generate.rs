@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::ErrorExt;
 use crate::navmesh::build::{BuildOptions, TileOutcome, build_tile};
-use crate::navmesh::capture::{Capture, CaptureWriter};
+use crate::navmesh::capture::{Capture, CaptureFile, CaptureWriter};
 use crate::navmesh::client::{Client, FetchError, Host, RetryPolicy};
 use crate::navmesh::detour::{NavMesh, NavMeshParams, NavMeshSet};
 use crate::navmesh::islands::{IslandReport, filter_islands};
@@ -70,6 +70,9 @@ pub enum Source {
     Servers(Vec<Host>),
     /// A capture (`.dzgeo`); tiles it lacks are skipped silently.
     Capture(Capture),
+    /// A capture file that is indexed and read tile by tile (see [`CaptureFile`]); tiles it lacks are skipped
+    /// silently. Memory is proportional to the tiles of the range, not to the file.
+    CaptureFile(CaptureFile),
 }
 
 /// The most builder threads or connections [`generate`] accepts; more is an error (each is an operating
@@ -287,6 +290,7 @@ struct Built {
 enum FetchFrom<'a> {
     Servers(&'a [Host]),
     Capture(&'a Capture),
+    CaptureFile(&'a CaptureFile),
 }
 
 /// What the fetchers share.
@@ -359,6 +363,11 @@ fn fetch_one(
         FetchFrom::Capture(capture) => capture
             .tile(col, row)
             .map_or(Fetch::Skipped, |tile| Fetch::Tile(tile.clone())),
+        FetchFrom::CaptureFile(file) => match file.tile(col, row) {
+            Ok(Some(tile)) => Fetch::Tile(tile),
+            Ok(None) => Fetch::Skipped,
+            Err(e) => Fetch::Wire(e.to_string()),
+        },
         FetchFrom::Servers(hosts) => {
             if client.is_none() {
                 let Some(host) = hosts.get(slot % hosts.len().max(1)) else {
@@ -753,6 +762,34 @@ fn check_worker_counts(options: &GenerateOptions, source: &Source) -> io::Result
     Ok(())
 }
 
+/// The world params, the range, the fetch source and the default connection count of a source.
+fn open_source<'a>(
+    source: &'a Source,
+    options: &GenerateOptions,
+) -> io::Result<(WorldParams, Option<[i32; 4]>, FetchFrom<'a>, usize)> {
+    Ok(match source {
+        Source::Capture(c) => {
+            let range = options.range.or_else(|| capture_range(c));
+            (c.params().clone(), range, FetchFrom::Capture(c), 1)
+        }
+        Source::CaptureFile(c) => {
+            let range = options.range.or_else(|| c.bounds());
+            (c.params().clone(), range, FetchFrom::CaptureFile(c), 1)
+        }
+        Source::Servers(hosts) => {
+            let first = hosts
+                .first()
+                .ok_or_else(|| error!("no data server given"))?;
+            (
+                probe(first, &options.retry)?,
+                options.range,
+                FetchFrom::Servers(hosts),
+                hosts.len(),
+            )
+        }
+    })
+}
+
 /// Generates a navmesh from `source`.
 ///
 /// The steps are those of the spec's section 2.3: world params, the target mesh (from `base` or a
@@ -786,28 +823,14 @@ pub fn generate(
     if options.skip_existing && options.base.is_none() {
         return Err(error!("--skip-existing needs --base"));
     }
-    let (world_params, range, from, default_connections) = match &source {
-        Source::Capture(c) => {
-            let range = options.range.or_else(|| capture_range(c));
-            (c.params().clone(), range, FetchFrom::Capture(c), 1)
-        }
-        Source::Servers(hosts) => {
-            let first = hosts
-                .first()
-                .ok_or_else(|| error!("no data server given"))?;
-            (
-                probe(first, &options.retry)?,
-                options.range,
-                FetchFrom::Servers(hosts),
-                hosts.len(),
-            )
-        }
-    };
+    let (world_params, range, from, default_connections) = open_source(&source, options)?;
     let world = &world_params.world;
     let (mesh, grid) = create_mesh(world, options.base.as_ref())?;
     let mut plan = match range {
         Some(r) => plan_tiles(world, Some(r))?,
-        None if matches!(source, Source::Capture(_)) => return Err(error!("empty tile range")),
+        None if matches!(source, Source::Capture(_) | Source::CaptureFile(_)) => {
+            return Err(error!("empty tile range"));
+        }
         None => plan_tiles(world, None)?,
     };
     if options.skip_existing {

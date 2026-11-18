@@ -11,7 +11,7 @@ use std::io::{self, Cursor};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
+use dayzmake_core::navmesh::capture::{Capture, CaptureFile, CaptureWriter};
 use dayzmake_core::navmesh::client::{Client, FetchError, Host, RetryPolicy};
 use dayzmake_core::navmesh::wire::{
     CellClass, DEFAULT_PORT, TileGroup, TileInput, TilePart, WorldBlock, WorldParams,
@@ -391,4 +391,97 @@ fn capture_writer_flushes_every_tile() {
     w.add(&tile(0, 0)).expect("add");
     w.add(&tile(1, 0)).expect("add");
     assert!(sink.1 >= 3);
+}
+
+fn capture_file(bytes: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("c.dzgeo");
+    std::fs::write(&path, bytes).expect("write");
+    (dir, path)
+}
+
+#[test]
+fn capture_file_indexes_and_reads_tiles_on_demand() {
+    let t = tiles();
+    let (_dir, path) = capture_file(&capture_bytes(&world(), &t));
+    let c = CaptureFile::open(&path).expect("open");
+    assert_eq!(c.params(), &world());
+    assert_eq!(c.len(), 3);
+    assert_eq!(c.bounds(), Some([0, 0, 1, 1]));
+    assert_eq!(c.tile(0, 1).expect("read"), Some(tile(0, 1)));
+    assert_eq!(c.tile(5, 5).expect("read"), None);
+}
+
+#[test]
+fn capture_file_keeps_the_later_copy_and_ignores_a_cut_tail() {
+    let mut first = tile(1, 1);
+    first.cell_class = 0;
+    let mut later = tile(1, 1);
+    later.bmax = [9.0, 9.0, 9.0];
+    let mut bytes = capture_bytes(&world(), &[first, tile(0, 0), later.clone()]);
+    // Cut into the last record: it is dropped, the earlier copy of (1,1) stays.
+    let cut = bytes.len() - 3;
+    let (_d, path) = capture_file(&bytes[..cut]);
+    let c = CaptureFile::open(&path).expect("open");
+    assert_eq!(c.len(), 2);
+    assert_ne!(c.tile(1, 1).expect("read"), Some(later.clone()));
+    bytes.extend_from_slice(&[1, 2]); // a partial size field at the end
+    let (_d, path) = capture_file(&bytes);
+    let c = CaptureFile::open(&path).expect("open");
+    assert_eq!(c.tile(1, 1).expect("read"), Some(later));
+}
+
+#[test]
+fn capture_file_rejects_what_capture_read_rejects() {
+    let bytes = capture_bytes(&world(), &tiles());
+    for (name, data, text) in [
+        ("magic", b"DZ".to_vec(), "not a capture file"),
+        ("cut world", bytes[..20].to_vec(), "truncated"),
+        (
+            "version",
+            {
+                let mut b = bytes.clone();
+                b[4] = 2;
+                b
+            },
+            "unsupported capture version 2",
+        ),
+    ] {
+        let (_d, path) = capture_file(&data);
+        let e = CaptureFile::open(&path).expect_err(name);
+        assert!(e.to_string().contains(text), "{name}: {e}");
+    }
+    // A record too short for its coordinates, and a hostile block size.
+    let mut short = capture_bytes(&world(), &[]);
+    short.extend_from_slice(&4u32.to_le_bytes());
+    short.extend_from_slice(&[0; 4]);
+    let (_d, path) = capture_file(&short);
+    assert!(
+        CaptureFile::open(&path)
+            .expect_err("short")
+            .to_string()
+            .contains("message truncated")
+    );
+    let mut huge = capture_bytes(&world(), &[]);
+    huge.extend_from_slice(&u32::MAX.to_le_bytes());
+    let (_d, path) = capture_file(&huge);
+    assert!(
+        CaptureFile::open(&path)
+            .expect_err("huge")
+            .to_string()
+            .contains("block size")
+    );
+}
+
+#[test]
+fn capture_file_reports_a_malformed_record_when_it_is_read() {
+    let mut bytes = capture_bytes(&world(), &[]);
+    let mut payload = tile(0, 0).encode();
+    payload.push(0); // trailing byte: a malformed record
+    bytes.extend_from_slice(&u32::try_from(payload.len()).expect("small").to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    let (_d, path) = capture_file(&bytes);
+    let c = CaptureFile::open(&path).expect("open");
+    let e = c.tile(0, 0).expect_err("malformed");
+    assert!(e.to_string().contains("unexpected bytes"), "{e}");
 }

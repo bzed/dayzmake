@@ -5,7 +5,10 @@
 //! payload (without the protocol version), then one block per tile (the message-5 payload).
 
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+use std::fs::File;
+use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 
 use crate::error::ErrorExt;
 use crate::navmesh::client::{MAX_FRAME, read_chunked};
@@ -110,6 +113,141 @@ impl Capture {
             .binary_search_by_key(&(z, x), |t| (t.z, t.x))
             .ok()
             .and_then(|i| self.tiles.get(i))
+    }
+}
+
+/// Where one tile record of a capture file lies.
+#[derive(Debug, Clone, Copy)]
+struct Record {
+    /// Offset of the payload (after the block's size field).
+    offset: u64,
+    /// Payload size.
+    size: u32,
+}
+
+/// A capture file that is indexed, not loaded: opening reads the world params and the `(x, z)` of every
+/// record (8 bytes each, skipping the rest by seeking), and [`CaptureFile::tile`] reads one record on
+/// demand. Memory is proportional to the number of records plus the tiles in flight, so a range of a
+/// multi-gigabyte capture needs only the tiles of that range. The file format is the one of [`Capture`].
+#[derive(Debug)]
+pub struct CaptureFile {
+    params: WorldParams,
+    index: BTreeMap<(i32, i32), Record>,
+    file: Mutex<File>,
+}
+
+impl CaptureFile {
+    /// Opens and indexes a capture. A capture cut short keeps every complete record; a partial trailing
+    /// block is ignored. A tile captured twice keeps the later copy. The records are not parsed here: a
+    /// malformed record is reported by [`CaptureFile::tile`].
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Capture::read`] for the header and the world block, "invalid capture block size N",
+    /// and "message truncated" for a record too short to hold its coordinates.
+    pub fn open(path: &Path) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let len = file.metadata()?.len();
+        let mut r = BufReader::new(file);
+        let mut magic = [0u8; 4];
+        let truncated = || error!("capture truncated");
+        if r.read_exact(&mut magic).is_err() || &magic != MAGIC {
+            return Err(error!("not a capture file"));
+        }
+        let version = read_u32_opt(&mut r)?.ok_or_else(truncated)?;
+        if version != VERSION {
+            return Err(error!("unsupported capture version {version}"));
+        }
+        let block = read_block(&mut r)?.ok_or_else(truncated)?;
+        let params = WorldParams::parse(&block).prepend_error("capture world params")?;
+        // 4 (magic) + 4 (version) + 4 (size) + the world block.
+        let mut pos = 12u64 + u64::try_from(block.len()).map_err(|_| truncated())?;
+        let mut index = BTreeMap::new();
+        let mut n = 0usize;
+        while let Some(size) = read_u32_opt(&mut r)? {
+            if size > MAX_FRAME {
+                return Err(error!("invalid capture block size {size}"));
+            }
+            let start = pos + 4;
+            let end = start + u64::from(size);
+            if end > len {
+                break;
+            }
+            if size < 8 {
+                return Err(error!("capture tile record {n}: message truncated"));
+            }
+            let mut coords = [0u8; 8];
+            r.read_exact(&mut coords)
+                .map_err(|_| error!("capture tile record {n}: message truncated"))?;
+            let x = i32::from_le_bytes([coords[0], coords[1], coords[2], coords[3]]);
+            let z = i32::from_le_bytes([coords[4], coords[5], coords[6], coords[7]]);
+            r.seek_relative(i64::from(size) - 8)?;
+            index.insert(
+                (z, x),
+                Record {
+                    offset: start,
+                    size,
+                },
+            );
+            pos = end;
+            n += 1;
+        }
+        Ok(Self {
+            params,
+            index,
+            file: Mutex::new(r.into_inner()),
+        })
+    }
+
+    /// The world params.
+    #[must_use]
+    pub fn params(&self) -> &WorldParams {
+        &self.params
+    }
+
+    /// The number of tiles in the capture.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Whether the capture holds no tile.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    /// The bounding range `[x0, z0, x1, z1]` of the tiles, `None` for an empty capture.
+    #[must_use]
+    pub fn bounds(&self) -> Option<[i32; 4]> {
+        let mut keys = self.index.keys();
+        let &(z, x) = keys.next()?;
+        let mut r = [x, z, x, z];
+        for &(z, x) in keys {
+            r = [r[0].min(x), r[1].min(z), r[2].max(x), r[3].max(z)];
+        }
+        Some(r)
+    }
+
+    /// Reads and parses tile `(x, z)`; `None` when the capture lacks it.
+    ///
+    /// # Errors
+    ///
+    /// Read errors, and the errors of [`TileInput::parse`] for a malformed record.
+    pub fn tile(&self, x: i32, z: i32) -> io::Result<Option<TileInput>> {
+        let Some(rec) = self.index.get(&(z, x)) else {
+            return Ok(None);
+        };
+        let len = usize::try_from(rec.size).map_err(|_| error!("invalid capture block size"))?;
+        let bytes = {
+            let mut file = self.file.lock().unwrap_or_else(PoisonError::into_inner);
+            file.seek(SeekFrom::Start(rec.offset))?;
+            read_chunked(&mut *file, len)
+        }
+        .prepend_error(format!("capture tile ({x},{z})"))?;
+        TileInput::parse(&bytes)
+            .map(Some)
+            .prepend_error(format!("capture tile ({x},{z})"))
     }
 }
 
