@@ -88,7 +88,7 @@ fn msg<T>(r: Result<T, FetchError>) -> String {
 fn defaults() {
     let p = RetryPolicy::default();
     assert_eq!(p.attempts, 5);
-    assert_eq!(p.delay_unit, Duration::from_secs(2));
+    assert_eq!(p.delay_unit, Duration::from_secs(1));
     assert_eq!(p.connect_timeout, Duration::from_secs(10));
     assert_eq!(p.recv_timeout, Duration::from_secs(600));
 }

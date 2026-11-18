@@ -55,6 +55,8 @@ pub struct Faults {
     script: Vec<Fault>,
     then: Fault,
     slow: Option<((i32, i32), std::time::Duration)>,
+    /// Connections `first..first + count` (counting from 0) are closed as soon as they are accepted.
+    refuse: (usize, usize),
 }
 
 impl Faults {
@@ -69,6 +71,7 @@ impl Faults {
             script: Vec::new(),
             then: fault,
             slow: None,
+            refuse: (0, 0),
         }
     }
 
@@ -78,7 +81,14 @@ impl Faults {
             script: script.to_vec(),
             then: Fault::None,
             slow: None,
+            refuse: (0, 0),
         }
+    }
+
+    /// Closes the connections `first..first + count` (counting from 0) as soon as they are accepted.
+    pub fn refuse_connections(mut self, first: usize, count: usize) -> Self {
+        self.refuse = (first, count);
+        self
     }
 
     /// Answers requests for tile `(x, z)` only after `delay` (a slow peer), whatever the other faults.
@@ -183,7 +193,12 @@ fn accept_loop(listener: &TcpListener, shared: &Shared) {
         if shared.stop.load(Ordering::SeqCst) {
             return;
         }
-        shared.connections.fetch_add(1, Ordering::SeqCst);
+        let number = shared.connections.fetch_add(1, Ordering::SeqCst);
+        let (first, count) = shared.faults.refuse;
+        if number >= first && number - first < count {
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
+        }
         if let Ok(clone) = stream.try_clone() {
             *shared
                 .current

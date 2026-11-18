@@ -25,7 +25,8 @@ pub(crate) const READ_CHUNK: usize = 16 << 20;
 pub struct RetryPolicy {
     /// Attempts per tile (the first try included).
     pub attempts: u32,
-    /// After failed attempt `n` (counting from 0) the client waits `delay_unit * (n + 1)`.
+    /// After failed attempt `n` (counting from 0) the client waits `delay_unit * (n + 1)`. With the
+    /// defaults (5 attempts, 1 s) that is 1, 2, 3 and 4 s: 10 s in all.
     pub delay_unit: Duration,
     /// Connect timeout.
     pub connect_timeout: Duration,
@@ -37,7 +38,7 @@ impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             attempts: 5,
-            delay_unit: Duration::from_secs(2),
+            delay_unit: Duration::from_secs(1),
             connect_timeout: Duration::from_secs(10),
             recv_timeout: Duration::from_secs(600),
         }
@@ -373,6 +374,14 @@ mod tests {
         v.extend_from_slice(&id.to_le_bytes());
         v.extend_from_slice(payload);
         v
+    }
+
+    #[test]
+    fn the_default_backoff_is_five_tries_in_ten_seconds() {
+        let p = RetryPolicy::default();
+        assert_eq!(p.attempts, 5);
+        let total: Duration = (1..p.attempts).map(|n| p.delay_unit * n).sum();
+        assert_eq!(total, Duration::from_secs(10));
     }
 
     #[test]

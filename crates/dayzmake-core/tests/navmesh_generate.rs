@@ -607,3 +607,52 @@ fn a_capture_file_without_a_range_builds_its_bounding_box() {
     let (report, _) = run(Source::CaptureFile(file), &opts());
     assert_eq!(report.built + report.empty, 9);
 }
+
+#[test]
+fn refused_connections_do_not_lose_their_tiles() {
+    // Connections 1 to 3 (0 is the world params probe) are closed at once; with one attempt each the
+    // three fetchers that got them die, and their tiles must go to the fourth.
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 3));
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.retry.attempts = 1;
+    options.connections = Some(4);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.fetch_errors.len(), 0, "{:?}", report.fetch_errors);
+    assert_eq!(report.built + report.empty, 9);
+}
+
+#[test]
+fn a_refused_connect_is_retried_with_backoff() {
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 2));
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.retry.attempts = 5;
+    options.connections = Some(1);
+    options.range = Some([0, 0, 1, 0]);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.fetch_errors.len(), 0, "{:?}", report.fetch_errors);
+    assert_eq!(report.built + report.empty, 2);
+}
+
+#[test]
+fn every_connection_dead_still_fails_the_tiles_once_each() {
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 100));
+    let host = Host::parse(&server.addr().to_string()).expect("host");
+    let mut options = opts();
+    options.retry = quick_retry();
+    options.retry.attempts = 1;
+    options.connections = Some(3);
+    let (report, _) = run(Source::Servers(vec![host]), &options);
+    assert_eq!(report.built, 0);
+    assert_eq!(report.fetch_errors.len(), 9, "{:?}", report.fetch_errors);
+    let mut seen: Vec<_> = report.fetch_errors.iter().map(|e| (e.0, e.1)).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), 9);
+}

@@ -5,8 +5,8 @@
 //!
 //! Three stages run inside one [`std::thread::scope`], joined by bounded channels:
 //!
-//! * **fetchers** (one per connection) claim the next plan index from a shared atomic counter, fetch the
-//!   tile and send it to the builders (queue bound 64);
+//! * **fetchers** (one per connection) claim the next plan index (a hand-back queue first, then a shared
+//!   counter), fetch the tile and send it to the builders (queue bound 64);
 //! * **builders** (`threads`, default cores - 1, at least 1) build the tiles and send the results to the
 //!   assembler (queue bound `builders * 4`);
 //! * the **assembler** is the calling thread. It keeps a reorder buffer keyed by plan index and applies
@@ -18,10 +18,11 @@
 //! drains into its reorder buffer. So every blocked `send` is eventually released: the assembler never
 //! waits for a send, the builders therefore never wait for it, and the fetchers wait only for builders.
 //! Each claimed plan index produces exactly one message (a tile, a skipped tile or an error), so the
-//! assembler's next-expected index is always eventually delivered. A fetcher that stops after a final
-//! network error hands its claimed index on as an error first; the last fetcher to stop claims every
-//! index nobody has claimed and reports it as a fetch error (small messages, so it ignores the window
-//! below).
+//! assembler's next-expected index is always eventually delivered. A fetcher whose connection died
+//! (a final network error) puts its claimed index back into the hand-back queue and stops; the other
+//! fetchers take it from there, and a fetcher with nothing left to claim waits while another one still has
+//! an index in flight. Only the last fetcher to stop reports what is left (handed-back and unclaimed
+//! indices) as fetch errors (small messages, so it ignores the window below).
 //!
 //! The reorder buffer is bounded by a claim window: a fetcher that has claimed index `i` waits (on a
 //! condition variable) while `i >= applied + window` before it fetches. The index the assembler waits
@@ -33,7 +34,7 @@
 //! tile is caught and makes that tile fail; builders own the receiver of the fetch queue, so if every
 //! builder is gone the fetchers' sends fail and they return.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -306,13 +307,75 @@ struct FetchShared<'a> {
     policy: &'a RetryPolicy,
 }
 
-/// The claim window state: how many plan indices the assembler has applied.
+/// Plan indices whose connection died, and how many are being fetched.
+#[derive(Default)]
+struct Work {
+    /// Indices to fetch again on another connection, with the error that ended the first try.
+    retry: VecDeque<(usize, String)>,
+    /// Indices claimed and not yet delivered or handed back.
+    inflight: usize,
+}
+
+/// The claim window state (how many plan indices the assembler has applied) and the hand-back queue.
 struct Gate {
     applied: Mutex<usize>,
     changed: Condvar,
+    work: Mutex<Work>,
+    work_changed: Condvar,
 }
 
 impl Gate {
+    fn new() -> Self {
+        Self {
+            applied: Mutex::new(0),
+            changed: Condvar::new(),
+            work: Mutex::new(Work::default()),
+            work_changed: Condvar::new(),
+        }
+    }
+
+    /// Claims the next index: a handed-back one first, then the next unclaimed one. Waits while there is
+    /// none but another fetcher still has one in flight (its connection may die and hand it back).
+    /// `None` when everything is delivered or the run was stopped. The string is set for a handed-back
+    /// index (the error that ended its first try); a fresh index still has to enter the claim window.
+    fn claim(&self, shared: &FetchShared<'_>) -> Option<(usize, Option<String>)> {
+        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if shared.stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some((idx, why)) = work.retry.pop_front() {
+                work.inflight += 1;
+                return Some((idx, Some(why)));
+            }
+            let idx = shared.next.load(Ordering::Relaxed);
+            if idx < shared.plan.len() {
+                shared.next.store(idx + 1, Ordering::Relaxed);
+                work.inflight += 1;
+                return Some((idx, None));
+            }
+            if work.inflight == 0 {
+                return None;
+            }
+            work = self
+                .work_changed
+                .wait(work)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    /// An index was delivered (`hand_back` is `None`) or its connection died (`Some(error)`: it goes back
+    /// to the queue).
+    fn done(&self, idx: usize, hand_back: Option<String>) {
+        let mut work = self.work.lock().unwrap_or_else(PoisonError::into_inner);
+        work.inflight = work.inflight.saturating_sub(1);
+        if let Some(why) = hand_back {
+            work.retry.push_back((idx, why));
+        }
+        drop(work);
+        self.work_changed.notify_all();
+    }
+
     fn set_applied(&self, n: usize) {
         *self.applied.lock().unwrap_or_else(PoisonError::into_inner) = n;
         self.changed.notify_all();
@@ -323,6 +386,8 @@ impl Gate {
         // Taking the lock orders this after any fetcher's check of `stop`, so no wake-up is lost.
         drop(self.applied.lock().unwrap_or_else(PoisonError::into_inner));
         self.changed.notify_all();
+        drop(self.work.lock().unwrap_or_else(PoisonError::into_inner));
+        self.work_changed.notify_all();
     }
 
     /// Waits until index `idx` is inside the window. Returns false when the run was stopped.
@@ -412,37 +477,42 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         armed: true,
     };
     let mut client: Option<Client> = None;
-    loop {
-        if shared.stop.load(Ordering::Relaxed) {
-            break;
-        }
-        let idx = shared.next.fetch_add(1, Ordering::Relaxed);
+    while let Some((idx, handed_back)) = shared.gate.claim(shared) {
         let Some(&at) = shared.plan.get(idx) else {
+            shared.gate.done(idx, None);
             break;
         };
-        if !shared.gate.enter(idx, shared.window, shared.stop) {
+        // A handed-back index is older than the window's front: it needs no wait.
+        if handed_back.is_none() && !shared.gate.enter(idx, shared.window, shared.stop) {
             break;
         }
-        let what = fetch_one(shared, slot, &mut client, at);
-        let fatal = matches!(what, Fetch::Net(_));
-        if tx.send(Fetched { idx, what }).is_err() {
-            return;
-        }
-        if fatal {
-            // Spec 3.6: this fetcher stops, the others continue.
-            break;
+        match fetch_one(shared, slot, &mut client, at) {
+            Fetch::Net(message) => {
+                // This connection is dead (its retries are used up). The tile goes back for the live
+                // connections; it fails only when none is left (the last fetcher reports it below).
+                shared.gate.done(idx, Some(message));
+                break;
+            }
+            what => {
+                if tx.send(Fetched { idx, what }).is_err() {
+                    return;
+                }
+                shared.gate.done(idx, None);
+            }
         }
     }
     exit.armed = false;
-    // The last fetcher to stop reports every index nobody claimed, so the run still ends.
+    // The last fetcher to stop reports every index that is left (handed back, or nobody claimed), so the
+    // run still ends. No other fetcher is alive, so nothing is in flight and `claim` does not wait.
     if shared.alive.fetch_sub(1, Ordering::AcqRel) == 1 && !shared.stop.load(Ordering::Relaxed) {
-        loop {
-            let idx = shared.next.fetch_add(1, Ordering::Relaxed);
-            if shared.plan.get(idx).is_none() {
-                break;
-            }
-            let what = Fetch::Net("not fetched: every connection failed".to_owned());
-            if tx.send(Fetched { idx, what }).is_err() {
+        while let Some((idx, why)) = shared.gate.claim(shared) {
+            let message = why.unwrap_or_else(|| "not fetched: every connection failed".to_owned());
+            let sent = tx.send(Fetched {
+                idx,
+                what: Fetch::Net(message),
+            });
+            shared.gate.done(idx, None);
+            if sent.is_err() {
                 return;
             }
         }
@@ -842,10 +912,7 @@ pub fn generate(
     };
 
     let stop = AtomicBool::new(false);
-    let gate = Gate {
-        applied: Mutex::new(0),
-        changed: Condvar::new(),
-    };
+    let gate = Gate::new();
     let mut asm = Assembler {
         mesh,
         plan: &plan,
@@ -921,10 +988,7 @@ mod tests {
             AtomicBool::new(false),
             AtomicUsize::new(2),
         );
-        let gate = Gate {
-            applied: Mutex::new(0),
-            changed: Condvar::new(),
-        };
+        let gate = Gate::new();
         let shared = FetchShared {
             plan: &plan,
             next: &next,
@@ -967,10 +1031,7 @@ mod tests {
             AtomicBool::new(false),
             AtomicUsize::new(1),
         );
-        let gate = Gate {
-            applied: Mutex::new(0),
-            changed: Condvar::new(),
-        };
+        let gate = Gate::new();
         let shared = FetchShared {
             plan: &[],
             next: &next,

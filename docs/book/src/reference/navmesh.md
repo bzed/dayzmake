@@ -33,7 +33,10 @@ navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-c
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
 first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
-wrong answer) is repeated on a fresh connection, five attempts in all, waiting 2, 4, 6 and 8 seconds between them.
+wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1, 2, 3 and 4 seconds between them (10 seconds at most). When a connection is still
+failing after its five attempts (a server that refuses it or resets it, as a server that serves one client at a
+time does for the others), that connection stops and its tile goes back to the queue for the connections that are
+left. A tile is reported as not fetched only when no connection is left.
 A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 
@@ -177,11 +180,11 @@ that failed to build, ends with the command that continues it. The command repea
 `--record` (with `-f` it would overwrite the first recording) and `--base`, which becomes the target, so the rest is
 built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail
 again. The printed command is quoted for a POSIX shell (single quotes around anything but letters, digits and
-`_@%+=:,./-`); that works in bash and zsh; PowerShell and `cmd.exe` users adapt the quotes (`'\''` does not work in PowerShell). With a server that closes every connection, one tile (five attempts, 2+4+6+8 s between them, 20 seconds in all) gives:
+`_@%+=:,./-`); that works in bash and zsh; PowerShell and `cmd.exe` users adapt the quotes (`'\''` does not work in PowerShell). With a server that closes every connection, one tile (five attempts, 1+2+3+4 s between them, 10 seconds in all) gives:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
-built 0 tiles, 0 empty, 0 failed in 20.0 s
+built 0 tiles, 0 empty, 0 failed in 10.0 s
   tile (0,0): connection to 127.0.0.1:36533 closed by the server
 wrote lost.nm
 to continue: dayzmake navmesh generate --base lost.nm --skip-existing -f --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
