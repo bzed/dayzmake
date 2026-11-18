@@ -85,7 +85,9 @@ fn dist_sq(a: V, b: V) -> f32 {
 fn normalize3(v: V) -> V {
     let l = len(v);
     if l >= FLT_EPSILON {
-        [v[0] / l, v[1] / l, v[2] / l]
+        // Multiplies by the reciprocal, as the shipped code does (R16): `v / l` is one ulp away for some v.
+        let r = 1.0_f32 / l;
+        [v[0] * r, v[1] * r, v[2] * r]
     } else {
         [v[0], 1.0, v[2]]
     }
@@ -489,15 +491,6 @@ pub(crate) struct PassGeometry {
     pub(crate) dir_len: f32,
 }
 
-/// `n*s + p` per component with a single rounding (a fused multiply-add).
-fn fused_offset(n: V, s: f32, p: V) -> V {
-    [
-        n[0].mul_add(s, p[0]),
-        n[1].mul_add(s, p[1]),
-        n[2].mul_add(s, p[2]),
-    ]
-}
-
 /// Spec 6.4 *Sampling* steps 1 and 2: `side` is +1 (pass 0) or -1 (pass 1).
 pub(crate) fn pass_geometry(edge: &Seg, side: f32, h: f32, l2: f32) -> PassGeometry {
     let a = edge.p0;
@@ -505,9 +498,9 @@ pub(crate) fn pass_geometry(edge: &Seg, side: f32, h: f32, l2: f32) -> PassGeome
     let dn = scale(normalize3(sub(b, a)), side);
     let n = normalize3([dn[2], 0.0, -dn[0]]);
     let s0 = add(scale(n, -h), a);
-    // `(n*(-h) + B) - (n*(-h) + A)` with each sum a fused multiply-add (rounded once, #120). Neither
-    // `B - A` nor the sums of rounded products give the shipped values (#116, #120).
-    let dir = sub(fused_offset(n, -h, b), fused_offset(n, -h, a));
+    // The literal `(n*(-h) + B) - S0`; `n` is normalised by the reciprocal (R16), and then this matches the
+    // shipped meshes where `B - A` does not (#116, #120).
+    let dir = sub(add(scale(n, -h), b), s0);
     PassGeometry {
         a,
         n,
@@ -1162,70 +1155,55 @@ mod tests {
     /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search; such edges
     /// are not common).
     fn bug_one_edge() -> (Seg, f32, f32) {
-        (seg([2.85, 10.3, 8.5], [4.35, 10.3, 12.2]), 1.2, 0.5)
+        (seg([2.59, 10.3, 8.71], [3.2, 10.3, 10.1]), 1.2, 0.5)
     }
 
-    /// The rounded product `n.z*(-h)` is 1.4645996 (5999 * 2^-12), a tie when added to z values at
-    /// 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it. The sums of rounded
-    /// products `n*(-h) + B` and `n*(-h) + A` then round in opposite directions and
-    /// `(n*(-h) + B) - S0` is one ulp off `B - A` (#116). The exact product is 1.4645995795..., not a
-    /// tie, so the fused sums of the current rule (R16) round alike and `dir` is `B - A` here. This is
-    /// the case that gave R13 and stays as a regression of R16.
+    /// `v / |v|` and `v * (1 / |v|)` differ for some `v`; the shipped code multiplies (R16, #120, #121).
+    /// For (-4.06, 0, -0.67) the quotient has x = -0.98665547 and the product -0.9866554.
     #[test]
-    fn dir_fused_sums_avoid_the_rounded_tie() {
-        let edge = seg([0.0, 0.0, 4096.0], [1.0, 0.0, 4096.0 + 453.0 / 2048.0]);
-        let g = pass_geometry(&edge, 1.0, 1.5, 0.75);
-        let exact = sub(edge.p1, edge.p0);
-        let naive = sub(add(scale(g.n, -1.5), edge.p1), g.s0);
-        // The naive order is one ulp off on z (0.22070313 against 0.2211914)...
-        assert_ne!(naive[2].to_bits(), exact[2].to_bits());
-        // ...the direction is the difference of the end points, and its length follows.
-        assert_eq!(g.dir.map(f32::to_bits), exact.map(f32::to_bits));
-        assert_eq!(g.dir_len.to_bits(), len(exact).to_bits());
-        // The sample point S at t = 1 is `dir + S0` with the exact difference; the old formula gives
-        // another value there.
-        let (s, _, _) = sample_at(&g, 1.0);
-        assert_eq!(s.map(f32::to_bits), add(exact, g.s0).map(f32::to_bits));
-        assert_ne!(s.map(f32::to_bits), add(naive, g.s0).map(f32::to_bits));
+    fn normalize_multiplies_by_the_reciprocal() {
+        let v = [-4.06_f32, 0.0, -0.67];
+        let n = normalize3(v);
+        let l = len(v);
+        assert_eq!(n[0].to_bits(), 0xbf7c_9573);
+        assert_eq!((v[0] / l).to_bits(), 0xbf7c_9574);
+        assert_eq!(n[2].to_bits(), 0xbe26_baee);
     }
 
-    /// Found by a search over random edges (about one in a million is affected). `n.z*(-h)` is not a
-    /// float, so the fused sums `n*(-h) + B` and `n*(-h) + A` (rounded once) give a `dir.z` of
-    /// -1.0565796, while the difference of the end points is -1.0566406, and so are the sums of
-    /// rounded products (#120). The inputs are given as bit patterns of their exact values.
+    /// With the reciprocal-normalised `n`, the literal `(n*(-h) + B) - S0` is the direction. Found by
+    /// a search over random edges: here pass 0 gives `dir.z` = -0.28369141, pass 1 -0.28417969, and the
+    /// difference of the end points is -0.28393555. So the two passes do not share `dir`, and the spans of
+    /// a pair are not exact mirrors (#120). Inputs are bit patterns of their exact values.
     #[test]
-    fn dir_is_the_difference_of_fused_sums() {
+    fn dir_is_the_difference_of_the_sums_and_differs_between_the_passes() {
         let v = f32::from_bits;
         let edge = seg(
-            [v(0x44c4_e973), 10.0, v(0x4480_4525)],
-            [v(0x44c4_a297), 10.0, v(0x4480_2355)],
+            [v(0x45e7_166f), 10.0, v(0x452b_587f)],
+            [v(0x45e7_00fc), 10.0, v(0x452b_53f4)],
         );
-        let h = v(0x3ffa_98fd);
-        let g = pass_geometry(&edge, 1.0, h, 0.9);
-        let exact = sub(edge.p1, edge.p0);
-        let rounded = sub(add(scale(g.n, -h), edge.p1), add(scale(g.n, -h), edge.p0));
-        assert_eq!(rounded[2].to_bits(), exact[2].to_bits());
-        assert_eq!(exact[2].to_bits(), 0xbf87_4000);
-        assert_eq!(g.dir[2].to_bits(), 0xbf87_3e00);
-        assert_eq!(g.dir_len.to_bits(), len(g.dir).to_bits());
-        // Pass 1 has the opposite normal, so its fused sums round differently and `dir.z` is the
-        // exact difference: the two passes do not share `dir`.
+        let h = v(0x4007_0a3d);
+        let g0 = pass_geometry(&edge, 1.0, h, 0.9);
         let g1 = pass_geometry(&edge, -1.0, h, 0.9);
-        assert_eq!(g1.dir[2].to_bits(), 0xbf87_4000);
-        assert_ne!(g.dir[2].to_bits(), g1.dir[2].to_bits());
+        let exact = sub(edge.p1, edge.p0);
+        assert_eq!(g0.dir[2].to_bits(), 0xbe91_4000);
+        assert_eq!(g1.dir[2].to_bits(), 0xbe91_8000);
+        assert_ne!(g0.dir[2].to_bits(), exact[2].to_bits());
+        assert_ne!(g1.dir[2].to_bits(), exact[2].to_bits());
+        assert_eq!(g0.dir_len.to_bits(), len(g0.dir).to_bits());
+        assert_eq!(g0.s0, add(scale(g0.n, -h), edge.p0));
     }
 
     /// The two spans of one edge are mirrors (`s` of one is `e` of the other) but, because `dir`
-    /// differs between the passes (R16), not exact ones: the reverse merge sees different lengths and
-    /// keeps the longer span, and its radius follows that span (#120).
+    /// differs between the passes, not exact ones: the reverse merge sees different lengths and keeps
+    /// the longer span, and its radius follows that span (#120).
     #[test]
     fn passes_give_spans_of_different_length_and_the_longer_is_kept() {
         let v = f32::from_bits;
         let edge = seg(
-            [v(0x44c4_e973), 10.0, v(0x4480_4525)],
-            [v(0x44c4_a297), 10.0, v(0x4480_2355)],
+            [v(0x45e7_166f), 10.0, v(0x452b_587f)],
+            [v(0x45e7_00fc), 10.0, v(0x452b_53f4)],
         );
-        let h = v(0x3ffa_98fd);
+        let h = v(0x4007_0a3d);
         let span = |side: f32| {
             let g = pass_geometry(&edge, side, h, 0.9);
             LinkSpan {

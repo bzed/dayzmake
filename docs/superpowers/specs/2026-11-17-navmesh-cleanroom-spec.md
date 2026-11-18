@@ -652,7 +652,7 @@ If the world has no link classes, stop after ladders.
 
 Find all other segments that face `s` across an obstacle within `depth`, group them, and return the midlines.
 
-1. `p0 = s.p0`, `d = s.p1 - s.p0`, `len = |d|` (3-D). `u = d / len` if `len >= FLT_EPSILON` else `(d.x, 1, d.z)`.
+1. `p0 = s.p0`, `d = s.p1 - s.p0`, `len = |d|` (3-D). `u = d * (1.0f / len)` if `len >= FLT_EPSILON` (every normalisation in §6 multiplies by the reciprocal of the length, ruling R16) else `(d.x, 1, d.z)`.
    `n = (u.z, 0, -u.x)`, normalised by its 3-D length if that is `>= FLT_EPSILON`, else `(u.z, 1, -u.x)`.
 2. Local coordinates of a world point `q` (let `dq = q - p0`): `local = (u.x*dq.x + n.x*dq.z,  u.y*dq.x + dq.y + n.y*dq.z,
    u.z*dq.x + n.z*dq.z)`. Box in local space: `min = (0, -width/2, 0)`, `max = (len, +width/2, depth)`.
@@ -693,10 +693,10 @@ heights are relative (taken above the start floor).
 (pass 0 jumps along `+n`, pass 1 along `-n`; spans of both are appended in that order; this two-sided sweep is DayZ 1.30
 behaviour, earlier versions swept one side):
 
-1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (if the 3-D length
+1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (`normalize3(v) = v * (1.0f / |v|)`, ruling R16) (if the 3-D length
    is `< FLT_EPSILON` use `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback
    `(dn.z, 1, -dn.x)`).
-2. `S0 = n*(-h) + A`; `dir = fma(n, -h, B) - fma(n, -h, A)` (each sum a fused multiply-add, rounded once, then one f32 subtraction; neither `B - A` nor the difference of two sums of rounded products matches the shipped meshes, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
+2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
    **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
    about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
    `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
@@ -1331,7 +1331,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
 14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
-15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): `B - A` equals the fused form where R13 was observed, and the "FMA is not needed" remark below is wrong in general.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
+15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): the one ulp error of `(n*(-h) + B) - S0` that R13 saw came from a `n` normalised by division, and `B - A` is not the rule.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
     the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
     moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
     power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
@@ -1351,40 +1351,21 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     exact rounding tie of `p0 + (p1 - p0)*t` at x of about 6510, and so both end points of two links by 1 mm. With the
     reciprocal all five validation sets match the shipped meshes completely (inner tiles); a lerp `p0*(1-t) + p1*t`
     for that point fixes the tile but breaks every set, and neither FMA nor a reciprocal in `normalize` changes it.
-18. **Pass direction by fused sums (ruling R16, #120).** `dir` is `fma(n, -h, B) - fma(n, -h, A)` (14.15 gave `B - A`). With the
-    exact difference, links of a few percent of the tiles had their two end points exchanged against the shipped mesh,
-    or a radius that differed in the fourth digit (4 of 121 inner tiles of a Badlands block). Both come from a one ulp difference in `dir`: the reverse merge (6.4) keeps the
-    longer of two mirrored spans and keeps the later one when their squared lengths are equal, and `dir.x` and `dir.z`
-    set the end points of every span of the pass. With `B - A` both passes have the same `dir`, the two spans of a
-    pair are exact mirrors, and the tie rule decides. With the fused sums the passes do not share `dir`, because `n`
-    has the opposite sign and `fma(+-n, -h, B)` rounds differently; the spans then differ by one ulp, as the shipped
-    ones do. What identifies the rule:
-    * `(n*(-h) + B) - S0` with rounded products matches the five validation sets of 14.15 less well
-      than `B - A` in one of them (it breaks the tile that gave R13);
-    * the fused form matches those five sets and the inner tiles of an 11 x 11 block of Badlands tiles that the
-      exact difference missed (16 links in 4 tiles before, 3 links in 1 tile after);
-    * fusing `S0`, `P0`, `P1`, `Ebase`, `dir*t + S0`, the span end points or the emission does not help and breaks tiles
-      that matched; only `dir` uses the fused sums.
-    The shipped code probably computes this one expression with FMA while the rest is plain SSE. Evaluating each sum in
-    `f64` and rounding to `f32` gives the same values (they differ from `fmaf` in about one case in 20 million), so
-    the data cannot tell FMA from double intermediates such as a `double h`. Also tried: `fma(n, -h, B) - S0` with
-    `S0` unfused matches the same tiles of the block less well (5 links in 2 tiles against 3 in 1) and breaks one
-    tile of a regression set (14 of 16), which supports the form above.
-19. **Open (#121, #119).** A link whose `pos` equals the shipped one can have a `center_height` one ulp of the edge
-    height away (1.5e-5 where the height is 128 to 256, 3.1e-5 from 256). The first count, 519 links in 118 tiles,
-    includes links whose `rad` also differed, which R16 fixed; the `center_height`-only count is lower (136 links in
-    the examined list of the first comparison). What the data show:
-    * Only the links of one edge are affected, not all links of a tile (tile 176,59 has three affected links and
-      others that match), so `bmin.y` is not the source. `center_height` is `float(hsel + 1)*ch + bmin.y - cy` with
-      `cy = A.y + dir.y*t`, which is `B.y` for the last sample, and `B.y` is the y of a `refine_edge` midline end
-      point; `snap_to_solid` replaces y in `pos`, which is why `pos` cannot show a difference there.
-    * For tile 176,59 the shipped `cy` is one ulp below ours. Our midline end point is
-      `e1 + (max_pt - e1)*0.5` with `e1 = p0 + d*smax` rounded to `f32` (211.52092); the exact midpoint with `e1`
-      unrounded rounds to the shipped value, with `e1` rounded it rounds to ours. Forms that keep `e1` unrounded
-      (an `f64` midline, `(p0 + m)*0.5 + (d*smax)*0.5`, a three-term fused chain) reproduce this one value but change
-      many other links (45 differing links in 10 examined tiles become 117 to 643), so they are not the rule.
-    * Without effect on any examined tile: FMA in `p0 + d*smax`, in `q.p0 + q_d*t` or in the midpoint,
-      `(e + m)*0.5`, `e*0.5 + m*0.5`, FMA in `contour_point`, `(v.y*ch + bmin) + 2*ch` (breaks tiles) and
-      `(v.y*ch + 2*ch) + bmin`, and every association of `float(hsel + 1)*ch + bmin.y - cy` (exact in `f32`).
-    The span end points that are one ulp off in `x` in tile 164,55 may come from the same midline code. #119 (the link
-    count) has another cause and is not changed by R16.
+18. **Normalisation by the reciprocal (ruling R16, #120, #121).** Every `normalize` of the link code (`refine_edge` frame and
+    facing test, pass direction and normal) computes `v * (1.0f / |v|)`, not `v / |v|`. The two differ in the last bit for
+    some `v` (`(-4.06, 0, -0.67)`: x is -0.98665547 by division and -0.9866554 by the reciprocal). With the reciprocal,
+    the literal spec formula `dir = (n*(-h) + B) - S0` matches the shipped meshes, which settles 14.15: `B - A` agreed
+    with the shipped value in the tile that gave R13 only because the division gave a slightly wrong `n`. Consequences:
+    * the two passes do not share `dir` (`n` has the opposite sign, the sums round differently), so the two spans of a
+      pair are not exact mirrors, the reverse merge (6.4) compares different lengths, and the exchanged end points and
+      the radius differences of #120 disappear;
+    * the edge end points that `cy` and the span end points come from carry the right low bits, which removes the
+      one ulp `center_height` differences of #121 (they came from the end point y of the midline, which `pos` hides
+      because `snap_to_solid` replaces it).
+    Evidence: with the reciprocal and the literal `dir` all inner tiles of an 11 x 11 block of Badlands tiles that
+    had 16 differing links match, the ten tiles with the `center_height` differences match, the five validation sets
+    of 14.15 and the 14.17 tile match, and so do the tiles the previous attempt (`dir` by fused multiply-add, which
+    removed most but not all differences and broke two tiles) left. Rejected on the way: `B - A`, FMA of the sums
+    (also with `S0` unfused: it breaks a tile of a regression set), double precision intermediates, tie rule `<`
+    in the reverse merge (breaks most tiles), FMA or other association in the span, midline or centre height
+    formulas. R15 (the reciprocal in the slab test) is the same habit.
