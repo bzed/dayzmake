@@ -1132,30 +1132,30 @@ mod tests {
         assert_eq!(COS_135.to_bits(), 0xBF35_04F3);
     }
 
-    /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search; with the
-    /// exact direction of #116 such edges are rare).
+    /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search; such edges
+    /// are not common).
     fn bug_one_edge() -> (Seg, f32, f32) {
         (seg([2.85, 10.3, 8.5], [4.35, 10.3, 12.2]), 1.2, 0.5)
     }
 
     /// `n*(-h) + B` and `n*(-h) + A` round their ties to even independently, so `(n*(-h) + B) - S0`
-    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h)` is a tie between two floats at
-    /// z = 5000 and the two sums round in opposite directions.
+    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h) = -1.5` is added to z values at
+    /// 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it: the two sums round in
+    /// different directions.
     #[test]
     fn dir_is_exact_edge_difference() {
-        let edge = seg(
-            [6912.3594, 191.62645, 5116.832],
-            [6915.8164, 191.62645, 5114.9487],
-        );
-        let g = pass_geometry(&edge, 1.0, 2.25, 1.95);
-        let naive = sub(add(scale(g.n, -2.25), edge.p1), g.s0);
-        // The naive order is off by one ulp on z...
-        assert_ne!(naive[2].to_bits(), sub(edge.p1, edge.p0)[2].to_bits());
-        // ...the direction is the exact difference of the end points.
-        assert_eq!(
-            g.dir.map(f32::to_bits),
-            sub(edge.p1, edge.p0).map(f32::to_bits)
-        );
+        let edge = seg([0.0, 0.0, 4096.0], [1.0, 0.0, 4096.0 + 453.0 / 2048.0]);
+        let g = pass_geometry(&edge, 1.0, 1.5, 0.75);
+        let exact = sub(edge.p1, edge.p0);
+        let naive = sub(add(scale(g.n, -1.5), edge.p1), g.s0);
+        // The naive order is one ulp off on z (0.22070313 against 0.2211914)...
+        assert_ne!(naive[2].to_bits(), exact[2].to_bits());
+        // ...the direction is the difference of the end points, and its length follows.
+        assert_eq!(g.dir.map(f32::to_bits), exact.map(f32::to_bits));
+        assert_eq!(g.dir_len.to_bits(), len(exact).to_bits());
+        // The run end point at t = 1 uses it.
+        let (s, _, _) = sample_at(&g, 1.0);
+        assert_eq!(s.map(f32::to_bits), add(g.dir, g.s0).map(f32::to_bits));
     }
 
     #[test]
