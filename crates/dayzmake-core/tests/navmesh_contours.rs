@@ -148,7 +148,6 @@ fn corner_between_parts_is_not_a_border_vertex() {
     // different parts above, so it is not a border vertex (spec 10.1 item 7).
     let mut c = field(14, 14, |x, _| (1, u16::from(x >= 7), 2));
     regions(&mut c, 2);
-    c.border_size = 2;
     let set = contours(&c, 8.0, 0, 0);
     assert_eq!(set.contours.len(), 2);
     let all: Vec<_> = set.contours.iter().flat_map(|k| k.rverts.iter()).collect();
@@ -168,7 +167,6 @@ fn corner_between_parts_is_not_a_border_vertex() {
 fn border_shifts_bounds_and_vertices() {
     let mut c = flat(14, 14);
     regions(&mut c, 2);
-    c.border_size = 2;
     let set = contours(&c, 8.0, 0, 0);
     assert_eq!((set.width, set.height, set.border_size), (10, 10, 2));
     assert!((set.bmin[0] - 0.5).abs() < 1e-6 && (set.bmin[2] - 0.5).abs() < 1e-6);
@@ -242,7 +240,6 @@ fn vertical_error_applies_along_tile_borders() {
         )
     });
     regions(&mut c, 2);
-    c.border_size = 2;
     let on = contours(&c, 8.0, 0, 0);
     assert_eq!(on.contours.len(), 1);
     assert!(
@@ -264,7 +261,7 @@ fn area_change_along_an_edge_keeps_a_vertex() {
     let mut c = field(20, 6, |x, z| (if x >= 10 && z >= 3 { 2 } else { 1 }, 0, 2));
     for z in 0..6 {
         for x in 0..20 {
-            let i = c.cells[usize::try_from(x + z * 20).unwrap()].0 as usize;
+            let i = usize::try_from(c.cells[usize::try_from(x + z * 20).unwrap()].0).unwrap();
             c.spans[i].reg = if x < 10 { 1 } else { 2 };
         }
     }
@@ -276,4 +273,33 @@ fn area_change_along_an_edge_keeps_a_vertex() {
         "{:?}",
         k.verts
     );
+}
+
+#[test]
+fn region_with_several_holes_is_merged() {
+    // Eight small holes in one region: every merge grows the outline by the hole plus two bridge
+    // vertices, so the scratch buffer of candidate diagonals must have room for the grown outline.
+    let holes: Vec<(i32, i32)> = (0..8)
+        .map(|k| (4 + 8 * (k % 4), 6 + 14 * (k / 4)))
+        .collect();
+    let mut c = field(40, 30, |x, z| {
+        let hole = holes
+            .iter()
+            .any(|&(hx, hz)| (hx..hx + 2).contains(&x) && (hz..hz + 2).contains(&z));
+        (u8::from(!hole), 0, 2)
+    });
+    for s in &mut c.spans {
+        s.reg = 1;
+    }
+    c.max_regions = 2;
+    let set = contours(&c, 8.0, 0, 0);
+    assert_eq!(set.contours.len(), 1);
+    let k = &set.contours[0];
+    // 4 outer corners, 4 corners and 2 bridge vertices per hole.
+    assert_eq!(k.verts.len(), 4 + 8 * (4 + 2), "{:?}", k.verts);
+    for &(hx, hz) in &holes {
+        for corner in [(hx, hz), (hx, hz + 2), (hx + 2, hz), (hx + 2, hz + 2)] {
+            assert!(k.verts.iter().any(|v| (v[0], v[2]) == corner), "{corner:?}");
+        }
+    }
 }

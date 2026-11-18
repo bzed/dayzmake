@@ -15,6 +15,7 @@
 //    misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 //
+// Ported to Rust and altered for DayZ (see the dayzmake navmesh spec); this is not the original software.
 
 //! `rcBuildContours` with the DayZ part ids and the vertical simplification error (spec 5.4 step 9,
 //! 6.2 step 1, 10.1 item 7).
@@ -30,8 +31,9 @@
 //!   interpolated height is tracked as well. When the horizontal test does not insert a vertex and the
 //!   worst vertical deviation exceeds `max_vert_error`, that raw point is inserted, and it is tagged
 //!   `RC_BORDER_VERTEX | RC_AREA_BORDER` in the raw contour;
-//! * the "tessellate only outer edges or edges between areas" gate of that pass accepts raw points
-//!   that carry `RC_AREA_BORDER` or `RC_BORDER_VERTEX`.
+//! * the "tessellate only outer edges or edges between areas" gate of that loop accepts raw points
+//!   that carry `RC_AREA_BORDER` or `RC_BORDER_VERTEX` (ruling R10). The widened gate covers both the
+//!   horizontal and the vertical tracking of the loop; the gate of the `max_edge_len` split is stock.
 //!
 //! Hole merging is iterative, as upstream. `qsort` calls are replaced by stable sorts, so ties keep
 //! their index order (a known difference from the MSVC `qsort` tie order).
@@ -655,7 +657,9 @@ fn merge_region_holes(outline: &mut Vec<[i32; 4]>, holes: &mut [Hole]) {
     }
     holes.sort_by_key(|h| (h.minx, h.minz));
 
-    let max_verts = outline.len() + holes.iter().map(|h| h.verts.len()).sum::<usize>();
+    // Each merge adds the hole's vertices plus two (the bridge), so this bounds the final outline.
+    let max_verts =
+        outline.len() + holes.iter().map(|h| h.verts.len()).sum::<usize>() + 2 * holes.len();
     // Upstream keeps one scratch array of `(vert, dist)` for the whole region and its diagonal test
     // reads entry `i` (the hole number, not the candidate number) of it, which can be a leftover of
     // an earlier hole. The buffer is zero filled here, where upstream's is uninitialised.
