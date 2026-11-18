@@ -11,6 +11,7 @@ pub mod capture;
 pub mod client;
 pub(crate) mod dayz;
 pub mod detour;
+pub mod generate;
 #[doc(hidden)]
 pub mod internals;
 pub mod islands;
