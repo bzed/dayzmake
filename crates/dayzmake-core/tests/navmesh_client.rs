@@ -185,6 +185,20 @@ fn retries_give_up_after_five() {
 }
 
 #[test]
+fn a_closed_connection_says_which_server_closed_it() {
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Close));
+    let mut client = client_for(&server);
+    let e = client.tile(0, 0, &world()).expect_err("fails");
+    let text = e.to_string();
+    let addr = server.addr().to_string();
+    assert!(
+        text.contains(&format!("connection to {addr} closed by the server")),
+        "{text}"
+    );
+    assert!(!text.contains("fill whole buffer"), "{text}");
+}
+
+#[test]
 fn frame_length_rules() {
     for (fault, text) in [
         (Fault::ShortFrame, "invalid frame"),

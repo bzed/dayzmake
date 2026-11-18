@@ -170,6 +170,9 @@ pub struct GenerateReport {
     /// holds what was assembled until then and the island filter did not run. Callers should save
     /// `set` and then report this as an error.
     pub stopped: Option<String>,
+    /// The seed of the island filter: `GenerateOptions::seed`, else the world's seed position. Set also when
+    /// the filter did not run (a stopped run, or `island_filter` off).
+    pub seed: Option<[f32; 3]>,
     /// Diagnostic: the largest number of finished tiles the reorder buffer held while waiting for an
     /// earlier tile. It never exceeds [`GenerateReport::window`] (the final drain of unfetched tiles
     /// after every connection failed is exempt).
@@ -784,6 +787,7 @@ pub fn generate(
 
     let skipped = asm.skipped;
     let mut report = std::mem::take(&mut asm.report);
+    report.seed = Some(options.seed.unwrap_or(world.seed_position));
     let mut mesh = asm.mesh;
     if report.stopped.is_none() && options.island_filter && world.filter_isolated_islands {
         let seed = options.seed.unwrap_or(world.seed_position);

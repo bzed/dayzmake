@@ -215,6 +215,16 @@ pub struct Client {
     stream: Option<TcpStream>,
 }
 
+/// Names the server in an I/O error of an exchange; a stream that ends is "closed by the server".
+fn with_host(e: &io::Error, target: &str) -> io::Error {
+    let kind = e.kind();
+    if kind == io::ErrorKind::UnexpectedEof {
+        io::Error::new(kind, format!("connection to {target} closed by the server"))
+    } else {
+        io::Error::new(kind, format!("{target}: {e}"))
+    }
+}
+
 fn at_least_a_millisecond(d: Duration) -> Duration {
     d.max(Duration::from_millis(1))
 }
@@ -345,10 +355,11 @@ impl Client {
             Some(s) => s,
             slot => slot.insert(open(&self.host, &self.policy)?),
         };
-        write_frame(stream, id, payload)?;
+        let target = self.host.to_string();
+        write_frame(stream, id, payload).map_err(|e| with_host(&e, &target))?;
         // One deadline for the whole message (spec 3.1), not one per `read`.
         let deadline = Instant::now().checked_add(at_least_a_millisecond(self.policy.recv_timeout));
-        read_frame(&mut DeadlineReader { stream, deadline })
+        read_frame(&mut DeadlineReader { stream, deadline }).map_err(|e| with_host(&e, &target))
     }
 }
 

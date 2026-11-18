@@ -344,6 +344,16 @@ fn seed_in_sea_warns() {
     let (report, warnings) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     assert!(report.islands.is_none());
     assert!(warning_names(&warnings).contains(&"navmesh-seed"));
+    assert_eq!(report.seed, Some([-5000.0, 10.0, -5000.0]));
+}
+
+#[test]
+fn report_seed_defaults_to_the_world_seed() {
+    let (params, tiles) = synthetic_world();
+    let mut options = opts();
+    options.range = Some([0, 0, 0, 0]);
+    let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    assert_eq!(report.seed, Some(params.world.seed_position));
 }
 
 #[test]
