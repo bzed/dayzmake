@@ -581,7 +581,7 @@ pub fn resume_args(args: &GenerateArgs, target: &Path) -> String {
 /// A CLI message in the words of the MCP tools: `--sea-level` is `sea_level`, "Use --force" is "Pass force".
 #[must_use]
 pub fn mcp_wording(message: &str) -> String {
-    let mut text = message.replace("Use --force", "Pass force");
+    let mut text = replace_word(message, "Use --force", "Pass force");
     for name in [
         "--skip-existing",
         "--no-island-filter",
@@ -600,9 +600,36 @@ pub fn mcp_wording(message: &str) -> String {
         "--seed",
         "--tile",
     ] {
-        text = text.replace(name, &name.trim_start_matches('-').replace('-', "_"));
+        text = replace_word(&text, name, &name.trim_start_matches('-').replace('-', "_"));
     }
     text
+}
+
+/// Replaces `from` by `to` where it starts a word (at the start, or after whitespace or a quote) and
+/// ends one (not followed by a letter, digit, `-` or `_`), so that a path like `map--base.nm` stays.
+fn replace_word(text: &str, from: &str, to: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prev: Option<char> = None;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let starts = prev.is_none_or(|p| p.is_whitespace() || p == '"' || p == '\'');
+        let tail = rest.strip_prefix(from);
+        let ends = tail.is_some_and(|t| {
+            t.chars()
+                .next()
+                .is_none_or(|n| !(n.is_alphanumeric() || n == '-' || n == '_'))
+        });
+        if starts && ends {
+            out.push_str(to);
+            rest = tail.unwrap_or(rest);
+            prev = to.chars().next_back();
+        } else {
+            out.push(c);
+            prev = Some(c);
+            rest = rest.get(c.len_utf8()..).unwrap_or("");
+        }
+    }
+    out
 }
 
 fn write_summary(report: &GenerateReport, out: &mut dyn Write) -> Result<(), Error> {
@@ -919,6 +946,27 @@ mod tests {
             mcp_wording("Target file \"a\" already exists. Use --force to overwrite."),
             "Target file \"a\" already exists. Pass force to overwrite."
         );
+    }
+
+    #[test]
+    fn mcp_wording_leaves_paths_alone() {
+        // An option name inside a word or a path is not an option.
+        assert_eq!(
+            mcp_wording(
+                "Target file \"out/map--base.nm\" already exists. Use --force to overwrite."
+            ),
+            "Target file \"out/map--base.nm\" already exists. Pass force to overwrite."
+        );
+        assert_eq!(
+            mcp_wording("cannot read 'my--seed' and x--force--range; --base 'a --seed b'"),
+            "cannot read 'my--seed' and x--force--range; base 'a seed b'"
+        );
+        // At a boundary: start, after a space or a quote; before punctuation.
+        assert_eq!(mcp_wording("--seed"), "seed");
+        assert_eq!(mcp_wording("\"--seed\", '--range'"), "\"seed\", 'range'");
+        assert_eq!(mcp_wording("--seed: bad"), "seed: bad");
+        // A longer word is not the option.
+        assert_eq!(mcp_wording("--seeds"), "--seeds");
     }
 
     #[test]
