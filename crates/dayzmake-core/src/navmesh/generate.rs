@@ -15,22 +15,32 @@
 //!   spec's section 8.4).
 //!
 //! The graph is acyclic and the assembler only ever waits for the result channel, which it always
-//! drains into its (unbounded) reorder buffer. So every blocked `send` is eventually released: the
-//! assembler never waits for a send, the builders therefore never wait for it, and the fetchers
-//! wait only for builders. Each claimed plan index produces exactly one message (a tile, a skipped
-//! tile or an error), so the assembler's next-expected index is always eventually delivered. A
-//! fetcher that stops after a final network error hands its claimed index on as an error first; the
-//! last fetcher to stop claims every index nobody has claimed and reports it as a fetch error. A
-//! failing checkpoint or capture write sets a stop flag: fetchers stop claiming, the channels close
-//! as the stages finish and the run ends with the error.
+//! drains into its reorder buffer. So every blocked `send` is eventually released: the assembler never
+//! waits for a send, the builders therefore never wait for it, and the fetchers wait only for builders.
+//! Each claimed plan index produces exactly one message (a tile, a skipped tile or an error), so the
+//! assembler's next-expected index is always eventually delivered. A fetcher that stops after a final
+//! network error hands its claimed index on as an error first; the last fetcher to stop claims every
+//! index nobody has claimed and reports it as a fetch error (small messages, so it ignores the window
+//! below).
+//!
+//! The reorder buffer is bounded by a claim window: a fetcher that has claimed index `i` waits (on a
+//! condition variable) while `i >= applied + window` before it fetches. The index the assembler waits
+//! for is always below that limit, so its holder never waits and the wait is released as soon as that
+//! tile is applied; a hung connection therefore stalls the run (until the receive timeout) but cannot
+//! make the buffer grow past the window. A failing checkpoint or capture write, and a panic of the
+//! assembler, set the stop flag and wake the waiting fetchers: they stop claiming, the channels close
+//! as the stages finish and the run ends with [`GenerateReport::stopped`] set. A panic while building a
+//! tile is caught and makes that tile fail; builders own the receiver of the fetch queue, so if every
+//! builder is gone the fetchers' sends fail and they return.
 
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::error::ErrorExt;
@@ -46,6 +56,10 @@ use crate::warning::{Warning, WarningSink};
 const FETCH_QUEUE: usize = 64;
 /// `maxPolys` of a fresh mesh (spec 8.1).
 const MAX_POLYS: i32 = 1 << 20;
+/// The largest plan: more tiles than any real map has.
+const MAX_PLAN: i64 = 1 << 22;
+/// The smallest claim window.
+const MIN_WINDOW: usize = 256;
 
 /// Where the tile geometry comes from.
 #[derive(Debug)]
@@ -73,7 +87,9 @@ pub struct GenerateOptions {
     /// Every `N` finished tiles (built, empty and failed) write the mesh atomically to the path. A
     /// failing checkpoint stops fetching and is returned as an error after the run; `N` below 1 means 1.
     pub checkpoint: Option<(usize, PathBuf)>,
-    /// Write a capture of the fetched tiles to this path, in plan order.
+    /// Write a capture of the fetched tiles to this path. Tiles are recorded by the assembler in plan
+    /// order, so the capture is deterministic, and a crash loses the tiles that were fetched but not
+    /// yet applied.
     pub record: Option<PathBuf>,
     /// The number of builder threads; `None`: the cores minus one, at least 1.
     pub threads: Option<usize>,
@@ -87,6 +103,12 @@ pub struct GenerateOptions {
     pub build: BuildOptions,
     /// Connect and retry rules of the data server client.
     pub retry: RetryPolicy,
+    /// Test hook: the size of the claim window instead of the computed one.
+    #[doc(hidden)]
+    pub window: Option<usize>,
+    /// Test hook: the build of this tile panics.
+    #[doc(hidden)]
+    pub panic_tile: Option<(i32, i32)>,
 }
 
 impl Default for GenerateOptions {
@@ -103,6 +125,8 @@ impl Default for GenerateOptions {
             island_filter: true,
             build: BuildOptions::default(),
             retry: RetryPolicy::default(),
+            window: None,
+            panic_tile: None,
         }
     }
 }
@@ -111,7 +135,8 @@ impl Default for GenerateOptions {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Progress {
-    /// Tiles finished: built, empty and failed.
+    /// Tiles dealt with: built, empty, failed, skipped (not in the capture) and not fetched (fetch
+    /// errors). It reaches `total` when the run is complete.
     pub done: usize,
     /// Tiles planned.
     pub total: usize,
@@ -145,6 +170,16 @@ pub struct GenerateReport {
     pub islands: Option<IslandReport>,
     /// Wall time of the run in seconds. Reported only; it is not part of the output.
     pub seconds: f64,
+    /// Set when the run was stopped by a failing checkpoint or capture write: the message. The set
+    /// holds what was assembled until then and the island filter did not run. Callers should save
+    /// `set` and then report this as an error.
+    pub stopped: Option<String>,
+    /// Test hook: the largest number of results the reorder buffer held.
+    #[doc(hidden)]
+    pub peak_pending: usize,
+    /// Test hook: the claim window of the run.
+    #[doc(hidden)]
+    pub window: usize,
 }
 
 /// The tiles of a run, in the order of spec 8.4.
@@ -155,7 +190,8 @@ pub struct GenerateReport {
 ///
 /// # Errors
 ///
-/// "empty tile range" when nothing is left of the range.
+/// "empty tile range" when nothing is left of the range; "tile range too large (N tiles, limit
+/// 4194304)" above 2^22 tiles.
 pub fn plan_tiles(world: &WorldBlock, range: Option<[i32; 4]>) -> io::Result<Vec<(i32, i32)>> {
     let [rx0, rz0, rx1, rz1] = range.unwrap_or([0, 0, -1, -1]);
     let last = |n: i32| n.saturating_sub(1);
@@ -173,9 +209,18 @@ pub fn plan_tiles(world: &WorldBlock, range: Option<[i32; 4]>) -> io::Result<Vec
     if world.tiles_x <= 0 || world.tiles_z <= 0 || x0 > x1 || z0 > z1 {
         return Err(error!("empty tile range"));
     }
+    let count = (i64::from(x1) - i64::from(x0) + 1) * (i64::from(z1) - i64::from(z0) + 1);
+    if count > MAX_PLAN {
+        return Err(error!(
+            "tile range too large ({count} tiles, limit {MAX_PLAN})"
+        ));
+    }
+    let count = usize::try_from(count).map_err(|_| error!("empty tile range"))?;
     let block = world.block_size.max(1);
     let step = usize::try_from(block).unwrap_or(1);
     let mut plan = Vec::new();
+    plan.try_reserve_exact(count)
+        .map_err(|e| error!("cannot allocate the tile plan ({count} tiles): {e}"))?;
     for bz in (z0..=z1).step_by(step) {
         for bx in (x0..=x1).step_by(step) {
             let ez = bz.saturating_add(block - 1).min(z1);
@@ -243,13 +288,68 @@ struct FetchShared<'a> {
     next: &'a AtomicUsize,
     stop: &'a AtomicBool,
     alive: &'a AtomicUsize,
+    gate: &'a Gate,
+    window: usize,
     world: &'a WorldParams,
     from: FetchFrom<'a>,
     policy: &'a RetryPolicy,
 }
 
+/// `tile (x,z): message`, unless the message (a client error) already names the tile.
 fn net_message(x: i32, z: i32, e: &dyn std::fmt::Display) -> String {
-    format!("tile ({x},{z}): {e}")
+    let text = e.to_string();
+    let prefix = format!("tile ({x},{z})");
+    if text.starts_with(&prefix) || text.starts_with(&format!("tile {x} {z} ")) {
+        text
+    } else {
+        format!("{prefix}: {text}")
+    }
+}
+
+/// The claim window state: how many plan indices the assembler has applied.
+struct Gate {
+    applied: Mutex<usize>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn set_applied(&self, n: usize) {
+        *self.applied.lock().unwrap_or_else(PoisonError::into_inner) = n;
+        self.changed.notify_all();
+    }
+
+    /// Wakes the waiting fetchers (after `stop` was set).
+    fn wake(&self) {
+        // Taking the lock orders this after any fetcher's check of `stop`, so no wake-up is lost.
+        drop(self.applied.lock().unwrap_or_else(PoisonError::into_inner));
+        self.changed.notify_all();
+    }
+
+    /// Waits until index `idx` is inside the window. Returns false when the run was stopped.
+    fn enter(&self, idx: usize, window: usize, stop: &AtomicBool) -> bool {
+        let guard = self.applied.lock().unwrap_or_else(PoisonError::into_inner);
+        drop(
+            self.changed
+                .wait_while(guard, |applied| {
+                    idx >= applied.saturating_add(window) && !stop.load(Ordering::Relaxed)
+                })
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        !stop.load(Ordering::Relaxed)
+    }
+}
+
+/// Sets the stop flag and wakes the fetchers when the assembler's scope ends, also by a panic.
+struct StopOnDrop<'a> {
+    stop: &'a AtomicBool,
+    gate: &'a Gate,
+}
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.gate.wake();
+    }
 }
 
 fn fetch_one(
@@ -268,10 +368,8 @@ fn fetch_one(
                 let Some(host) = hosts.get(slot % hosts.len().max(1)) else {
                     return Fetch::Net(net_message(col, row, &"no data server"));
                 };
-                match Client::connect(host, shared.policy) {
-                    Ok(conn) => *client = Some(conn),
-                    Err(e) => return Fetch::Net(net_message(col, row, &e)),
-                }
+                // Not connected yet, so the retry loop of `tile` covers the first connect too.
+                *client = Some(Client::lazy(host, shared.policy));
             }
             let Some(conn) = client.as_mut() else {
                 return Fetch::Net(net_message(col, row, &"not connected"));
@@ -295,6 +393,9 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         let Some(&at) = shared.plan.get(idx) else {
             break;
         };
+        if !shared.gate.enter(idx, shared.window, shared.stop) {
+            break;
+        }
         let what = fetch_one(shared, slot, &mut client, at);
         let fatal = matches!(what, Fetch::Net(_));
         if tx.send(Fetched { idx, what }).is_err() {
@@ -320,13 +421,34 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
     }
 }
 
+/// Builds one tile; a panic of the build (a bug on hostile geometry) fails the tile and nothing else.
+fn build_guarded(world: &WorldParams, options: &GenerateOptions, input: &TileInput) -> Outcome {
+    let built = catch_unwind(AssertUnwindSafe(|| {
+        // Test hook (`GenerateOptions::panic_tile`).
+        assert!(
+            options.panic_tile != Some((input.x, input.z)),
+            "build panic requested for tile ({},{})",
+            input.x,
+            input.z
+        );
+        build_tile(world, input, &options.build)
+    }));
+    match built {
+        Ok(Ok(outcome)) => Outcome::Tile(Box::new(outcome)),
+        Ok(Err(e)) => Outcome::Failed(e.to_string()),
+        Err(_) => Outcome::Failed("internal error: tile build panicked".to_owned()),
+    }
+}
+
+/// A builder. It owns a handle of the fetch queue's receiver: when the last builder is gone the
+/// receiver is dropped and the fetchers' sends fail instead of blocking.
 fn builder(
     world: &WorldParams,
-    options: &BuildOptions,
-    record: bool,
+    options: &GenerateOptions,
     rx: &Mutex<Receiver<Fetched>>,
     tx: &SyncSender<Built>,
 ) {
+    let record = options.record.is_some();
     loop {
         // The lock is held only while waiting for the next tile.
         let msg = rx.lock().unwrap_or_else(PoisonError::into_inner).recv();
@@ -335,10 +457,7 @@ fn builder(
         };
         let (outcome, input) = match what {
             Fetch::Tile(input) => {
-                let outcome = match build_tile(world, &input, options) {
-                    Ok(o) => Outcome::Tile(Box::new(o)),
-                    Err(e) => Outcome::Failed(e.to_string()),
-                };
+                let outcome = build_guarded(world, options, &input);
                 (outcome, record.then_some(input))
             }
             Fetch::Skipped => (Outcome::Skipped, None),
@@ -367,8 +486,9 @@ struct Assembler<'a> {
     checkpoint: Option<(usize, &'a Path)>,
     grid: (i32, i32),
     stop: &'a AtomicBool,
-    /// The first fatal error (checkpoint or capture write).
-    fatal: Option<io::Error>,
+    gate: &'a Gate,
+    /// Tiles the capture lacks.
+    skipped: usize,
     start: Instant,
 }
 
@@ -377,10 +497,19 @@ impl Assembler<'_> {
         self.report.built + self.report.empty + self.report.failed.len()
     }
 
+    /// Stops the run: no further fetching, checkpoints or island filter. The first reason is kept.
+    fn halt(&mut self, reason: String) {
+        if self.report.stopped.is_none() {
+            self.report.stopped = Some(reason);
+        }
+        self.stop.store(true, Ordering::Relaxed);
+        self.gate.wake();
+    }
+
     fn fail(&mut self, (x, z): (i32, i32), message: String, warnings: &mut dyn WarningSink) {
         warnings.warn(Warning::new(
             Some("navmesh-tile-failed"),
-            format!("tile ({x},{z}): {message}"),
+            net_message(x, z, &message),
         ));
         self.report.failed.push((x, z, message));
     }
@@ -392,13 +521,11 @@ impl Assembler<'_> {
         let finished_before = self.finished();
         if let (Some(w), Some(input)) = (self.recorder.as_mut(), msg.input.as_ref())
             && let Err(e) = w.add(input)
-            && self.fatal.is_none()
         {
-            self.fatal = Some(error!("cannot write the capture: {e}"));
-            self.stop.store(true, Ordering::Relaxed);
+            self.halt(format!("cannot write the capture: {e}"));
         }
         match msg.outcome {
-            Outcome::Skipped => {}
+            Outcome::Skipped => self.skipped += 1,
             Outcome::Net(m) => self.report.fetch_errors.push(m),
             Outcome::Failed(m) => self.fail(at, m, warnings),
             Outcome::Tile(outcome) => match *outcome {
@@ -437,19 +564,18 @@ impl Assembler<'_> {
             return;
         };
         let done = self.finished();
-        if self.fatal.is_some() || done == finished_before || !done.is_multiple_of(every) {
+        if self.report.stopped.is_some() || done == finished_before || !done.is_multiple_of(every) {
             return;
         }
         let set = self.mesh.to_set(self.grid.0, self.grid.1);
         if let Err(e) = set.write_atomic(path) {
-            self.fatal = Some(error!("checkpoint {}: {e}", path.display()));
-            self.stop.store(true, Ordering::Relaxed);
+            self.halt(format!("checkpoint {}: {e}", path.display()));
         }
     }
 
     fn progress(&self, progress: &mut dyn FnMut(&Progress)) {
         progress(&Progress {
-            done: self.finished(),
+            done: self.finished() + self.skipped + self.report.fetch_errors.len(),
             total: self.plan.len(),
             built: self.report.built,
             empty: self.report.empty,
@@ -511,7 +637,17 @@ fn run_pipeline(
         })
         .max(1);
     let connections = options.connections.unwrap_or(default_connections).max(1);
-    let (plan, stop) = (asm.plan, asm.stop);
+    let window = options
+        .window
+        .unwrap_or_else(|| {
+            MIN_WINDOW.max(
+                FETCH_QUEUE
+                    .saturating_add(builders.saturating_mul(5))
+                    .saturating_add(connections),
+            )
+        })
+        .max(1);
+    let (plan, stop, gate) = (asm.plan, asm.stop, asm.gate);
     let next = AtomicUsize::new(0);
     let alive = AtomicUsize::new(connections);
     let shared = FetchShared {
@@ -519,14 +655,18 @@ fn run_pipeline(
         next: &next,
         stop,
         alive: &alive,
+        gate,
+        window,
         world,
         from,
         policy: &options.retry,
     };
     let (fetch_tx, fetch_rx) = sync_channel::<Fetched>(FETCH_QUEUE);
     let (built_tx, built_rx) = sync_channel::<Built>(builders.saturating_mul(4));
-    let fetch_rx = Mutex::new(fetch_rx);
+    let fetch_rx = Arc::new(Mutex::new(fetch_rx));
+    let mut peak = 0usize;
     std::thread::scope(|scope| {
+        let _wake_on_exit = StopOnDrop { stop, gate };
         for slot in 0..connections {
             let tx = fetch_tx.clone();
             let shared = &shared;
@@ -535,23 +675,34 @@ fn run_pipeline(
         drop(fetch_tx);
         for _ in 0..builders {
             let tx = built_tx.clone();
-            let (rx, build, record) = (&fetch_rx, &options.build, options.record.is_some());
-            scope.spawn(move || builder(world, build, record, rx, &tx));
+            let rx = Arc::clone(&fetch_rx);
+            scope.spawn(move || builder(world, options, &rx, &tx));
         }
         drop(built_tx);
+        drop(fetch_rx);
 
         // The assembler: results in plan order through a reorder buffer.
         let mut pending: BTreeMap<usize, Built> = BTreeMap::new();
         let mut expected = 0usize;
         for msg in built_rx {
             pending.insert(msg.idx, msg);
+            peak = peak.max(pending.len());
             while let Some(done) = pending.remove(&expected) {
                 expected += 1;
                 asm.apply(done, warnings);
+                gate.set_applied(expected);
                 asm.progress(progress);
             }
         }
     });
+    asm.report.peak_pending = peak;
+    asm.report.window = window;
+}
+
+/// Creates the capture file of `record` and writes its header.
+fn open_recorder(path: &Path, params: &WorldParams) -> io::Result<CaptureWriter<File>> {
+    let file = File::create(path).map_err(|e| error!("cannot create {}: {e}", path.display()))?;
+    CaptureWriter::new(file, params).prepend_error("cannot write the capture")
 }
 
 /// Generates a navmesh from `source`.
@@ -559,18 +710,18 @@ fn run_pipeline(
 /// The steps are those of the spec's section 2.3: world params, the target mesh (from `base` or a
 /// fresh one), the tile plan, then fetchers, builders and the assembler (see the module docs), the
 /// island filter, and the report. The mesh is in [`GenerateReport::set`]; the caller saves it. A
-/// failed tile does not stop the run: it is in [`GenerateReport::failed`] and raises the warning
+/// failing checkpoint or capture write stops the run but is not an `Err`: the report has
+/// [`GenerateReport::stopped`], and the caller should save `set` and then fail. A failed tile does not stop the run: it is in [`GenerateReport::failed`] and raises the warning
 /// `navmesh-tile-failed`. `progress` is called on the calling thread after each applied tile and once
 /// at the end. The result does not depend on `threads` or `connections`.
 ///
 /// # Errors
 ///
 /// "--skip-existing needs --base"; "empty tile range"; an unusable base or world grid; a world
-/// params request that fails; a capture file that cannot be created; and, after the run, a failing
-/// checkpoint or capture write.
+/// params request that fails; "tile range too large"; a capture file that cannot be created.
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "the source (a capture can be large) is owned by the run"
+    reason = "the API hands the source (a capture can be large) over to the run"
 )]
 pub fn generate(
     source: Source,
@@ -610,18 +761,15 @@ pub fn generate(
         plan.retain(|&(x, z)| mesh.tile_at(x, z).is_none());
     }
     let recorder = match &options.record {
-        Some(path) => {
-            let file =
-                File::create(path).map_err(|e| error!("cannot create {}: {e}", path.display()))?;
-            Some(
-                CaptureWriter::new(file, &world_params)
-                    .prepend_error("cannot write the capture")?,
-            )
-        }
+        Some(path) => Some(open_recorder(path, &world_params)?),
         None => None,
     };
 
     let stop = AtomicBool::new(false);
+    let gate = Gate {
+        applied: Mutex::new(0),
+        changed: Condvar::new(),
+    };
     let mut asm = Assembler {
         mesh,
         plan: &plan,
@@ -633,7 +781,8 @@ pub fn generate(
             .map(|(n, path)| ((*n).max(1), path.as_path())),
         grid,
         stop: &stop,
-        fatal: None,
+        gate: &gate,
+        skipped: 0,
         start,
     };
     run_pipeline(
@@ -646,12 +795,10 @@ pub fn generate(
         warnings,
     );
 
-    if let Some(e) = asm.fatal.take() {
-        return Err(e);
-    }
+    let skipped = asm.skipped;
     let mut report = std::mem::take(&mut asm.report);
     let mut mesh = asm.mesh;
-    if options.island_filter && world.filter_isolated_islands {
+    if report.stopped.is_none() && options.island_filter && world.filter_isolated_islands {
         let seed = options.seed.unwrap_or(world.seed_position);
         report.islands = filter_islands(&mut mesh, seed);
         if report.islands.is_none() {
@@ -667,7 +814,11 @@ pub fn generate(
     report.set = mesh.to_set(grid.0, grid.1);
     report.seconds = start.elapsed().as_secs_f64();
     progress(&Progress {
-        done: report.built + report.empty + report.failed.len(),
+        done: report.built
+            + report.empty
+            + report.failed.len()
+            + skipped
+            + report.fetch_errors.len(),
         total: plan.len(),
         built: report.built,
         empty: report.empty,

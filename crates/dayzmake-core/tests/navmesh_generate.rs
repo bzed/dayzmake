@@ -7,7 +7,9 @@
     reason = "test code; the workspace clippy.toml exceptions only reach the root crate"
 )]
 
-use std::path::Path;
+use std::io;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
@@ -61,11 +63,39 @@ fn opts() -> GenerateOptions {
     o
 }
 
+type Watched = (io::Result<GenerateReport>, Warnings, Vec<Progress>);
+
+/// Runs `generate` on its own thread and fails the test when it does not return within 20 s (600 s under coverage), so a
+/// deadlock in the scheduler fails a test instead of hanging CI.
+fn generate_watched(source: Source, options: &GenerateOptions) -> Watched {
+    let options = options.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut warnings = Warnings::new();
+        let mut seen = Vec::new();
+        let result = generate(
+            source,
+            &options,
+            &mut |p: &Progress| seen.push(*p),
+            &mut warnings,
+        );
+        // The receiver is gone only when the test already failed.
+        let _ = tx.send((result, warnings, seen));
+    });
+    // Under `cargo llvm-cov` (it sets LLVM_PROFILE_FILE) a tile build is about 100 times slower, and the
+    // tests of this file run side by side: there the limit only has to catch a real hang.
+    let limit = if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        600
+    } else {
+        20
+    };
+    rx.recv_timeout(Duration::from_secs(limit))
+        .expect("generate hung")
+}
+
 fn run(source: Source, options: &GenerateOptions) -> (GenerateReport, Warnings) {
-    let mut warnings = Warnings::new();
-    let report =
-        generate(source, options, &mut |_: &Progress| {}, &mut warnings).expect("generate");
-    (report, warnings)
+    let (result, warnings, _) = generate_watched(source, options);
+    (result.expect("generate"), warnings)
 }
 
 fn warning_names(w: &Warnings) -> Vec<&'static str> {
@@ -210,13 +240,8 @@ fn skip_existing_needs_base() {
     let (params, tiles) = synthetic_world();
     let mut options = opts();
     options.skip_existing = true;
-    let e = generate(
-        Source::Capture(capture_of(&params, &tiles)),
-        &options,
-        &mut |_: &Progress| {},
-        &mut Warnings::new(),
-    )
-    .expect_err("needs base");
+    let (result, _, _) = generate_watched(Source::Capture(capture_of(&params, &tiles)), &options);
+    let e = result.expect_err("needs base");
     assert!(
         e.to_string().contains("--skip-existing needs --base"),
         "{e}"
@@ -238,6 +263,9 @@ fn failed_tile_reported_and_run_continues() {
     assert_eq!(report.failed.len(), 1);
     assert_eq!((report.failed[0].0, report.failed[0].1), (2, 0));
     assert!(warning_names(&warnings).contains(&"navmesh-tile-failed"));
+    let text = &warnings.warnings()[0].message;
+    // The build error already names the tile; the warning does not say it twice.
+    assert_eq!(text.matches("tile").count(), 1, "{text}");
 }
 
 #[test]
@@ -246,10 +274,16 @@ fn missing_capture_tiles_are_skipped_silently() {
     tiles.retain(|t| (t.x, t.z) != (1, 1));
     let mut options = opts();
     options.range = Some([0, 1, 2, 1]);
-    let (report, warnings) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    let (result, warnings, seen) =
+        generate_watched(Source::Capture(capture_of(&params, &tiles)), &options);
+    let report = result.expect("generate");
     assert_eq!(report.built, 2);
     assert_eq!(report.failed.len() + report.fetch_errors.len(), 0);
     assert_eq!(warning_names(&warnings).len(), 0);
+    assert!(report.stopped.is_none());
+    // The skipped tile counts as dealt with: the progress reaches 100 %.
+    let last = seen.last().expect("progress");
+    assert_eq!((last.done, last.total), (3, 3));
 }
 
 #[test]
@@ -263,25 +297,22 @@ fn checkpoint_writes_file() {
     let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     assert_eq!(report.built, 3);
     let set = NavMeshSet::read(&mut std::fs::File::open(&path).expect("file")).expect("readable");
-    assert!(!set.tiles.is_empty() && set.tiles.len() <= 3);
+    assert_eq!(set.tiles.len(), 2);
 }
 
 #[test]
-fn failing_checkpoint_is_an_error_after_the_run() {
+fn failing_checkpoint_stops_the_run_but_returns_the_report() {
     let (params, tiles) = synthetic_world();
+    let dir = tempfile::TempDir::new().expect("tmp");
     let mut options = opts();
-    options.checkpoint = Some((
-        1,
-        Path::new("/nonexistent-dir-for-test/out.nm").to_path_buf(),
-    ));
-    let e = generate(
-        Source::Capture(capture_of(&params, &tiles)),
-        &options,
-        &mut |_: &Progress| {},
-        &mut Warnings::new(),
-    )
-    .expect_err("checkpoint fails");
-    assert!(e.to_string().contains("checkpoint"), "{e}");
+    options.range = Some([0, 0, 2, 0]);
+    options.checkpoint = Some((1, dir.path().join("missing/out.nm")));
+    let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    let stopped = report.stopped.expect("stopped");
+    assert!(stopped.contains("checkpoint"), "{stopped}");
+    // The island filter did not run; what was assembled is in the set.
+    assert!(report.islands.is_none());
+    assert_ne!(report.set.tiles.len(), 0);
 }
 
 #[test]
@@ -378,18 +409,66 @@ fn wire_errors_fail_the_tile_and_the_fetcher_continues() {
 #[test]
 fn progress_reports_every_applied_tile_and_the_end() {
     let (params, tiles) = synthetic_world();
-    let mut seen = Vec::new();
-    let mut warnings = Warnings::new();
     let mut options = opts();
     options.range = Some([0, 0, 2, 0]);
-    generate(
-        Source::Capture(capture_of(&params, &tiles)),
-        &options,
-        &mut |p: &Progress| seen.push((p.done, p.total, p.built)),
-        &mut warnings,
-    )
-    .expect("generate");
-    assert_eq!(seen.last().copied(), Some((3, 3, 3)));
-    assert!(seen.len() >= 3);
-    assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0));
+    let (result, _, seen) =
+        generate_watched(Source::Capture(capture_of(&params, &tiles)), &options);
+    result.expect("generate");
+    let tuples: Vec<_> = seen.iter().map(|p| (p.done, p.total, p.built)).collect();
+    assert_eq!(tuples.last().copied(), Some((3, 3, 3)));
+    assert!(tuples.len() >= 3);
+    assert!(tuples.windows(2).all(|w| w[0].0 <= w[1].0));
+}
+
+#[test]
+fn a_huge_range_is_refused_before_anything_is_allocated() {
+    let e = plan_tiles(&grid(1 << 14, 1 << 9), None).expect_err("too large");
+    assert!(e.to_string().contains("tile range too large"), "{e}");
+    assert!(e.to_string().contains("limit 4194304"), "{e}");
+    // The range, not the world, counts.
+    assert!(plan_tiles(&grid(1 << 14, 1 << 9), Some([0, 0, 9, 9])).is_ok());
+}
+
+#[test]
+fn a_panicking_build_fails_that_tile_only() {
+    let (params, tiles) = synthetic_world();
+    let mut options = opts();
+    options.range = Some([0, 0, 2, 0]);
+    options.panic_tile = Some((1, 0));
+    let (report, warnings) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    assert_eq!(report.built, 2);
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!((report.failed[0].0, report.failed[0].1), (1, 0));
+    assert!(
+        report.failed[0].2.contains("tile build panicked"),
+        "{:?}",
+        report.failed
+    );
+    assert!(warning_names(&warnings).contains(&"navmesh-tile-failed"));
+}
+
+#[test]
+fn the_claim_window_bounds_the_reorder_buffer_and_the_output_is_unchanged() {
+    let (params, tiles) = synthetic_world();
+    let delay = Duration::from_millis(300);
+    // Both servers are slow for the first tile of the plan, whichever fetcher claims it, so the
+    // other fetcher runs ahead until the window stops it.
+    let slow = || Faults::none().slow_tile((0, 0), delay);
+    let a = FakeServer::start(params.clone(), tiles.clone(), slow());
+    let b = FakeServer::start(params.clone(), tiles.clone(), slow());
+    let hosts = vec![
+        Host::parse(&a.addr().to_string()).expect("host"),
+        Host::parse(&b.addr().to_string()).expect("host"),
+    ];
+    let mut options = opts();
+    options.range = Some([0, 0, 1, 1]);
+    let (reference, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    options.retry = quick_retry();
+    options.connections = Some(2);
+    options.window = Some(2);
+    let (report, _) = run(Source::Servers(hosts), &options);
+    assert_eq!(report.window, 2);
+    assert!(report.peak_pending <= 2, "peak {}", report.peak_pending);
+    assert_eq!(report.built, 4);
+    assert_eq!(bytes_of(&report.set), bytes_of(&reference.set));
 }

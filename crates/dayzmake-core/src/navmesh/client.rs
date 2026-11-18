@@ -251,6 +251,16 @@ impl Client {
         })
     }
 
+    /// A client that has not connected yet: the first request connects, and a failed connect is
+    /// retried like any other network-class failure of [`Client::tile`].
+    pub(crate) fn lazy(host: &Host, policy: &RetryPolicy) -> Self {
+        Self {
+            host: host.clone(),
+            policy: policy.clone(),
+            stream: None,
+        }
+    }
+
     /// Requests the world params. One attempt, no retry.
     ///
     /// # Errors
@@ -379,6 +389,28 @@ mod tests {
         let out = read_chunked(&mut Cursor::new(&data), data.len()).expect("ok");
         assert_eq!(out.len(), data.len());
         assert!(read_chunked(&mut Cursor::new(&data), data.len() + 1).is_err());
+    }
+
+    #[test]
+    fn lazy_client_retries_the_first_connect() {
+        // A closed port: every connect is refused. With attempts 3 the client sleeps
+        // `delay_unit * 1` and `delay_unit * 2` between them, a lower bound on the time taken.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            l.local_addr().expect("addr").port()
+        };
+        let policy = RetryPolicy {
+            attempts: 3,
+            delay_unit: Duration::from_millis(30),
+            ..RetryPolicy::default()
+        };
+        let host = Host::parse(&format!("127.0.0.1:{port}")).expect("host");
+        let mut client = Client::lazy(&host, &policy);
+        let world = WorldParams::default();
+        let started = Instant::now();
+        let e = client.tile(0, 0, &world).expect_err("refused");
+        assert!(matches!(e, FetchError::Network(_)), "{e}");
+        assert!(started.elapsed() >= Duration::from_millis(90));
     }
 
     #[test]

@@ -54,6 +54,7 @@ pub enum Fault {
 pub struct Faults {
     script: Vec<Fault>,
     then: Fault,
+    slow: Option<((i32, i32), std::time::Duration)>,
 }
 
 impl Faults {
@@ -67,6 +68,7 @@ impl Faults {
         Self {
             script: Vec::new(),
             then: fault,
+            slow: None,
         }
     }
 
@@ -75,7 +77,14 @@ impl Faults {
         Self {
             script: script.to_vec(),
             then: Fault::None,
+            slow: None,
         }
+    }
+
+    /// Answers requests for tile `(x, z)` only after `delay` (a slow peer), whatever the other faults.
+    pub fn slow_tile(mut self, tile: (i32, i32), delay: std::time::Duration) -> Self {
+        self.slow = Some((tile, delay));
+        self
     }
 
     fn at(&self, index: usize) -> Fault {
@@ -239,6 +248,12 @@ fn serve(s: &mut TcpStream, shared: &Shared) -> io::Result<()> {
                     requests.push((x, z));
                     requests.len() - 1
                 };
+                if let Some((tile, delay)) = shared.faults.slow
+                    && tile == (x, z)
+                {
+                    // Pacing a slow fake peer, not waiting for state.
+                    thread::sleep(delay);
+                }
                 if !answer(s, shared, shared.faults.at(index), x, z)? {
                     return Ok(());
                 }
