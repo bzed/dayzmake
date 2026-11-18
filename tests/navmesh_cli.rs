@@ -454,3 +454,33 @@ fn generate_record_in_a_missing_directory_fails() {
     assert!(out.stderr.contains("cannot create"), "{}", out.stderr);
     assert!(!nm.exists());
 }
+
+#[test]
+fn generate_negative_or_huge_counts_are_errors() {
+    let env = Env::new();
+    let cap = env.capture();
+    let nm = env.path("out.nm");
+    for (option, value, message) in [
+        ("--threads", "-1", "must not be negative"),
+        ("--connections", "-5", "must not be negative"),
+        ("--threads", "1000000", "at most 256"),
+        ("--connections", "1000000", "at most 256"),
+    ] {
+        let out = env.run(&[
+            "navmesh",
+            "generate",
+            "--capture",
+            s(&cap),
+            option,
+            value,
+            s(&nm),
+        ]);
+        assert_eq!(out.code, 1, "{option} {value}: {}", out.stdout);
+        assert!(
+            out.stderr.contains(message),
+            "{option} {value}: {}",
+            out.stderr
+        );
+        assert!(!nm.exists());
+    }
+}

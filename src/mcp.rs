@@ -841,12 +841,12 @@ fn tools() -> Value {
                 (
                     "threads",
                     'i',
-                    "Builder threads (default: cores - 1, at least 1)."
+                    "Builder threads, 1 to 256; 0 or absent: cores - 1, at least 1."
                 ),
                 (
                     "connections",
                     'i',
-                    "Connections to the data servers (default: one per server)."
+                    "Connections to the data servers, 1 to 256; 0 or absent: one per server."
                 ),
                 (
                     "sea_level",
@@ -869,7 +869,7 @@ fn tools() -> Value {
                     'b',
                     "Do not flag polygons that the seed cannot reach."
                 ),
-                FORCE_ARG,
+                ("force", 'b', "Overwrite existing target and record files."),
             ],
             &["target"],
         ),
@@ -995,7 +995,8 @@ fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
                 opt_str(args, "tile")?.as_deref(),
                 bool_arg(args, "json")?,
                 &mut out,
-            )?;
+            )
+            .map_err(|e| error!("{}", navmesh::mcp_wording(&e.to_string())))?;
             Ok(String::from_utf8_lossy(&out).into_owned())
         }
         "navmesh_info" => {
@@ -1327,9 +1328,30 @@ fn navmesh_generate(args: &Args, warnings: &mut dyn WarningSink) -> Result<Strin
     let summary = String::from_utf8_lossy(&out).into_owned();
     match result {
         Ok(()) => Ok(summary),
-        Err(e) if summary.is_empty() => Err(e),
-        Err(e) => Err(error!("{summary}failed: {e}")),
+        Err(e) if summary.is_empty() => Err(error!("{}", navmesh::mcp_wording(&e.to_string()))),
+        Err(e) => {
+            let text = mcp_continue_line(&summary, &generate_args, &target);
+            Err(error!(
+                "{text}failed: {}",
+                navmesh::mcp_wording(&e.to_string())
+            ))
+        }
     }
+}
+
+/// A partial run's summary with the CLI's `to continue: dayzmake ...` line replaced by the arguments of the
+/// `navmesh_generate` call that continues it.
+fn mcp_continue_line(summary: &str, args: &GenerateArgs, target: &Path) -> String {
+    let mut text = String::new();
+    for line in summary.lines() {
+        if line.starts_with("to continue: ") {
+            text.push_str(&navmesh::resume_args(args, target));
+        } else {
+            text.push_str(line);
+        }
+        text.push('\n');
+    }
+    text
 }
 
 /// `pbo_pack` and `pbo_build`: like the CLI commands, including signing with `key`.
@@ -1431,6 +1453,23 @@ mod tests {
                 .unwrap_or(text.len());
         }
         assert_eq!(out, text);
+    }
+
+    #[test]
+    fn the_cli_continue_line_becomes_mcp_arguments() {
+        let args = GenerateArgs {
+            capture: Some("w.dzgeo".into()),
+            ..GenerateArgs::default()
+        };
+        let text = mcp_continue_line(
+            "stopped: built 1 tiles\nwrote o.nm\nto continue: dayzmake navmesh generate -f o.nm\n",
+            &args,
+            Path::new("o.nm"),
+        );
+        assert_eq!(
+            text,
+            "stopped: built 1 tiles\nwrote o.nm\nto continue with navmesh_generate: target=o.nm, base=o.nm, skip_existing=true, force=true, capture=w.dzgeo\n"
+        );
     }
 
     #[test]

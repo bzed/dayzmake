@@ -31,7 +31,7 @@ is maintained here.
 
 ### Unreleased
 
-- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`.
+- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default).
 
 ### 3.1.0
 
@@ -469,8 +469,8 @@ Options:
     --base <nm>                 navmesh generate: patch the new tiles into this existing mesh.
     --skip-existing             navmesh generate: leave out the tiles that --base already has.
     --checkpoint <n>            navmesh generate: save the target after every n finished tiles (0: off).
-    --threads <n>               navmesh generate: builder threads (default: cores - 1, at least 1).
-    --connections <n>           navmesh generate: connections to the data servers (default: one per server).
+    --threads <n>               navmesh generate: builder threads, at most 256 (default: cores - 1, at least 1).
+    --connections <n>           navmesh generate: connections to the data servers, at most 256 (default: one per server).
     --sea-level <m>             navmesh generate: sea level in metres instead of the server's deep sea height.
     --doors <state>             navmesh generate: door state baked into the mesh: closed (default), open or enabled.
     --no-links                  navmesh generate: no jump, climb or ladder links.

@@ -1578,7 +1578,7 @@ mod navmesh {
     }
 
     #[test]
-    fn mcp_navmesh_generate_failed_run_is_an_error_with_the_summary() {
+    fn mcp_navmesh_generate_unreachable_server_is_an_error() {
         let tmp = tempfile::tempdir().expect("tmp");
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .expect("bind")
@@ -1600,6 +1600,116 @@ mod navmesh {
             "{}",
             text(&r.replies[0])
         );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_failed_tile_is_an_error_with_summary_and_saved_mesh() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (params, mut tiles) = synthetic_world();
+        tiles
+            .iter_mut()
+            .find(|t| (t.x, t.z) == (2, 0))
+            .expect("tile")
+            .cell_class = 99;
+        let cap = tmp.path().join("bad.dzgeo");
+        let mut writer = CaptureWriter::new(fs::File::create(&cap).expect("create"), &params)
+            .expect("capture header");
+        for tile in &tiles {
+            writer.add(tile).expect("capture tile");
+        }
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "part.nm", "threads": 2, "record": "rec.dzgeo"}),
+                ),
+                call(
+                    2,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "record": "rec.dzgeo", "sea_level": "x"}),
+                ),
+            ],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        let t = text(&r.replies[0]);
+        assert!(t.contains("built 8 tiles, 0 empty, 1 failed"), "{t}");
+        assert!(t.contains("wrote part.nm"), "{t}");
+        // failed tiles would fail again, so (as in the CLI) there is nothing to continue
+        assert!(!t.contains("to continue"), "{t}");
+        assert!(t.contains("failed: 1 tiles could not be built"), "{t}");
+        assert!(tmp.path().join("part.nm").is_file());
+        // MCP wording: argument names, and force instead of --force
+        let t = text(&r.replies[1]);
+        assert!(t.contains("sea_level: ") && !t.contains("--"), "{t}");
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_existing_record_says_force() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        fs::write(tmp.path().join("rec.dzgeo"), b"keep").expect("write");
+        let r = run(
+            &[call(
+                1,
+                "navmesh_generate",
+                &json!({"capture": s(&cap), "target": "o.nm", "record": "rec.dzgeo"}),
+            )],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("Pass force to overwrite")
+                && !text(&r.replies[0]).contains("--"),
+            "{}",
+            text(&r.replies[0])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_huge_or_negative_counts_are_errors() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "threads": 100_000_000}),
+                ),
+                call(
+                    2,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "connections": "100000000"}),
+                ),
+                call(
+                    3,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "threads": -1}),
+                ),
+            ],
+            tmp.path(),
+        );
+        for reply in &r.replies {
+            assert!(is_error(reply), "{}", text(reply));
+        }
+        assert!(
+            text(&r.replies[0]).contains("threads: at most 256"),
+            "{}",
+            text(&r.replies[0])
+        );
+        assert!(
+            text(&r.replies[1]).contains("connections: at most 256"),
+            "{}",
+            text(&r.replies[1])
+        );
+        assert!(
+            text(&r.replies[2]).contains("non-negative integer"),
+            "{}",
+            text(&r.replies[2])
+        );
+        assert!(!tmp.path().join("o.nm").exists());
     }
 
     #[test]

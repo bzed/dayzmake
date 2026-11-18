@@ -249,6 +249,25 @@ fn skip_existing_needs_base() {
 }
 
 #[test]
+fn absurd_thread_and_connection_counts_are_refused_quickly() {
+    let (params, tiles) = synthetic_world();
+    for (threads, connections) in [(Some(1_000_000), None), (None, Some(1_000_000))] {
+        let mut options = opts();
+        options.threads = threads;
+        options.connections = connections;
+        let (result, _, _) =
+            generate_watched(Source::Capture(capture_of(&params, &tiles)), &options);
+        let e = result.expect_err("too many workers");
+        let text = e.to_string();
+        assert!(
+            text.contains("at most 256")
+                && (text.contains("threads") || text.contains("connections")),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn failed_tile_reported_and_run_continues() {
     let (params, mut tiles) = synthetic_world();
     let bad = tiles

@@ -337,13 +337,14 @@ pub struct GenerateArgs {
     pub seed: Option<String>,
 }
 
-/// A count option: whole number, negative values count as 0 (the default).
+/// A count option: a whole number that is not negative; 0 is `None` (the default, or off for `--checkpoint`).
 fn parse_count(text: &str, what: &str) -> Result<Option<usize>, Error> {
     let n: i64 = text
         .trim()
         .parse()
         .map_err(|_| error!("{what}: \"{text}\" is not a whole number"))?;
-    Ok(usize::try_from(n).ok().filter(|n| *n > 0))
+    let n = usize::try_from(n).map_err(|_| error!("{what}: \"{text}\" must not be negative"))?;
+    Ok(Some(n).filter(|n| *n > 0))
 }
 
 fn load_base(path: &str) -> Result<NavMeshSet, Error> {
@@ -536,6 +537,72 @@ fn resume_hint(args: &GenerateArgs, target: &Path) -> String {
     }
     let _ = write!(hint, " {t}");
     hint
+}
+
+/// The MCP form of `resume_hint`: the arguments of the `navmesh_generate` call that continues a partial run.
+#[must_use]
+pub fn resume_args(args: &GenerateArgs, target: &Path) -> String {
+    let t = target.display();
+    let mut parts = vec![
+        format!("target={t}"),
+        format!("base={t}"),
+        "skip_existing=true".to_owned(),
+        "force=true".to_owned(),
+    ];
+    let texts = [
+        ("capture", &args.capture),
+        ("range", &args.range),
+        ("checkpoint", &args.checkpoint),
+        ("threads", &args.threads),
+        ("connections", &args.connections),
+        ("sea_level", &args.sea_level),
+        ("doors", &args.doors),
+        ("seed", &args.seed),
+    ];
+    for (name, value) in texts {
+        if name == "range" && !args.servers.is_empty() {
+            parts.push(format!("server=[{}]", args.servers.join(", ")));
+        }
+        if let Some(value) = value {
+            parts.push(format!("{name}={value}"));
+        }
+    }
+    for (given, name) in [
+        (args.no_links, "no_links"),
+        (args.no_island_filter, "no_island_filter"),
+    ] {
+        if given {
+            parts.push(format!("{name}=true"));
+        }
+    }
+    format!("to continue with navmesh_generate: {}", parts.join(", "))
+}
+
+/// A CLI message in the words of the MCP tools: `--sea-level` is `sea_level`, "Use --force" is "Pass force".
+#[must_use]
+pub fn mcp_wording(message: &str) -> String {
+    let mut text = message.replace("Use --force", "Pass force");
+    for name in [
+        "--skip-existing",
+        "--no-island-filter",
+        "--no-links",
+        "--sea-level",
+        "--connections",
+        "--checkpoint",
+        "--threads",
+        "--capture",
+        "--server",
+        "--record",
+        "--range",
+        "--doors",
+        "--force",
+        "--base",
+        "--seed",
+        "--tile",
+    ] {
+        text = text.replace(name, &name.trim_start_matches('-').replace('-', "_"));
+    }
+    text
 }
 
 fn write_summary(report: &GenerateReport, out: &mut dyn Write) -> Result<(), Error> {
@@ -822,6 +889,36 @@ mod tests {
         assert_eq!(shell_word("it's"), "'it'\\''s'");
         assert_eq!(shell_word("a;b$c"), "'a;b$c'");
         assert_eq!(shell_word(""), "''");
+    }
+
+    #[test]
+    fn resume_args_repeat_every_option_but_record_and_base() {
+        let args = GenerateArgs {
+            servers: vec!["10.0.0.1".into(), "10.0.0.2:40000".into()],
+            record: Some("first.dzgeo".into()),
+            range: Some("0,0,9,9".into()),
+            base: Some("old.nm".into()),
+            threads: Some("4".into()),
+            no_links: true,
+            ..GenerateArgs::default()
+        };
+        assert_eq!(
+            resume_args(&args, Path::new("o.nm")),
+            "to continue with navmesh_generate: target=o.nm, base=o.nm, skip_existing=true, force=true, \
+             server=[10.0.0.1, 10.0.0.2:40000], range=0,0,9,9, threads=4, no_links=true"
+        );
+    }
+
+    #[test]
+    fn mcp_wording_names_arguments() {
+        assert_eq!(
+            mcp_wording("--sea-level: \"x\" is not a finite number; --skip-existing needs --base"),
+            "sea_level: \"x\" is not a finite number; skip_existing needs base"
+        );
+        assert_eq!(
+            mcp_wording("Target file \"a\" already exists. Use --force to overwrite."),
+            "Target file \"a\" already exists. Pass force to overwrite."
+        );
     }
 
     #[test]

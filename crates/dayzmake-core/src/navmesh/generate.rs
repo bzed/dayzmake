@@ -72,6 +72,10 @@ pub enum Source {
     Capture(Capture),
 }
 
+/// The most builder threads or connections [`generate`] accepts; more is an error (each is an operating
+/// system thread, and the channels are sized by them).
+pub const MAX_WORKERS: usize = 256;
+
 /// Options of [`generate`].
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -91,9 +95,9 @@ pub struct GenerateOptions {
     /// order, so the capture is deterministic, and a crash loses the tiles that were fetched but not
     /// yet applied.
     pub record: Option<PathBuf>,
-    /// The number of builder threads; `None`: the cores minus one, at least 1.
+    /// The number of builder threads, at most [`MAX_WORKERS`]; `None`: the cores minus one, at least 1.
     pub threads: Option<usize>,
-    /// The number of connections (fetcher threads); `None`: one per host (1 for a capture).
+    /// The number of connections (fetcher threads), at most [`MAX_WORKERS`]; `None`: one per host (1 for a capture).
     pub connections: Option<usize>,
     /// The island filter seed; `None`: the world's `seedPosition`.
     pub seed: Option<[f32; 3]>,
@@ -695,6 +699,17 @@ fn open_recorder(path: &Path, params: &WorldParams) -> io::Result<CaptureWriter<
     CaptureWriter::new(file, params).prepend_error("cannot write the capture")
 }
 
+/// Refuses more than [`MAX_WORKERS`] builder threads or connections, before anything is allocated or spawned.
+fn check_worker_counts(options: &GenerateOptions) -> io::Result<()> {
+    if options.threads.is_some_and(|n| n > MAX_WORKERS) {
+        return Err(error!("threads: at most {MAX_WORKERS} builder threads"));
+    }
+    if options.connections.is_some_and(|n| n > MAX_WORKERS) {
+        return Err(error!("connections: at most {MAX_WORKERS} connections"));
+    }
+    Ok(())
+}
+
 /// Generates a navmesh from `source`.
 ///
 /// The steps are those of the spec's section 2.3: world params, the target mesh (from `base` or a
@@ -707,7 +722,8 @@ fn open_recorder(path: &Path, params: &WorldParams) -> io::Result<CaptureWriter<
 ///
 /// # Errors
 ///
-/// "--skip-existing needs --base"; "empty tile range"; an unusable base or world grid; a world
+/// "--skip-existing needs --base"; `threads` or `connections` above [`MAX_WORKERS`] (checked before anything
+/// is allocated or spawned); "empty tile range"; an unusable base or world grid; a world
 /// params request that fails; "tile range too large"; a capture file that cannot be created.
 #[expect(
     clippy::needless_pass_by_value,
@@ -720,6 +736,7 @@ pub fn generate(
     warnings: &mut dyn WarningSink,
 ) -> io::Result<GenerateReport> {
     let start = Instant::now();
+    check_worker_counts(options)?;
     if options.skip_existing && options.base.is_none() {
         return Err(error!("--skip-existing needs --base"));
     }

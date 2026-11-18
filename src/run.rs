@@ -131,8 +131,8 @@ Options:
     --base <nm>                 navmesh generate: patch the new tiles into this existing mesh.
     --skip-existing             navmesh generate: leave out the tiles that --base already has.
     --checkpoint <n>            navmesh generate: save the target after every n finished tiles (0: off).
-    --threads <n>               navmesh generate: builder threads (default: cores - 1, at least 1).
-    --connections <n>           navmesh generate: connections to the data servers (default: one per server).
+    --threads <n>               navmesh generate: builder threads, at most 256 (default: cores - 1, at least 1).
+    --connections <n>           navmesh generate: connections to the data servers, at most 256 (default: one per server).
     --sea-level <m>             navmesh generate: sea level in metres instead of the server's deep sea height.
     --doors <state>             navmesh generate: door state baked into the mesh: closed (default), open or enabled.
     --no-links                  navmesh generate: no jump, climb or ladder links.

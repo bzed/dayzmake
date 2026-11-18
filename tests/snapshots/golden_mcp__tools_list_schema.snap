@@ -994,7 +994,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "integer"
         },
         "connections": {
-          "description": "Connections to the data servers (default: one per server).",
+          "description": "Connections to the data servers, 1 to 256; 0 or absent: one per server.",
           "minimum": 0,
           "type": "integer"
         },
@@ -1003,7 +1003,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "string"
         },
         "force": {
-          "description": "Overwrite existing target files.",
+          "description": "Overwrite existing target and record files.",
           "type": "boolean"
         },
         "no_island_filter": {
@@ -1046,7 +1046,7 @@ expression: "r.result(2)[\"tools\"]"
           "type": "string"
         },
         "threads": {
-          "description": "Builder threads (default: cores - 1, at least 1).",
+          "description": "Builder threads, 1 to 256; 0 or absent: cores - 1, at least 1.",
           "minimum": 0,
           "type": "integer"
         }

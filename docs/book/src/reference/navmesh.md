@@ -119,8 +119,8 @@ dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--
 | `--base <nm>` | none | Start from this navmesh: its grid is kept, and the new tiles replace the tiles of their cells. |
 | `--skip-existing` | off | Leave out the tiles that `--base` already has. Needs `--base` (`--skip-existing needs --base`). |
 | `--checkpoint <n>` | 0 (off) | Write the target after every `n` finished tiles (built, empty or failed). A checkpoint that cannot be written stops the run, which is then a failure (see below). |
-| `--threads <n>` | cores - 1, at least 1 | Builder threads. 0 and negative numbers mean the default. |
-| `--connections <n>` | one per server (1 for a capture) | Connections to the servers. |
+| `--threads <n>` | cores - 1, at least 1 | Builder threads, at most 256. 0 means the default; a negative number is an error. |
+| `--connections <n>` | one per server (1 for a capture) | Connections to the servers, at most 256. 0 means the default; a negative number is an error. |
 | `--sea-level <m>` | the server's deep sea height | The sea level in metres. |
 | `--doors <state>` | `closed` | The state of the doors baked into the mesh. `closed`: the polygons of open doors are disabled, those of closed doors are not. `open`: the other way round. `enabled`: no door polygon is disabled. |
 | `--no-links` | links on | Leave out jump, climb and ladder links. |
