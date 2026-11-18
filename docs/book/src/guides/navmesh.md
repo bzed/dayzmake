@@ -256,6 +256,12 @@ A capture holds the geometry of a whole world, so it is large; keep it with your
   almost exactly the maximum slope can then be classified differently, and the file differs in a few polygons.
   The approximate instruction itself can also give different results on Intel and AMD CPUs, so two x86 machines
   can differ in such a polygon too. All of them are valid meshes.
+- Objects with moving parts (for example the top of a tall tower that turns slowly) are sent in the pose they have
+  when the tile is requested, so the same object has a different pose in each tile, and in a mesh that
+  shipped with the game it had yet another one. The tiles around such an object can differ in a few polygons and in
+  the height bound in their header (`bmax` y); this is a property of the data, and the mesh is valid. The same goes for
+  the order of several door objects in one tile, which the game does not always send in the same order, and which
+  decides which of two overlapping door footprints a cell belongs to.
 - The generator never modifies the game, the server or your mod: it only reads from the data server and writes
   the files you name.
 - Warnings are explained in [Warnings](../reference/warnings.md): `navmesh-tile-failed`, `navmesh-stray-part` and
