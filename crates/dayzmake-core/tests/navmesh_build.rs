@@ -294,3 +294,35 @@ fn build_is_deterministic() {
     let b = built(build_tile(&p, input, &BuildOptions::default()).unwrap()).0;
     assert_eq!(a.to_bytes(), b.to_bytes());
 }
+
+/// A tile whose terrain group is `layers` full-tile horizontal surfaces, 0.2 m apart.
+fn stacked_tile(layers: usize) -> TileInput {
+    let mut input = flat_tile(0.0);
+    let one = terrain([0.0, 0.0], [50.0, 50.0]);
+    let mut verts = Vec::new();
+    for k in 0..layers {
+        #[expect(clippy::cast_precision_loss, reason = "small test index")]
+        let y = k as f32 * 0.2;
+        verts.extend(one.iter().map(|v| [v[0], y, v[2]]));
+    }
+    if let Some(g) = input.groups.first_mut() {
+        g.verts = verts;
+    }
+    input
+}
+
+/// Hostile input: stacked surfaces must hit the span budget and fail the tile, not allocate without
+/// bound. The real budget is 2^26 spans (512 MB), too big for a test, so a small one proves the
+/// refusal; the heightfield counts spans exactly like it does for the real limit.
+#[test]
+fn stacked_surfaces_exceed_the_span_budget() {
+    use dayzmake_core::navmesh::internals::build_tile_with_span_limit;
+    let p = world_params();
+    let input = stacked_tile(100);
+    let e = build_tile_with_span_limit(&p, &input, &BuildOptions::default(), 50_000).unwrap_err();
+    let msg = e.to_string();
+    assert!(msg.contains("too many spans ("), "{msg}");
+    assert!(msg.contains("limit 50000)"), "{msg}");
+    // The same input within a generous budget still builds (or is empty), proving the limit is the cause.
+    assert!(build_tile_with_span_limit(&p, &input, &BuildOptions::default(), 50_000_000).is_ok());
+}

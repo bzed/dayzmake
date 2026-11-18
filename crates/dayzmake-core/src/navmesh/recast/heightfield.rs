@@ -80,6 +80,12 @@ pub struct Heightfield {
     /// Cell height (y).
     pub ch: f32,
     columns: Vec<Vec<Span>>,
+    /// Spans added so far (merged spans are subtracted).
+    span_count: usize,
+    /// The most spans [`Self::add_span`] accepts; a span past it is refused.
+    span_limit: usize,
+    /// Spans refused for the limit (so the total that was wanted is reported).
+    refused: usize,
 }
 
 impl Heightfield {
@@ -117,7 +123,38 @@ impl Heightfield {
             cs,
             ch,
             columns: vec![Vec::new(); n],
+            span_count: 0,
+            span_limit: usize::MAX,
+            refused: 0,
         })
+    }
+
+    /// Sets the span budget: once the heightfield holds `limit` spans, [`Self::add_span`] refuses
+    /// further ones and [`Self::check_span_budget`] fails.
+    pub fn set_span_limit(&mut self, limit: usize) {
+        self.span_limit = limit;
+    }
+
+    /// The number of spans added through [`Self::add_span`] (after merging).
+    #[must_use]
+    pub fn span_count(&self) -> usize {
+        self.span_count
+    }
+
+    /// Fails when [`Self::add_span`] had to refuse a span for the budget. Deterministic: the
+    /// tile fails, nothing is silently truncated.
+    ///
+    /// # Errors
+    /// Returns "too many spans (N, limit L)" when the budget was exceeded.
+    pub fn check_span_budget(&self) -> io::Result<()> {
+        if self.refused == 0 {
+            return Ok(());
+        }
+        Err(error!(
+            "too many spans ({}, limit {})",
+            self.span_count.saturating_add(self.refused),
+            self.span_limit
+        ))
     }
 
     fn index(&self, x: i32, z: i32) -> Option<usize> {
@@ -167,9 +204,19 @@ impl Heightfield {
         area: u8,
         flag_merge_threshold: i32,
     ) {
-        let Some(column) = self.column_mut(x, z) else {
+        if self.span_count >= self.span_limit {
+            if self.index(x, z).is_some() {
+                self.refused = self.refused.saturating_add(1);
+            }
+            return;
+        }
+        let Some(i) = self.index(x, z) else {
             return;
         };
+        let Some(column) = self.columns.get_mut(i) else {
+            return;
+        };
+        let before = column.len();
         let mut new = Span::new(store13(smin), store13(smax), area);
         let mut i = 0;
         while let Some(&cur) = column.get(i) {
@@ -188,5 +235,7 @@ impl Heightfield {
             column.remove(i);
         }
         column.insert(i, new);
+        let after = column.len();
+        self.span_count = self.span_count.saturating_sub(before).saturating_add(after);
     }
 }

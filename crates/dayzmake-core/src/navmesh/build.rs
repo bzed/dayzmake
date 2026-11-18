@@ -188,6 +188,10 @@ struct ExtraPart {
     polys: Vec<u32>,
 }
 
+/// The most spans one tile heightfield may hold (hostile input: stacked surfaces could otherwise
+/// need gigabytes). Past it the tile fails.
+pub const MAX_SPANS: usize = 1 << 26;
+
 const SEA_FLOOR: f32 = -500.0;
 const NULL_AREA: u8 = 0;
 /// The terrain area: groups with it are skipped in step 3 (group 0 was rasterised in step 1).
@@ -498,6 +502,23 @@ pub fn build_tile(
     input: &TileInput,
     options: &BuildOptions,
 ) -> io::Result<TileOutcome> {
+    build_tile_with_span_limit(world, input, options, MAX_SPANS)
+}
+
+/// [`build_tile`] with an explicit span budget (tests use a small one to prove the refusal without
+/// allocating the real limit).
+///
+/// # Errors
+///
+/// As [`build_tile`], plus "too many spans (N, limit L)" when the rasterised heightfield needs
+/// more than `span_limit` spans.
+#[doc(hidden)]
+pub fn build_tile_with_span_limit(
+    world: &WorldParams,
+    input: &TileInput,
+    options: &BuildOptions,
+    span_limit: usize,
+) -> io::Result<TileOutcome> {
     let class = usize::try_from(input.cell_class)
         .ok()
         .and_then(|i| world.cell_classes.get(i))
@@ -523,6 +544,7 @@ pub fn build_tile(
     let pbmax = [input.bmax[0] + pad, input.bmax[1], input.bmax[2] + pad];
     let mut hf = Heightfield::new(cfg.width, cfg.width, pbmin, pbmax, cfg.cs, cfg.ch)
         .map_err(|e| error!("could not create solid heightfield: {e}"))?;
+    hf.set_span_limit(span_limit);
 
     // 5.4 step 1: terrain.
     if let Some(g) = input.groups.first()
@@ -534,10 +556,12 @@ pub fn build_tile(
         };
         raster_triangles(&mut hf, &g.verts, &p, Some(cfg.slope_threshold));
     }
+    hf.check_span_budget()?;
     // Step 2: mode filter (it only runs for a border above 10).
     mode_filter(&mut hf, cfg.border_size);
     // Step 3: objects.
     let ladders = rasterize_objects(&mut hf, input, &cfg, obstacles_on);
+    hf.check_span_budget()?;
     // Step 4: span filters.
     filter_low_height_multi(
         &mut hf,

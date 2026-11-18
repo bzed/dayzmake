@@ -1,5 +1,6 @@
 //! Pipeline stages for tests and experiments; not part of the stable API; may change in any release.
 
+pub use super::build::build_tile_with_span_limit;
 pub use super::dayz::areas::{dilate_area, extract_tree_obstacles, remap_and_roof};
 pub use super::dayz::filters::{filter_low_height_multi, mode_filter};
 pub use super::dayz::slope::{rsqrt_approx, walkable};
