@@ -189,9 +189,20 @@ struct ExtraPart {
 
 const SEA_FLOOR: f32 = -500.0;
 const NULL_AREA: u8 = 0;
-/// Areas that are not rasterised as walkable objects any more (spec 5.4 step 3).
+/// The terrain area: groups with it are skipped in step 3 (group 0 was rasterised in step 1).
 const TERRAIN_AREA: u32 = 1;
 const LADDER_AREA: u32 = 15;
+
+/// The low byte of an area id (the extras list stores the area "as a byte").
+fn low_byte(area: u32) -> u8 {
+    u8::try_from(area & 0xff).unwrap_or_default()
+}
+
+/// A part id as the 16-bit span field holds it: wrapping like C's `(unsigned short)counter++`
+/// (ruling R11), so 65536 parts wrap to 0 instead of saturating.
+fn part_id(counter: usize) -> u16 {
+    u16::try_from(counter & 0xffff).unwrap_or_default()
+}
 
 fn area_u8(area: u32) -> Option<u8> {
     u8::try_from(area).ok().filter(|a| *a < 64)
@@ -215,7 +226,7 @@ fn extras_list(input: &TileInput, doors: DoorPolicy) -> (Vec<ExtraPart>, usize) 
             extras.push(ExtraPart {
                 object_id: p.object_id,
                 part_index: p.part_index,
-                area: u8::try_from(g.area & 0xff).unwrap_or(0),
+                area: low_byte(g.area),
                 state,
                 polys: Vec::new(),
             });
@@ -308,7 +319,7 @@ fn rasterize_objects<'a>(
                 for k in 0..g.parts.len() {
                     if obstacles {
                         params.mode = RasterMode::Tree;
-                        params.sub_area = u16::try_from(k).unwrap_or(u16::MAX);
+                        params.sub_area = part_id(k);
                     } else {
                         params.mode = RasterMode::Add;
                         params.area = NULL_AREA;
@@ -333,7 +344,7 @@ fn rasterize_objects<'a>(
                     continue;
                 }
                 for k in 0..g.parts.len() {
-                    params.sub_area = u16::try_from(part_counter).unwrap_or(u16::MAX);
+                    params.sub_area = part_id(part_counter);
                     part_counter = part_counter.saturating_add(1);
                     rasterize_part(hf, &part_triangles(input, gi, k), &params);
                 }

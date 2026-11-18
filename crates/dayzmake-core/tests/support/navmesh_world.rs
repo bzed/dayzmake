@@ -11,14 +11,6 @@
     dead_code,
     reason = "shared by several test crates; not all of them use every helper"
 )]
-#![allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::indexing_slicing,
-    clippy::manual_midpoint,
-    reason = "fixture arithmetic on small, known values"
-)]
 
 use dayzmake_core::navmesh::wire::{
     CellClass, LinkClass, TileGroup, TileInput, TilePart, WorldBlock, WorldParams,
@@ -188,10 +180,8 @@ fn prism(cx: f32, cz: f32, y0: f32, y1: f32, radius: f32) -> Vec<V> {
             (cx + radius * a.cos(), cz + radius * a.sin())
         })
         .collect();
-    for i in 0..6 {
-        let (x0, z0) = ring[i];
-        let (x1, z1) = ring[(i + 1) % 6];
-        let mid = [(x0 + x1) * 0.5 - cx, 0.0, (z0 + z1) * 0.5 - cz];
+    for (&(x0, z0), &(x1, z1)) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        let mid = [f32::midpoint(x0, x1) - cx, 0.0, f32::midpoint(z0, z1) - cz];
         quad(
             &mut out,
             [x0, y0, z0],
@@ -244,12 +234,12 @@ fn part(part_index: u32, object_id: u64, first_vertex: usize) -> TilePart {
 /// Terrain covering the tile and 10 m beyond it, on a 2 m grid, in server winding (faces up).
 pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
     let mut out = Vec::new();
-    let nx = ((tmax[0] - tmin[0] + 20.0) / 2.0).round() as usize;
-    let nz = ((tmax[1] - tmin[1] + 20.0) / 2.0).round() as usize;
-    for iz in 0..nz {
-        for ix in 0..nx {
-            let x0 = tmin[0] - 10.0 + 2.0 * ix as f32;
-            let z0 = tmin[1] - 10.0 + 2.0 * iz as f32;
+    // Tiles are 50 m wide: 10 m on each side makes 70 m, 35 cells of 2 m.
+    assert!(f32::midpoint(tmax[0] - tmin[0], 20.0) - 35.0 < f32::EPSILON * 64.0);
+    for iz in 0..35_u8 {
+        for ix in 0..35_u8 {
+            let x0 = tmin[0] - 10.0 + 2.0 * f32::from(ix);
+            let z0 = tmin[1] - 10.0 + 2.0 * f32::from(iz);
             let (x1, z1) = (x0 + 2.0, z0 + 2.0);
             let c = |x: f32, z: f32| -> V { [x, ground(x, z), z] };
             quad(
@@ -267,7 +257,8 @@ pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
 
 /// The input of tile `(x, z)`.
 pub fn tile_input(x: i32, z: i32) -> TileInput {
-    let tmin = [x as f32 * 50.0, z as f32 * 50.0];
+    let coord = |c: i32| f32::from(i16::try_from(c).unwrap_or(0)) * 50.0;
+    let tmin = [coord(x), coord(z)];
     let tmax = [tmin[0] + 50.0, tmin[1] + 50.0];
     let mut groups = vec![group(1, terrain(tmin, tmax))];
 
@@ -346,9 +337,11 @@ pub fn tile_input(x: i32, z: i32) -> TileInput {
     {
         if near(tmin, tmax, [tx, tz], [tx, tz]) {
             let y = ground(tx, tz);
-            trees
-                .parts
-                .push(part(0, 0x100 + i as u64, trees.verts.len()));
+            trees.parts.push(part(
+                0,
+                0x100 + u64::try_from(i).unwrap_or(0),
+                trees.verts.len(),
+            ));
             trees.verts.extend(prism(tx, tz, y, y + 6.0, 0.35));
         }
     }

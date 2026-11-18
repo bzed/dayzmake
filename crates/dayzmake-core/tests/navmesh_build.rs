@@ -167,20 +167,91 @@ fn synthetic_world_every_tile_builds() {
     }
     assert!(obstacles_total >= 1, "no tree obstacles");
     let (closed, enabled) = door.unwrap();
-    let extra = closed.extra.as_ref().unwrap();
-    let with_polys: Vec<_> = extra.parts.iter().filter(|p| p.first_poly >= 0).collect();
-    assert!(!with_polys.is_empty(), "no door part has polygons");
-    for part in with_polys {
+    let open = {
+        let mut o = BuildOptions::default();
+        o.doors = DoorPolicy::Open;
+        let input = tiles.iter().find(|t| (t.x, t.z) == (1, 1)).unwrap();
+        built(build_tile(&p, input, &o).unwrap()).0
+    };
+    let mut disabled_seen = false;
+    for (part, polys) in part_polys(&closed) {
+        // The only door part with polygons is the closed door (area 13, part index 1).
+        assert_eq!(part.part_index, 1);
+        for poly in polys {
+            assert_eq!(
+                closed.polys[poly].flags & 2,
+                0,
+                "Closed leaves area 13 enabled"
+            );
+            assert_eq!(enabled.polys[poly].flags & 2, 0, "Enabled disables nothing");
+            let off = open.polys[poly].flags & 2 != 0;
+            assert!(off, "Open disables area 13");
+            disabled_seen |= off;
+        }
+    }
+    assert!(disabled_seen);
+}
+
+/// The parts with polygons and the polygons of each.
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test helper on a tile it just built"
+)]
+fn part_polys(data: &TileData) -> Vec<(dayzmake_core::navmesh::detour::TilePart, Vec<usize>)> {
+    let extra = data.extra.as_ref().unwrap();
+    let mut out = Vec::new();
+    for part in extra.parts.iter().filter(|p| p.first_poly >= 0) {
+        let mut polys = Vec::new();
         let mut next = part.first_poly;
         while next >= 0 {
             let pp = &extra.part_polys[usize::try_from(next).unwrap()];
-            let poly = usize::try_from(pp.poly).unwrap();
-            let open_part = part.part_index == 0;
-            // Closed policy: the open door (area 12) is disabled, the closed door is not.
-            assert_eq!(closed.polys[poly].flags & 2 != 0, open_part);
-            assert_eq!(enabled.polys[poly].flags & 2, 0);
+            polys.push(usize::try_from(pp.poly).unwrap());
             next = pp.next;
         }
+        out.push((part.clone(), polys));
+    }
+    assert!(!out.is_empty(), "no door part has polygons");
+    out
+}
+
+/// A flat tile with one area-12 door part (a box on the ground).
+fn door_tile() -> TileInput {
+    let mut input = flat_tile(10.0);
+    let mut door = TileGroup::default();
+    door.area = 12;
+    let mut dp = TilePart::default();
+    dp.object_id = 3;
+    door.parts = vec![dp];
+    door.verts = navmesh_world::door_box(24.0, 10.0);
+    input.groups.push(door);
+    input
+}
+
+#[test]
+fn door_disabled_flag_follows_the_policy() {
+    let p = world_params();
+    let input = door_tile();
+    let flags_of = |policy: DoorPolicy| {
+        let mut o = BuildOptions::default();
+        o.doors = policy;
+        let data = built(build_tile(&p, &input, &o).unwrap()).0;
+        let parts = part_polys(&data);
+        let (part, polys) = &parts[0];
+        assert_eq!(part.object_id, 3);
+        polys
+            .iter()
+            .map(|i| data.polys[*i].flags)
+            .collect::<Vec<_>>()
+    };
+    let closed = flags_of(DoorPolicy::Closed);
+    assert!(
+        closed.iter().all(|f| f & 2 != 0),
+        "Closed disables area 12: {closed:?}"
+    );
+    for policy in [DoorPolicy::Open, DoorPolicy::Enabled] {
+        let flags = flags_of(policy);
+        assert!(flags.iter().all(|f| f & 2 == 0), "{policy:?}: {flags:?}");
     }
 }
 
@@ -218,7 +289,7 @@ fn stray_part_id_counted_not_crashing() {
 #[test]
 fn build_is_deterministic() {
     let (p, tiles) = synthetic_world();
-    let input = &tiles[0];
+    let input = tiles.iter().find(|t| (t.x, t.z) == (1, 1)).unwrap();
     let a = built(build_tile(&p, input, &BuildOptions::default()).unwrap()).0;
     let b = built(build_tile(&p, input, &BuildOptions::default()).unwrap()).0;
     assert_eq!(a.to_bytes(), b.to_bytes());
