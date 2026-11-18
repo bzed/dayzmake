@@ -1331,7 +1331,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
 14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
-15. **Pass direction `dir` (ruling R13, #116).** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
+15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): `B - A` equals the fused form where R13 was observed, and the "FMA is not needed" remark below is wrong in general.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
     the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
     moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
     power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
@@ -1355,22 +1355,36 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     exact difference, links of a few percent of the tiles had their two end points exchanged against the shipped mesh,
     or a radius that differed in the fourth digit (4 of 121 inner tiles of a Badlands block). Both come from a one ulp difference in `dir`: the reverse merge (6.4) keeps the
     longer of two mirrored spans and keeps the later one when their squared lengths are equal, and `dir.x` and `dir.z`
-    set the end points of every span of the pass. Pass 0 and pass 1 share `dir`, so the two spans of a pair are exact
-    mirrors unless `dir` carries noise; with the fused sums (the product `n*(-h)` is not rounded before the add) the
-    pair mirrors as in the shipped data. What identifies the rule:
+    set the end points of every span of the pass. With `B - A` both passes have the same `dir`, the two spans of a
+    pair are exact mirrors, and the tie rule decides. With the fused sums the passes do not share `dir`, because `n`
+    has the opposite sign and `fma(+-n, -h, B)` rounds differently; the spans then differ by one ulp, as the shipped
+    ones do. What identifies the rule:
     * `(n*(-h) + B) - S0` with rounded products matches the five validation sets of 14.15 less well
       than `B - A` in one of them (it breaks the tile that gave R13);
     * the fused form matches those five sets and the inner tiles of an 11 x 11 block of Badlands tiles that the
-      exact difference missed (16 links in 4 tiles before, 3 links in 1 tile after, see 14.19);
+      exact difference missed (16 links in 4 tiles before, 3 links in 1 tile after);
     * fusing `S0`, `P0`, `P1`, `Ebase`, `dir*t + S0`, the span end points or the emission does not help and breaks tiles
       that matched; only `dir` uses the fused sums.
-    The shipped code probably computes this one expression with FMA while the rest is plain SSE; the data cannot say
-    more.
-19. **Open (#121, #119).** A link whose `pos` equals the shipped one can have a `center_height` one ulp of `bmin.y` away
-    (1.5e-5 where `bmin.y` is 128 to 256, 3.1e-5 from 256): 519 links in 118 Badlands tiles. In the tiles with several
-    affected links the shift has the same sign for all of them, and `float(hsel + 1)*ch + bmin.y` is exact in `f32` for the
-    cases checked, so no reordering or fusing of `float(hsel + 1)*ch + bmin.y - cy` changes it, nor does a lerp for
-    `cy`, nor FMA anywhere in the sample. It looks like a one ulp difference of `bmin.y` as the link code sees it, and
-    the source of that value is not known. After 14.18 the remaining differences in the blocks examined are this and
-    a few links whose span end points are one ulp off in `x`.
-
+    The shipped code probably computes this one expression with FMA while the rest is plain SSE. Evaluating each sum in
+    `f64` and rounding to `f32` gives the same values (they differ from `fmaf` in about one case in 20 million), so
+    the data cannot tell FMA from double intermediates such as a `double h`. Also tried: `fma(n, -h, B) - S0` with
+    `S0` unfused matches the same tiles of the block less well (5 links in 2 tiles against 3 in 1) and breaks one
+    tile of a regression set (14 of 16), which supports the form above.
+19. **Open (#121, #119).** A link whose `pos` equals the shipped one can have a `center_height` one ulp of the edge
+    height away (1.5e-5 where the height is 128 to 256, 3.1e-5 from 256). The first count, 519 links in 118 tiles,
+    includes links whose `rad` also differed, which R16 fixed; the `center_height`-only count is lower (136 links in
+    the examined list of the first comparison). What the data show:
+    * Only the links of one edge are affected, not all links of a tile (tile 176,59 has three affected links and
+      others that match), so `bmin.y` is not the source. `center_height` is `float(hsel + 1)*ch + bmin.y - cy` with
+      `cy = A.y + dir.y*t`, which is `B.y` for the last sample, and `B.y` is the y of a `refine_edge` midline end
+      point; `snap_to_solid` replaces y in `pos`, which is why `pos` cannot show a difference there.
+    * For tile 176,59 the shipped `cy` is one ulp below ours. Our midline end point is
+      `e1 + (max_pt - e1)*0.5` with `e1 = p0 + d*smax` rounded to `f32` (211.52092); the exact midpoint with `e1`
+      unrounded rounds to the shipped value, with `e1` rounded it rounds to ours. Forms that keep `e1` unrounded
+      (an `f64` midline, `(p0 + m)*0.5 + (d*smax)*0.5`, a three-term fused chain) reproduce this one value but change
+      many other links (45 differing links in 10 examined tiles become 117 to 643), so they are not the rule.
+    * Without effect on any examined tile: FMA in `p0 + d*smax`, in `q.p0 + q_d*t` or in the midpoint,
+      `(e + m)*0.5`, `e*0.5 + m*0.5`, FMA in `contour_point`, `(v.y*ch + bmin) + 2*ch` (breaks tiles) and
+      `(v.y*ch + 2*ch) + bmin`, and every association of `float(hsel + 1)*ch + bmin.y - cy` (exact in `f32`).
+    The span end points that are one ulp off in `x` in tile 164,55 may come from the same midline code. #119 (the link
+    count) has another cause and is not changed by R16.

@@ -1165,12 +1165,14 @@ mod tests {
         (seg([2.85, 10.3, 8.5], [4.35, 10.3, 12.2]), 1.2, 0.5)
     }
 
-    /// `n*(-h) + B` and `n*(-h) + A` round their ties to even independently, so `(n*(-h) + B) - S0`
-    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h)` is about +1.4646 (5999 * 2^-12), a tie
-    /// when added to z values at 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it.
-    /// That tie and the parity of `A.z` and `B.z` make the two sums round in different directions.
+    /// The rounded product `n.z*(-h)` is 1.4645996 (5999 * 2^-12), a tie when added to z values at
+    /// 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it. The sums of rounded
+    /// products `n*(-h) + B` and `n*(-h) + A` then round in opposite directions and
+    /// `(n*(-h) + B) - S0` is one ulp off `B - A` (#116). The exact product is 1.4645995795..., not a
+    /// tie, so the fused sums of the current rule (R16) round alike and `dir` is `B - A` here. This is
+    /// the case that gave R13 and stays as a regression of R16.
     #[test]
-    fn dir_is_exact_edge_difference() {
+    fn dir_fused_sums_avoid_the_rounded_tie() {
         let edge = seg([0.0, 0.0, 4096.0], [1.0, 0.0, 4096.0 + 453.0 / 2048.0]);
         let g = pass_geometry(&edge, 1.0, 1.5, 0.75);
         let exact = sub(edge.p1, edge.p0);
@@ -1206,6 +1208,45 @@ mod tests {
         assert_eq!(exact[2].to_bits(), 0xbf87_4000);
         assert_eq!(g.dir[2].to_bits(), 0xbf87_3e00);
         assert_eq!(g.dir_len.to_bits(), len(g.dir).to_bits());
+        // Pass 1 has the opposite normal, so its fused sums round differently and `dir.z` is the
+        // exact difference: the two passes do not share `dir`.
+        let g1 = pass_geometry(&edge, -1.0, h, 0.9);
+        assert_eq!(g1.dir[2].to_bits(), 0xbf87_4000);
+        assert_ne!(g.dir[2].to_bits(), g1.dir[2].to_bits());
+    }
+
+    /// The two spans of one edge are mirrors (`s` of one is `e` of the other) but, because `dir`
+    /// differs between the passes (R16), not exact ones: the reverse merge sees different lengths and
+    /// keeps the longer span, and its radius follows that span (#120).
+    #[test]
+    fn passes_give_spans_of_different_length_and_the_longer_is_kept() {
+        let v = f32::from_bits;
+        let edge = seg(
+            [v(0x44c4_e973), 10.0, v(0x4480_4525)],
+            [v(0x44c4_a297), 10.0, v(0x4480_2355)],
+        );
+        let h = v(0x3ffa_98fd);
+        let span = |side: f32| {
+            let g = pass_geometry(&edge, side, h, 0.9);
+            LinkSpan {
+                s0: g.p0,
+                s1: add(g.p0, g.dir),
+                e0: g.p1,
+                e1: add(g.p1, g.dir),
+                center_h: 0.5,
+                validity: 1,
+            }
+        };
+        let mut spans = [span(1.0), span(-1.0)];
+        let (la, lb) = (
+            dist_sq(spans[0].s1, spans[0].s0),
+            dist_sq(spans[1].s1, spans[1].s0),
+        );
+        assert_ne!(la.to_bits(), lb.to_bits());
+        reverse_merge(&mut spans, 0.5);
+        let kept = usize::from(la <= lb);
+        assert_eq!(spans[kept].validity, 2);
+        assert_eq!(spans[1 - kept].validity, 0);
     }
 
     #[test]
