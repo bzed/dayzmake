@@ -44,6 +44,11 @@ fn build(path: &str, threads: usize) -> (Vec<u8>, NavMeshSet) {
         "failed tiles: {:?}",
         report.failed
     );
+    assert!(
+        report.stopped.is_none(),
+        "the run stopped early: {:?}",
+        report.stopped
+    );
     let mut bytes = Vec::new();
     report.set.write(&mut bytes).expect("write");
     (bytes, report.set)
