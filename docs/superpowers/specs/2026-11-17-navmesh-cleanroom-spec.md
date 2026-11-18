@@ -1327,3 +1327,5 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     snapping). Those are in upstream's zlib source and are expected to be reproduced from it.
 13. I did not build or run anything from the checkout; all statements come from reading the files, so behaviours that depend on
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
+14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
+    or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).

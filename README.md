@@ -595,8 +595,9 @@ dayzmake navmesh generate --base mymap.nm --skip-existing -f mymap.nm           
 dayzmake navmesh info --tiles mymap.nm
 ```
 
-When a run is stopped or tiles could not be fetched, it ends with the command that continues it; the command repeats
-the first run's options except `--record` (a repeated recording would be overwritten) and `--base`. The same input
+When a run is stopped, or tiles could not be fetched and none failed to build, it ends with the command that continues
+it; the command repeats the first run's options except `--record` (a repeated recording would be overwritten) and
+`--base`, and is quoted for a POSIX shell (`cmd.exe` users adapt the quotes). The same input
 gives the same bytes for any number of threads and connections; a failed tile does not stop the run
 (the file is saved and the exit status is 1). On x86 and x86_64 the generator uses the same approximate reciprocal square
 root as DayZ; other processors may classify a slope that is almost exactly the maximum slope differently. The guide

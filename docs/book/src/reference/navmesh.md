@@ -118,7 +118,7 @@ dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--
 | `--range <x0,z0,x1,z1>` | the whole world | The tiles to build: columns `x0` to `x1` and rows `z0` to `z1`, inclusive. Values below 0 or beyond the grid are cut to the world; an upper bound below 0 means the last tile. A range with nothing left is the error `empty tile range`. |
 | `--base <nm>` | none | Start from this navmesh: its grid is kept, and the new tiles replace the tiles of their cells. |
 | `--skip-existing` | off | Leave out the tiles that `--base` already has. Needs `--base` (`--skip-existing needs --base`). |
-| `--checkpoint <n>` | 0 (off) | Write the target after every `n` finished tiles (built, empty or failed). A checkpoint that cannot be written stops the run, which is then a failure (see below). |
+| `--checkpoint <n>` | 0 (off) | Write the target after every `n` finished tiles (built, empty or failed). A negative value is an error; 0 means off. A checkpoint that cannot be written stops the run, which is then a failure (see below). |
 | `--threads <n>` | cores - 1, at least 1 | Builder threads, at most 256. 0 means the default; a negative number is an error. |
 | `--connections <n>` | one per server (1 for a capture) | Connections to the servers, at most 256. 0 means the default; a negative number is an error. |
 | `--sea-level <m>` | the server's deep sea height | The sea level in metres. |
@@ -157,7 +157,8 @@ A run that was **stopped** (a checkpoint or `--record` write failed), or that ha
 that failed to build, ends with the command that continues it. The command repeats every option of the run except
 `--record` (with `-f` it would overwrite the first recording) and `--base`, which becomes the target, so the rest is
 built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail
-again. With a server that closes every connection, one tile (retried five times, 20 seconds in all) gives:
+again. The printed command is quoted for a POSIX shell (single quotes around anything but letters, digits and
+`_@%+=:,./-`); that works in bash, zsh and PowerShell, while a `cmd.exe` user has to adapt the quotes. With a server that closes every connection, one tile (retried five times, 20 seconds in all) gives:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
