@@ -12,8 +12,8 @@
 )]
 
 use dayzmake_core::navmesh::internals::{
-    Heightfield, RasterMode, RasterOutcome, RasterParams, Span, rasterize_part, rasterize_triangle,
-    walkable,
+    Heightfield, RasterMode, RasterOutcome, RasterParams, Span, SpanPiece, rasterize_part,
+    rasterize_triangle, walkable,
 };
 
 fn hf4() -> Heightfield {
@@ -532,6 +532,16 @@ fn an_added_hide_span_keeps_the_hide_part_it_merges_with() {
         &[in_part(span(20, 25, 14), 4), in_part(span(40, 45, 14), 9)]
     );
     // A span bridging both merges with both: the lower one's part.
-    hf.add_span_in_part(0, 0, 24, 41, 14, 1, Some(9));
+    hf.add_piece(&SpanPiece::new(0, 0, 24, 41, 14, 1).in_hide_part(9));
     assert_eq!(hf.column(0, 0), &[in_part(span(20, 45, 14), 4)]);
+}
+
+/// A plain `addSpan` that merges with a hide span gives the merged span `hide_part` 0, like `sub_area`.
+#[test]
+fn a_plain_add_span_resets_the_hide_part_of_the_spans_it_merges() {
+    let mut hf = hf4();
+    hf.add_piece(&SpanPiece::new(0, 0, 20, 25, 14, 1).in_hide_part(4));
+    assert_eq!(hf.column(0, 0)[0].hide_part, 4);
+    hf.add_span(0, 0, 24, 30, 14, 1);
+    assert_eq!(hf.column(0, 0), &[span(20, 30, 14)]);
 }

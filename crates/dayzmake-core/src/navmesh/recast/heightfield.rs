@@ -40,6 +40,7 @@ const MAX_COLUMNS: usize = 1 << 24;
 
 /// One solid span of a column (`rcSpan`), heights in voxels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Span {
     /// Lower limit, below `smax`.
     pub smin: u16,
@@ -66,6 +67,50 @@ impl Span {
             sub_area: 0,
             hide_part: 0,
         }
+    }
+}
+
+/// A piece to add to a column with [`Heightfield::add_piece`]: `addSpan`'s arguments and the hide
+/// part of the piece, if it has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SpanPiece {
+    /// Column.
+    pub x: i32,
+    /// Column.
+    pub z: i32,
+    /// Lower limit in voxels.
+    pub smin: u16,
+    /// Upper limit in voxels.
+    pub smax: u16,
+    /// Area id of the piece.
+    pub area: u8,
+    /// `addSpan`'s `flagMergeThreshold`.
+    pub flag_merge_threshold: i32,
+    /// The hide part of the piece; `None` for a plain `addSpan`.
+    pub hide_part: Option<u16>,
+}
+
+impl SpanPiece {
+    /// A plain piece, in no hide part.
+    #[must_use]
+    pub fn new(x: i32, z: i32, smin: u16, smax: u16, area: u8, flag_merge_threshold: i32) -> Self {
+        Self {
+            x,
+            z,
+            smin,
+            smax,
+            area,
+            flag_merge_threshold,
+            hide_part: None,
+        }
+    }
+
+    /// The piece as part of hide part `part`.
+    #[must_use]
+    pub fn in_hide_part(mut self, part: u16) -> Self {
+        self.hide_part = Some(part);
+        self
     }
 }
 
@@ -198,8 +243,9 @@ impl Heightfield {
 
     /// `addSpan`: insert a span, merging it with every span it overlaps. The merged area is
     /// `max(new, old)` when the merged `smax` is within `flag_merge_threshold` of the old span's
-    /// `smax`; otherwise the new area is kept. The new span has `sub_area` 0 (DayZ). Out of range
-    /// columns are ignored; heights are stored in 13 bits like `rcSpan` (see [`store13`]).
+    /// `smax`; otherwise the new area is kept. The new span has `sub_area` 0 (DayZ) and, being a
+    /// plain `addSpan`, `hide_part` 0 as well: a hide span it merges with loses its hide part. Out of
+    /// range columns are ignored; heights are stored in 13 bits like `rcSpan` (see [`store13`]).
     pub fn add_span(
         &mut self,
         x: i32,
@@ -209,26 +255,29 @@ impl Heightfield {
         area: u8,
         flag_merge_threshold: i32,
     ) {
-        self.add_span_in_part(x, z, smin, smax, area, flag_merge_threshold, None);
+        self.add_piece(&SpanPiece::new(
+            x,
+            z,
+            smin,
+            smax,
+            area,
+            flag_merge_threshold,
+        ));
     }
 
-    /// [`Self::add_span`] for a piece of a hide part (ruling R21): the new span gets `hide_part`
-    /// unless a span that it merged with already had one; the first of those (lowest in the column)
-    /// keeps its id. `None` leaves the id 0, as [`Self::add_span`] does.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "addSpan's arguments and the hide part"
-    )]
-    pub fn add_span_in_part(
-        &mut self,
-        x: i32,
-        z: i32,
-        smin: u16,
-        smax: u16,
-        area: u8,
-        flag_merge_threshold: i32,
-        hide_part: Option<u16>,
-    ) {
+    /// [`Self::add_span`] for a [`SpanPiece`]. A piece of a hide part (ruling R21) gets its
+    /// `hide_part` unless a span it merged with already had one; the first of those (lowest in the
+    /// column) keeps its id.
+    pub fn add_piece(&mut self, piece: &SpanPiece) {
+        let SpanPiece {
+            x,
+            z,
+            smin,
+            smax,
+            area,
+            flag_merge_threshold,
+            hide_part,
+        } = *piece;
         if self.span_count >= self.span_limit {
             if self.index(x, z).is_some() {
                 self.refused = self.refused.saturating_add(1);

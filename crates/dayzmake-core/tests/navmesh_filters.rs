@@ -149,6 +149,21 @@ fn low_hanging_copies_sub_area() {
     assert_eq!((d[1].area, d[1].sub_area), (0, 0));
 }
 
+/// The hide part (R21) is not copied along with area and sub area: a promoted span keeps its own.
+#[test]
+fn low_hanging_does_not_copy_the_hide_part() {
+    let mut f = hf(1, 1);
+    put(&mut f, 0, 0, 0, 5, 1, 7);
+    f.columns_mut()[0][0].hide_part = 3;
+    put(&mut f, 0, 0, 6, 9, 0, 0);
+    f.columns_mut()[0][1].hide_part = 5;
+    put(&mut f, 0, 0, 20, 22, 0, 0);
+    filter_low_hanging(&mut f, 5);
+    let c = f.column(0, 0);
+    assert_eq!((c[1].area, c[1].sub_area, c[1].hide_part), (1, 7, 5));
+    assert_eq!((c[0].hide_part, c[2].hide_part), (3, 0));
+}
+
 #[test]
 fn ledge_skips_terrain() {
     let mut f = hf(2, 1);

@@ -483,12 +483,19 @@ smax)` is the new piece's voxel range; all comparisons are on integers.
 * **PAINT_OR_ADD (mode 4), used for hide parts:** "paint touching": for each span: stop if `smax < s.smin`; stop if
   `smax <= s.smax + 1`; if `s.smax >= smin`: paint `(area, subArea)` and note a hit. If nothing was hit, `addSpan` the
   piece with the given `flagMergeThreshold`.
-  **Hide part layer (R21):** a span also carries a second id, `hidePart` (0 = none), written only by this mode and read
-  only by the link walk (6.4); the regions, contours and meshes never look at it. A span that is painted gets
-  `hidePart = subArea` only if it has none yet (the first part keeps it: a second copy of an object does not take it
-  over); the span that `addSpan` makes for the piece gets `hidePart = subArea` although its `subArea` is 0, unless a
-  span it merged with already has a `hidePart`: then the first of those, lowest in the column, keeps its id. The other
-  modes and a plain `addSpan` leave `hidePart` alone (0 for a new span); the filters that copy `subArea` do not copy it.
+  **Hide part layer (R21), a model:** the shipped meshes list a link in the part of the roof or slab that it passes
+  although such a span has `subArea` 0, so the tool must keep that id somewhere, or derive the part from the part
+  geometry; where it lives is **not known**. This spec models it as a second per-span id, `hidePart` (0 = none), which
+  reproduces the shipped data on 949 tiles and the whole central half (item 23) and may differ from the tool's storage.
+  The rules of the model: `hidePart` is written only by this mode and read only by the link walk (6.4); the regions,
+  contours and meshes never look at it. A span that is painted gets `hidePart = subArea` only if it has none yet (the
+  first part keeps it: a second copy of an object does not take it over); the span that `addSpan` makes for the piece
+  gets `hidePart = subArea` although its `subArea` is 0, unless a span it merged with already has a `hidePart`: then
+  the first of those, lowest in the column, keeps its id. The other modes never write it, and a plain `addSpan` (no
+  hide piece) that merges with a hide span gives the merged span `hidePart` 0, like `subArea` (so a later non-hide
+  object over a hide span removes it; not measured against the data, it follows the `subArea` rule). The compact
+  heightfield has no `hidePart`, and `filterLowHangingWalkableObstacles` copies `area` and `subArea` but not it (a
+  promoted span keeps its own).
 
 **Part rasterisation** (door and hide parts, "as one footprint"): first rasterise all triangles of the part (still
 `(v0, v2, v1)` order) into a per-cell record of the union of vertical extents `lo[cell] = min smin`, `hi[cell] = max
@@ -1083,7 +1090,8 @@ off; allocation uses mimalloc (a performance detail only).
    resume `addSpan`; results are identical to scanning from the column start); `rcCompactHeightfield.subAreas` (u16 per
    span, filled from the solid span in `rcBuildCompactHeightfield`); `rcContour.subArea`; `rcPolyMesh.subAreas` (u16 per
    polygon, zero-initialised; stored from the contour for every polygon the contour produces).
-2. **`addSpan`:** new span `subArea = 0`; merge rules as stock.
+2. **`addSpan`:** new span `subArea = 0`; merge rules as stock. (Model, not an observed change, R21: a per-span `hidePart`
+   id beside `subArea`, see 5.3; the tool's real storage is unknown.)
 3. **`rcFilterLowHangingWalkableObstacles`:** copies `subArea` along with the area (walkable span below to the promoted
    span above), and the "previous" state keeps `subArea` too.
 4. **`rcFilterLedgeSpans`:** extra optional `skipAreas[64]` argument (when non-null, spans whose area has a non-zero entry
@@ -1413,6 +1421,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       span above the window that ends a column's walk (counting it moves connections to a neighbouring part of the
       same object in 5 tiles of 7 blocks), and not spans of area 10: trees carry a tree index in the same field, and
       that index can be the index of a hide part (without this, 79 of 160 connections in 17 test tiles were wrong).
+      **Superseded by R21 (item 23): the visits are read from the `hidePart` layer, which trees never write, and spans of
+      every area count.**
     * Which id: the id with the most visits over the samples of the run. The last id seen is wrong where two parts of
       one object lie around a link (1 tile of 3 blocks), the lowest id in 2 of 13 blocks, the first id in 1 of 3.
     * How many samples: a graze is not enough. Runs in which few of the samples visit a hide part are not in a part
@@ -1511,7 +1521,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       All 27 wrong-part connections of #127 were of this kind or the next. Giving the added span the part id as its
       `subArea` is not the answer: it changes the regions (a roof span in its own part splits regions and contours)
       and 172 of the 542 matching connections and the polygons of tiles that matched (162,176: 427 polygons, the
-      shipped mesh has 434) are lost. So the part is a second id, `hidePart`, that only the walk reads (5.3). With this
+      shipped mesh has 434) are lost. So the part is modelled as a second id, `hidePart`, that only the walk reads (5.3). This is a model: it reproduces
+      the data, and where the tool keeps the id (or whether it derives the part from the part geometry) is not known. With this
       alone 8 of the 27 stay in another part, 1 is missing and 43 are extra (52 wrong in all, 89 before).
     * **The first copy of an object keeps the span.** Two objects with the same geometry (Badlands 58,126: ...211 and
       ...212, parts 226 to 228 and 229 to 231) paint the same cells; the shipped connections are in the first copy's
@@ -1526,21 +1537,33 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       reading `hidePart`, which trees and doors never write, does. With it every visit counts, whatever the area of
       the span is (the filters make hide spans unwalkable; 69,219 has members whose visits are all of area 0 spans, so
       counting only area 14 spans loses 2 members and gains one in a tie).
-    The quarter threshold (item 19) is now almost free: with `hidePart` no threshold gives 12 wrong runs, a tenth gives
-    12, a fifth to a half gives 8 to 9 on the 11,669 connections of the first set (any single sample: 10 extra), so 1/4 is kept.
+    The quarter threshold (item 19) is still needed and still a placeholder for a missing condition. On the 949 tiles R21
+    gives 12 wrong connections without it (11 extra, 1 other part) and 8 with it (6 extra, 1 missing, 1 other part): it
+    removes 5 false positives for the loss of 1 member (167,244). On the 11,669 connections of the first set no threshold
+    gives 12 wrong runs, a tenth 12, a fifth to a half 8 to 9 (any single sample: 10 extra); it is flat between 0.2 and
+    0.5, so 1/4 is kept, as before.
     Result, whole central half of the Badlands capture (inner tiles 49..277, 52,441): tiles with a difference 84 to 60,
     classes `extra` 46 to 22 tiles and `parts-size` 25 to 9; none grew, no tile that matched differs now (69,219, which an
     early variant broke, matches). The 9 tiles that are left in the two
     classes and are not data (R19, R20) are the ones under *Not explained* below, and 146,83, which has the same
-    off-mesh polygons in the same parts as the shipped mesh (the difference there is not the off-mesh part). The five validation sets of 14.15 match completely.
-    **Ties:** see R22.
+    off-mesh polygons in the same parts and the same part lists as the shipped mesh; only the order of two tree obstacles
+    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (to be filed on its own). The five validation sets of 14.15 match completely.
+    **Closed by R21 (the other bullets of #127):** the *class 4 false positives* were the tree-index collision: on the
+    174-tile set R17 had 19 of its 41 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
+    whose visits are `(n, 10)` and `(n, 0)` spans of one tree index; with R21 no class 4 connection is extra (the 5
+    extra of that set are class 0 and 1). The *14 tiles with ground part-list differences* were not caused by the
+    off-mesh rule: those tiles (172,211, 191,188 and the like) are the geometry of R19 and the door order of R20, which
+    have their own items; the tiles of that list with an off-mesh cause are the ones fixed above. No separate
+    measurement of the 14 was made beyond the class table (`ground` 7 tiles, as before).
+    **Ties:** none are left under R21, so the lowest id of R17 stays.
     Rejected on the way, measured on the same connections (the wrong ones, extra + missing + other part, with R17 as 89):
     first, last, highest id or lowest id of the visits instead of the most visited (22, 9, 25, 53); the part of the
     span that gives `last` at the step that gives `hiU` or `loU` (227 to 374: the floor's id is not the link's); the
     part of the spans the four ends of the span snap to (342 found, 246 missing); the break span counted (197 wrong, 191 of them in
     another part); the floor of the start or end (`FS`/`FE`): only 14 spans have an id; validity of the span (the
     extra ones are in merged and unmerged spans alike); the part of the first or of the last sample of the run instead of the most visited (12 and 11 wrong
-    on the 949 tiles, 7 for the most visited, which is R21's), a tie broken to the higher id (no ties are left); the pass of the edge (+n or -n: the extra
+    on the 949 tiles, 8 for the most visited, which is R21's; the 12 and 11 were measured on the data of the first set,
+    where the most visited gives 7), a tie broken to the higher id (no ties are left); the pass of the edge (+n or -n: the extra
     class 0 spans are all from the -n pass, so are many members).
     **Not explained (8 wrong connections in 8 of the 949 tiles; 8 tiles of the whole half):** four class 0 spans (and 172,89, one more of the same kind) that are not
     merged (123,239; 149,252; 196,77; 99,201) lie on the slab of a hide object, both ends on area 14 floors, all

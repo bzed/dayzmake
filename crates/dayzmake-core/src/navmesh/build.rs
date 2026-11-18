@@ -190,7 +190,9 @@ struct ExtraPart {
 }
 
 /// The most spans one tile heightfield may hold (hostile input: stacked surfaces could otherwise
-/// need gigabytes). Past it the tile fails.
+/// need gigabytes). Past it the tile fails. A `Span` is 10 bytes, so this bounds the span data of a
+/// tile at 2^26 * 10 B = 640 MiB (before the slack of the column vectors); a field added to `Span`
+/// raises it.
 pub const MAX_SPANS: usize = 1 << 26;
 
 const SEA_FLOOR: f32 = -500.0;

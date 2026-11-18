@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use super::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span};
+use super::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span, SpanPiece};
 use crate::navmesh::num::{ceil_i32, floor_i32, i32_to_f32, trunc_i32};
 
 /// What a rasterisation does to the spans of a cell (spec 5.3).
@@ -417,14 +417,9 @@ fn apply_cell(
             }
             if !hit {
                 // The added span has sub area 0 (addSpan), but it belongs to the hide part (R21).
-                hf.add_span_in_part(
-                    x,
-                    z,
-                    smin,
-                    smax,
-                    p.area,
-                    p.flag_merge_threshold,
-                    Some(p.sub_area),
+                hf.add_piece(
+                    &SpanPiece::new(x, z, smin, smax, p.area, p.flag_merge_threshold)
+                        .in_hide_part(p.sub_area),
                 );
             }
         }
