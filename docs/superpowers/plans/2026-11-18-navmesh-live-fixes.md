@@ -169,3 +169,46 @@ If no root cause is found after a thorough investigation, report BLOCKED with th
 - [ ] **Step 1:** Update the docs; `make book` and `cargo test --test book_sources`.
 - [ ] **Step 2:** `make check`; check coverage with `make coverage-check` and report the total.
 - [ ] **Step 3:** Commit (`docs(navmesh): working DayZDiag recipe and live validation (#115)`).
+
+---
+
+## Part 2: central-half Badlands comparison
+
+Badlands tiles 48–278 on both axes were built live (53,361 tiles; capture `/var/tmp/dznavbad.AX9NDF/big.dzgeo`, 50 GB; mesh `big.nm`), and inner tiles 49–277 were compared with the shipped mesh. About 98 % match. The classes of difference are issues #119–#124; #118 came from the final review, and #125/#126 are generator bugs. Per-class lists with examples are in `/var/tmp/dznavbad.AX9NDF/classes.txt`, and the raw comparison is in `big.cmp`.
+
+The acceptance check for tasks 6–11 is the live test (`navmesh_live.rs`) on the five original sets plus margin blocks cut from `big.dzgeo`, which works once Task 5 is done. At the end, the whole central half is re-run from the capture (Task 12).
+
+### Task 5: Stream ranges from large captures (#125) and retry refused connections (#126)
+
+**Files:** `crates/dayzmake-core/src/navmesh/capture.rs`, `generate.rs`, `client.rs`; tests in `tests/navmesh_generate.rs` and `tests/navmesh_client.rs`.
+
+- **#125:** building a range from a capture needs memory in proportion to the range, not to the file. Index or seek tile records lazily; never hold more than the tiles in flight. Test: a synthetic capture with many large tiles built with a small `--range` under a memory budget asserted through the existing span or byte limits. Also run, under `prlimit --as=8000000000`, a 3 × 3 range from `big.dzgeo`.
+- **#126:** retry a refused or reset connect with a bounded backoff, at most 5 tries in total, at most 10 s overall, no sleeps in tests (inject the clock or delay). A tile whose connection died goes back to the queue for the live connections. It fails only when no connection is left. Test against the fake server: refuse the first N connects.
+
+### Task 6: Off-mesh connection endpoint direction (#120) and field rounding (#121)
+
+**Files:** `links.rs`; spec §6. Reproduce with margin blocks from `big.dzgeo` (examples: 81,59 #16; 163,52 #34; 163,54 #89 and #105; 176,59 #21/#45/#69). Find the rule for which end is `pos[0..3]`, and the rounding of `center_height` and `rad`. Synthetic tests, then rulings in spec §14.
+
+### Task 7: Off-mesh connection count (#119)
+
+**Files:** `links.rs`; spec §6. Examples: 185,60 (55/51), 223,50 (64/63), 225,51 (68/67). Diagnose which links are added or missing and why. Do this after Task 6, because the direction rule may change which duplicates are removed.
+
+### Task 8: Tile parts list (#122)
+
+**Files:** the parts or extra-section code (`dayz/areas.rs`, `build.rs`, `detour/create.rs`); spec §5. Examples: 183,62 (1700/1724), 185,60, 183,63.
+
+### Task 9: Header bmax y (#123) and ground polygon cluster (#124)
+
+**Files:** found by investigation. Examples: 171,210, 172,210 (bmax); 172,211, 191,188, 202,187 (ground). Find out what is special in the 171–177 × 210–229 area first.
+
+### Task 10: Contour sort tie order (#118)
+
+Make `msvc_qsort` generic and use it for the hole and diagonal sorts in `recast/contour.rs`; pin the orders with tests; update spec §14 item 3.
+
+### Task 11: Doc outputs and final-review minors
+
+Re-run the synthetic-world examples in `docs/book/src/guides/navmesh.md` and `reference/navmesh.md` and update the outputs (final-review I1). Pin the `info` totals in a CLI test. Then the minors from `.superpowers/sdd/2026-11-18-navmesh-live-fixes/final-review.md` and the carried Task 4 minors. Finally, the validation section with the central-half result after Task 12.
+
+### Task 12: Whole central half from the capture
+
+Rebuild `48,48,278,278` from `big.dzgeo` under `systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0` and compare the inner tiles. Target: every inner tile matches, apart from polygon flags and the link array. Report anything left over as issues.
