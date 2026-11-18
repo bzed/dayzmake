@@ -645,8 +645,9 @@ impl NavMesh {
         if lo_x > hi_x || lo_y > hi_y {
             return Vec::new();
         }
-        let cells =
-            (i64::from(hi_x) - i64::from(lo_x) + 1) * (i64::from(hi_y) - i64::from(lo_y) + 1);
+        // Each side is at most 2^32, so the product can exceed `i64`: saturate (a huge box scans the grid).
+        let cells = (i64::from(hi_x) - i64::from(lo_x) + 1)
+            .saturating_mul(i64::from(hi_y) - i64::from(lo_y) + 1);
         let mut keys: Vec<(i32, i32)> =
             if usize::try_from(cells).is_ok_and(|c| c <= self.grid.len()) {
                 (lo_y..=hi_y)

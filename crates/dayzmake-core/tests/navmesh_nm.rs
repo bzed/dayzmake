@@ -385,3 +385,19 @@ fn write_fuzz_seeds() -> io::Result<()> {
     }
     Ok(())
 }
+
+/// Found by `navmesh_nm` fuzzing: a tile whose bounds span the whole `i32` range made the cell count
+/// of `tiles_in_range` overflow `i64` during the island flood.
+#[test]
+fn huge_query_box_does_not_overflow() {
+    use dayzmake_core::navmesh::detour::NavMesh;
+    use dayzmake_core::navmesh::islands::filter_islands;
+    let data = include_bytes!("../../../fuzz/corpus/navmesh_nm/regress_tiles_in_range_overflow");
+    let set = NavMeshSet::read(&mut &data[1..]).expect("the input is a set file");
+    if let Ok(mut mesh) = NavMesh::from_set(&set) {
+        for seed in [[0.0; 3], [f32::NAN; 3], [1.0e30; 3]] {
+            let first = filter_islands(&mut mesh, seed);
+            assert_eq!(filter_islands(&mut mesh, seed), first);
+        }
+    }
+}
