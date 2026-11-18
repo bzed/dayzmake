@@ -1362,6 +1362,13 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     * the edge end points that `cy` and the span end points come from carry the right low bits, which removes the
       one ulp `center_height` differences of #121 (they came from the end point y of the midline, which `pos` hides
       because `snap_to_solid` replaces it).
+    * the off-mesh connection counts of #119 agree too: a span that the division-normalised vectors dropped or
+      split differently is no longer different.
+    Whole central half of the Badlands capture (inner tiles 49..277): tiles with a difference 1013 to 448, none new;
+    the classes swapped (651 links in 201 tiles), off-mesh count (240 in 178) and the position differences
+    (13956 in 435, mostly index shifts after a missing link) are gone apart from one tile, the `center_height` and
+    `rad` class (519 in 118 tiles) is down to the ground-polygon tiles of #124; what is left is the parts list
+    (#122), the header `bmax.y` (#123) and the ground polygon tiles (#124).
     Evidence: with the reciprocal and the literal `dir` all inner tiles of an 11 x 11 block of Badlands tiles that
     had 16 differing links match, the ten tiles with the `center_height` differences match, the five validation sets
     of 14.15 and the 14.17 tile match, and so do the tiles the previous attempt (`dir` by fused multiply-add, which
