@@ -7,6 +7,8 @@ pub mod binarize;
 pub mod config;
 /// `dayzmake extract`.
 pub mod extract;
+/// `dayzmake navmesh`.
+pub mod navmesh;
 /// `dayzmake inspect` for models.
 pub mod p3d;
 /// PAA conversion.

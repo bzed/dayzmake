@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 
 Readers and writers for the DayZ file formats: PBO archives, rapified configs (with the preprocessor and
-`__EVAL`), P3D models, PAA textures, and BI keys and signatures. It is the library behind the
+`__EVAL`), P3D models, PAA textures, BI keys and signatures, and navigation meshes (`.nm`) with their generator. It is the library behind the
 [`dayzmake`](https://crates.io/crates/dayzmake) command line tool, a fork of armake2.
 
 Every reader treats its input as hostile: errors instead of panics, checked arithmetic, bounded recursion.
@@ -15,8 +15,9 @@ Every reader treats its input as hostile: errors instead of panics, checked arit
 |---|---|---|
 | `sign` | yes | the `sign` module (BI keys, `.bisign` creation and verification) |
 | `image` | yes | `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the re-exported `image` crate |
+| `navmesh` | yes | the `navmesh` module: the navmesh data-server client and wire format, captures (`.dzgeo`), the Recast/Detour tile builder and the `.nm` reader and writer (`navmesh::generate::generate`) |
 
-Without them (`default-features = false`) the crate builds without `sign` and `image`. PBO reading
+Without them (`default-features = false`) the crate builds without `sign`, `image` and `navmesh`. PBO reading
 and writing, configs, P3D and PAA reading/writing stay available.
 
 ## Usage
@@ -28,7 +29,18 @@ See the [API documentation](https://docs.rs/dayzmake-core) for the entry points 
 GPL-2.0-or-later, inherited from armake2 (KoffeinFlummi). Projects under AGPL or GPLv3 may link it; others
 need to be GPL-2.0-or-later compatible.
 
+### Third-party code
+
+The `navmesh` module contains Rust ports of [Recast and Detour](https://github.com/recastnavigation/recastnavigation)
+by Mikko Mononen (zlib licence), altered for DayZ. The ported source files keep the original copyright line and the zlib
+notice, and say that they were ported to Rust and altered and are not the original software. The zlib licence is
+compatible with GPL-2.0-or-later.
+
 ## Changes
+
+### Unreleased
+
+- New module `navmesh` (feature `navmesh`, on by default; it adds the dependency `safe_arch` on x86 and x86_64): `navmesh::client` (the data-server client with `Host` and `RetryPolicy`), `navmesh::wire` (world parameters and tile geometry), `navmesh::capture` (`.dzgeo` captures, `Capture` and `CaptureWriter`), `navmesh::build` (the tile builder with `BuildOptions` and `DoorPolicy`), `navmesh::detour` (`NavMeshSet`, the `.nm` reader and atomic writer), `navmesh::islands` and `navmesh::generate` (`probe`, `generate` with `Source`, `GenerateOptions`, `Progress` and `GenerateReport`). It contains Rust ports of Recast and Detour (zlib licence, altered for DayZ). Its output does not depend on the number of threads. Three new warnings: `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`.
 
 ### 0.3.0
 
