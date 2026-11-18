@@ -320,23 +320,41 @@ fn bv_tree_covers_all_polys() {
     assert_eq!(leaf.bmax, [140, 2, 29]);
 }
 
-#[test]
-fn bv_tree_is_deterministic_with_ties() {
-    // Identical bounds on every polygon: the stable sort keeps the polygon order.
+/// `n` identical polygons in one tile.
+#[expect(clippy::expect_used, reason = "test helper")]
+fn identical_tile(n: usize) -> TileData {
     let verts = vec![[0, 0, 0], [20, 0, 0], [0, 0, 20]];
     let mut polys = Vec::new();
-    for _ in 0..5 {
+    for _ in 0..n {
         polys.extend_from_slice(&[0, 1, 2, NIL, NIL, NIL, NIL, NIL, NIL, NIL, NIL, NIL]);
     }
     let extra = TileExtra::default();
-    let p = params(&verts, &polys, &[1; 5], &[1; 5], 6, &[], &extra);
-    let a = create_tile_data(&p).expect("create");
-    let b = create_tile_data(&p).expect("create");
-    assert_eq!(a, b);
-    let leaves: Vec<i32> = a.bv_tree[..9]
+    let flags = vec![1u16; n];
+    let areas = vec![1u8; n];
+    let p = params(&verts, &polys, &flags, &areas, 6, &[], &extra);
+    create_tile_data(&p).expect("create")
+}
+
+#[test]
+fn bv_tree_is_deterministic_with_ties() {
+    // Identical bounds on every polygon: the tie order is that of the MSVC `qsort`, and the same
+    // every time.
+    let a = identical_tile(5);
+    assert_eq!(a, identical_tile(5));
+    let mut leaves: Vec<i32> = a.bv_tree[..9]
         .iter()
         .filter(|n| n.i >= 0)
         .map(|n| n.i)
         .collect();
+    leaves.sort_unstable();
     assert_eq!(leaves, vec![0, 1, 2, 3, 4]);
+}
+
+#[test]
+fn bv_tree_tie_order_matches_shipped_small() {
+    // Livonia tile 128,128: four polygons that all have `bmin.x = 0`. The shipped node order is the
+    // root, then 2, 1, then 0, 3; a stable sort gives 0, 1, 2, 3.
+    let data = identical_tile(4);
+    let nodes: Vec<i32> = data.bv_tree[..7].iter().map(|n| n.i).collect();
+    assert_eq!(nodes, vec![-7, -3, 2, 1, -3, 0, 3]);
 }

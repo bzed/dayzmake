@@ -1299,10 +1299,11 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
    exactness depends on it.
 2. **`RSQRTSS` hardware differences** (Intel vs AMD) in the slope test make exact slope classification CPU dependent; the
    original accepts that.
-3. **BV tree tie order.** `createBVTree` sorts with the C library `qsort`, which is not stable; MSVC's order for equal keys is
-   not reproduced by Rust's stable sorts. Whether this affects shipped bytes (it appears to match references when built with
-   MSVC) is unknown; functionally any valid BV tree works. A byte-exact port may need a port of MSVC's `qsort` (an
-   unstable quicksort with insertion sort for small partitions).
+3. **BV tree tie order. Answered (#114).** `createBVTree` sorts with the C library `qsort`, which is not stable, and the
+   shipped meshes show MSVC's order for equal keys: Livonia tile 128,128 has four polygons that all have `bmin.x = 0`, and
+   its nodes are the root, then `[2, 1]`, then `[0, 3]`; a stable sort gives `[0, 1]`, `[2, 3]`. `msvc_qsort` in
+   `detour/create.rs` has that observable order: a selection sort for ranges of up to 8 items, else a median-of-three
+   partition. Built from live captures, the inner tiles of all five validation sets then match the shipped BV trees.
 4. **Cell class fields 4 and 12** (observed `u32` equal to `cells`, and `u32` 0). The doc names them `cellsZ` and `height`; the
    generator ignores both and uses only `cells` and `width`.
 5. **Door state** is not sent by the server (references have random "disabled" bits for about 30 % of door parts), so the

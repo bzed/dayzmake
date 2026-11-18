@@ -24,6 +24,7 @@
 //! Stock Detour, except for: tile version 12, the extra header field, 44-byte off-mesh connections,
 //! no detail mesh, a trailing extra section, and the off-mesh link accounting of spec 7.3.
 
+use std::cmp::Ordering;
 use std::io;
 
 use crate::navmesh::detour::tile::{
@@ -221,8 +222,121 @@ fn calc_extends(items: &[BvItem]) -> ([u16; 3], [u16; 3]) {
     (bmin, bmax)
 }
 
-/// `subdivide`. The sort is stable and ties go by polygon index (plan ruling 7); upstream's
-/// `qsort` has no tie-break.
+/// The comparison of two items on one axis, `Equal` for an index outside the slice.
+fn cmp_at(
+    items: &[BvItem],
+    a: usize,
+    b: usize,
+    cmp: &impl Fn(&BvItem, &BvItem) -> Ordering,
+) -> Ordering {
+    match (items.get(a), items.get(b)) {
+        (Some(x), Some(y)) => cmp(x, y),
+        _ => Ordering::Equal,
+    }
+}
+
+/// The largest range that the short sort handles.
+const QSORT_CUTOFF: usize = 8;
+
+/// An in-place sort with the observable element order of the MSVC C runtime's `qsort`: a selection
+/// sort for ranges of up to 8 items, else a median-of-three quicksort that ranges are split by.
+/// It is not stable, and with a comparator that ties, the order of equal items is the one that the
+/// shipped DayZ meshes have (spec 14 item 3). The ranges are kept on an explicit stack.
+fn msvc_qsort(items: &mut [BvItem], cmp: impl Fn(&BvItem, &BvItem) -> Ordering) {
+    use Ordering::{Equal, Greater};
+    let Some(last) = items.len().checked_sub(1) else {
+        return;
+    };
+    let mut stack = vec![(0usize, last)];
+    while let Some((lo, mut hi)) = stack.pop() {
+        if hi <= lo {
+            continue;
+        }
+        let size = hi - lo + 1;
+        if size <= QSORT_CUTOFF {
+            while hi > lo {
+                let mut max = lo;
+                for p in lo + 1..=hi {
+                    if cmp_at(items, p, max, &cmp) == Greater {
+                        max = p;
+                    }
+                }
+                items.swap(max, hi);
+                hi -= 1;
+            }
+            continue;
+        }
+        let mut mid = lo + size / 2;
+        if cmp_at(items, lo, mid, &cmp) == Greater {
+            items.swap(lo, mid);
+        }
+        if cmp_at(items, lo, hi, &cmp) == Greater {
+            items.swap(lo, hi);
+        }
+        if cmp_at(items, mid, hi, &cmp) == Greater {
+            items.swap(mid, hi);
+        }
+        let mut loguy = lo;
+        let mut higuy = hi;
+        loop {
+            if mid > loguy {
+                loop {
+                    loguy += 1;
+                    if !(loguy < mid && cmp_at(items, loguy, mid, &cmp) != Greater) {
+                        break;
+                    }
+                }
+            }
+            if mid <= loguy {
+                loop {
+                    loguy += 1;
+                    if !(loguy <= hi && cmp_at(items, loguy, mid, &cmp) != Greater) {
+                        break;
+                    }
+                }
+            }
+            loop {
+                higuy = higuy.saturating_sub(1);
+                if !(higuy > mid && cmp_at(items, higuy, mid, &cmp) == Greater) {
+                    break;
+                }
+            }
+            if higuy < loguy {
+                break;
+            }
+            items.swap(loguy, higuy);
+            if mid == higuy {
+                mid = loguy;
+            }
+        }
+        higuy += 1;
+        if mid < higuy {
+            loop {
+                higuy = higuy.saturating_sub(1);
+                if !(higuy > mid && cmp_at(items, higuy, mid, &cmp) == Equal) {
+                    break;
+                }
+            }
+        }
+        if mid >= higuy {
+            loop {
+                higuy = higuy.saturating_sub(1);
+                if !(higuy > lo && cmp_at(items, higuy, mid, &cmp) == Equal) {
+                    break;
+                }
+            }
+        }
+        if lo < higuy {
+            stack.push((lo, higuy));
+        }
+        if loguy < hi {
+            stack.push((loguy, hi));
+        }
+    }
+}
+
+/// `subdivide`. The items are sorted on the split axis by [`msvc_qsort`] with no tie-break, as
+/// upstream's `qsort` call does, so the order of items with equal keys is that of the MSVC runtime.
 fn subdivide(items: &mut [BvItem], nodes: &mut Vec<BvNode>) {
     let icur = nodes.len();
     nodes.push(BvNode::default());
@@ -241,12 +355,7 @@ fn subdivide(items: &mut [BvItem], nodes: &mut Vec<BvNode>) {
         bmax[1].saturating_sub(bmin[1]),
         bmax[2].saturating_sub(bmin[2]),
     );
-    items.sort_by(|a, b| {
-        a.bmin
-            .get(axis)
-            .cmp(&b.bmin.get(axis))
-            .then_with(|| a.i.cmp(&b.i))
-    });
+    msvc_qsort(items, |a, b| a.bmin.get(axis).cmp(&b.bmin.get(axis)));
     let isplit = inum / 2;
     let (left, right) = items.split_at_mut(isplit);
     subdivide(left, nodes);
@@ -589,4 +698,94 @@ pub fn create_tile_data(params: &CreateParams<'_>) -> io::Result<TileData> {
         off_mesh,
         extra: Some(params.extra.clone()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Items with the given keys on `bmin[0]`; `i` is the position before the sort.
+    fn items(keys: &[u16]) -> Vec<BvItem> {
+        keys.iter()
+            .enumerate()
+            .map(|(i, &k)| BvItem {
+                bmin: [k, 0, 0],
+                bmax: [k, 0, 0],
+                i: i32::try_from(i).expect("small"),
+            })
+            .collect()
+    }
+
+    /// Sorts the keys and returns the original positions in the sorted order.
+    fn order(keys: &[u16]) -> Vec<i32> {
+        let mut v = items(keys);
+        msvc_qsort(&mut v, |a, b| a.bmin[0].cmp(&b.bmin[0]));
+        let sorted: Vec<u16> = v.iter().map(|x| x.bmin[0]).collect();
+        assert!(sorted.is_sorted(), "not sorted: {sorted:?}");
+        v.iter().map(|x| x.i).collect()
+    }
+
+    #[test]
+    fn msvc_qsort_matches_reference_orders() {
+        // One and two items. The short sort swaps the last with the largest, and the first of
+        // equal items is the largest, so equal items move.
+        assert_eq!(order(&[]), Vec::<i32>::new());
+        assert_eq!(order(&[5]), vec![0]);
+        assert_eq!(order(&[1, 1]), vec![1, 0]);
+        assert_eq!(order(&[1, 2]), vec![0, 1]);
+        assert_eq!(order(&[2, 1]), vec![1, 0]);
+        // Three equal items: swap(0, 2) gives 2,1,0, then swap(0, 1) gives 1,2,0.
+        assert_eq!(order(&[1, 1, 1]), vec![1, 2, 0]);
+        // Eight equal items, the whole range is one short sort.
+        assert_eq!(order(&[3; 8]), vec![1, 2, 3, 4, 5, 6, 7, 0]);
+        // Eight items with two keys, derived by hand step by step.
+        assert_eq!(
+            order(&[2, 1, 2, 1, 2, 1, 2, 1]),
+            vec![1, 5, 3, 7, 4, 6, 2, 0]
+        );
+        // Nine equal items: the partition leaves them alone, and no range is left to sort.
+        assert_eq!(order(&[4; 9]), (0..9).collect::<Vec<i32>>());
+        // Nine descending keys: the median of three and three swaps sort them.
+        assert_eq!(
+            order(&[8, 7, 6, 5, 4, 3, 2, 1, 0]),
+            vec![8, 7, 6, 5, 4, 3, 2, 1, 0]
+        );
+        // Twenty items with many equal keys: sorted, a permutation, and always the same order.
+        let keys: Vec<u16> = (0..20u16).map(|i| (i * 7) % 4).collect();
+        let got = order(&keys);
+        let mut seen = got.clone();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..20).collect::<Vec<i32>>());
+        assert_eq!(got, order(&keys));
+    }
+
+    #[test]
+    fn msvc_qsort_all_equal_terminates() {
+        let mut v = items(&[7; 1000]);
+        msvc_qsort(&mut v, |_, _| Ordering::Equal);
+        let mut ids: Vec<i32> = v.iter().map(|x| x.i).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, (0..1000).collect::<Vec<i32>>());
+    }
+
+    #[test]
+    fn msvc_qsort_sorts_larger_inputs() {
+        // A fixed pseudo-random sequence with many ties, and sorted and reversed ones.
+        let mut x = 12345u32;
+        let random: Vec<u16> = (0..500)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                u16::try_from((x >> 16) % 37).expect("small")
+            })
+            .collect();
+        let sorted: Vec<u16> = (0..300).collect();
+        let reversed: Vec<u16> = (0..300).rev().collect();
+        for keys in [random, sorted, reversed] {
+            let got = order(&keys);
+            let mut seen = got.clone();
+            seen.sort_unstable();
+            let n = i32::try_from(keys.len()).expect("small");
+            assert_eq!(seen, (0..n).collect::<Vec<i32>>());
+        }
+    }
 }
