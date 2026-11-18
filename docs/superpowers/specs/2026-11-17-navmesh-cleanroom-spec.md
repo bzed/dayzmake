@@ -695,7 +695,7 @@ behaviour, earlier versions swept one side):
 1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (if the 3-D length
    is `< FLT_EPSILON` use `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback
    `(dn.z, 1, -dn.x)`).
-2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0`; `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
+2. `S0 = n*(-h) + A`; `dir = B - A` (the exact difference of the end points; the algebraically equal `(n*(-h) + B) - S0` rounds the two sums independently, which occasionally differs by one ulp and does not match shipped meshes, see 14.15); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
    **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
    about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
    `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
@@ -1330,3 +1330,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
 14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
+15. **Pass direction `dir` (ruling R13, #116).** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*h` is a tie
+    between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
+    moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The shipped value is the exact `B - A`; `FMA`
+    gives the same value in the observed case but is not needed. dayzmake uses `dir = B - A`; with it all five validation
+    sets match the shipped meshes completely (inner tiles).

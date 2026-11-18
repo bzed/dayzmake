@@ -495,7 +495,8 @@ pub(crate) fn pass_geometry(edge: &Seg, side: f32, h: f32, l2: f32) -> PassGeome
     let dn = scale(normalize3(sub(b, a)), side);
     let n = normalize3([dn[2], 0.0, -dn[0]]);
     let s0 = add(scale(n, -h), a);
-    let dir = sub(add(scale(n, -h), b), s0);
+    // Not `(n*(-h) + B) - S0`: the two sums round their ties independently (#116).
+    let dir = sub(b, a);
     PassGeometry {
         a,
         n,
@@ -1131,10 +1132,30 @@ mod tests {
         assert_eq!(COS_135.to_bits(), 0xBF35_04F3);
     }
 
-    /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search:
-    /// about 29 % of random edges differ).
+    /// Values for which `dir*t + (n*h + A)` and `(dir*t + n*h) + A` differ in `f32` (found by a search; with the
+    /// exact direction of #116 such edges are rare).
     fn bug_one_edge() -> (Seg, f32, f32) {
-        (seg([2.85, 10.3, 7.05], [4.35, 10.3, 10.75]), 1.2, 0.5)
+        (seg([2.85, 10.3, 8.5], [4.35, 10.3, 12.2]), 1.2, 0.5)
+    }
+
+    /// `n*(-h) + B` and `n*(-h) + A` round their ties to even independently, so `(n*(-h) + B) - S0`
+    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h)` is a tie between two floats at
+    /// z = 5000 and the two sums round in opposite directions.
+    #[test]
+    fn dir_is_exact_edge_difference() {
+        let edge = seg(
+            [6912.3594, 191.62645, 5116.832],
+            [6915.8164, 191.62645, 5114.9487],
+        );
+        let g = pass_geometry(&edge, 1.0, 2.25, 1.95);
+        let naive = sub(add(scale(g.n, -2.25), edge.p1), g.s0);
+        // The naive order is off by one ulp on z...
+        assert_ne!(naive[2].to_bits(), sub(edge.p1, edge.p0)[2].to_bits());
+        // ...the direction is the exact difference of the end points.
+        assert_eq!(
+            g.dir.map(f32::to_bits),
+            sub(edge.p1, edge.p0).map(f32::to_bits)
+        );
     }
 
     #[test]
@@ -1155,14 +1176,17 @@ mod tests {
     #[test]
     fn ebase_order_changes_the_cell_lookup() {
         // Found by a search: here the two association orders land `E.x` in different cells of a
-        // 0.25 m grid (22 against 23), so the floor lookup of the sample depends on the order.
-        let edge = seg([11.85, 10.3, 14.55], [0.85, 10.3, 6.3]);
+        // 0.25 m grid (25 against 24), so the floor lookup of the sample depends on the order.
+        let edge = seg(
+            [4.917_223_5, 10.3, 5.542_892_5],
+            [6.168_562, 10.3, 6.794_231_4],
+        );
         let (h, t, cs) = (1.0_f32, 0.5_f32, 0.25_f32);
         let g = pass_geometry(&edge, 1.0, h, 0.9);
         let (_, e, _) = sample_at(&g, t);
         let bad = add(add(scale(g.dir, t), scale(g.n, h)), edge.p0);
-        assert_eq!(floor_i32(e[0] / cs), 22);
-        assert_eq!(floor_i32(bad[0] / cs), 23);
+        assert_eq!(floor_i32(e[0] / cs), 25);
+        assert_eq!(floor_i32(bad[0] / cs), 24);
     }
 
     #[test]
