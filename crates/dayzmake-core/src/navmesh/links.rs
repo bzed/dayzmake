@@ -1156,9 +1156,9 @@ mod tests {
     }
 
     /// `n*(-h) + B` and `n*(-h) + A` round their ties to even independently, so `(n*(-h) + B) - S0`
-    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h) = -1.5` is added to z values at
-    /// 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it: the two sums round in
-    /// different directions.
+    /// can differ from `B - A` by one ulp (#116). Here `n.z*(-h)` is about +1.4646 (5999 * 2^-12), a tie
+    /// when added to z values at 4096, where the ulp is 2^-11 and `B.z - 4096` is an odd multiple of it.
+    /// That tie and the parity of `A.z` and `B.z` make the two sums round in different directions.
     #[test]
     fn dir_is_exact_edge_difference() {
         let edge = seg([0.0, 0.0, 4096.0], [1.0, 0.0, 4096.0 + 453.0 / 2048.0]);
@@ -1170,9 +1170,11 @@ mod tests {
         // ...the direction is the difference of the end points, and its length follows.
         assert_eq!(g.dir.map(f32::to_bits), exact.map(f32::to_bits));
         assert_eq!(g.dir_len.to_bits(), len(exact).to_bits());
-        // The run end point at t = 1 uses it.
+        // The sample point S at t = 1 is `dir + S0` with the exact difference; the old formula gives
+        // another value there.
         let (s, _, _) = sample_at(&g, 1.0);
-        assert_eq!(s.map(f32::to_bits), add(g.dir, g.s0).map(f32::to_bits));
+        assert_eq!(s.map(f32::to_bits), add(exact, g.s0).map(f32::to_bits));
+        assert_ne!(s.map(f32::to_bits), add(naive, g.s0).map(f32::to_bits));
     }
 
     #[test]
