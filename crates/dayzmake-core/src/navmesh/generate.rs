@@ -89,7 +89,8 @@ pub struct GenerateOptions {
     /// Leave out the tiles that `base` already has (needs `base`).
     pub skip_existing: bool,
     /// Every `N` finished tiles (built, empty and failed) write the mesh atomically to the path. A
-    /// failing checkpoint stops fetching and is returned as an error after the run; `N` below 1 means 1.
+    /// failing checkpoint stops fetching; the run still returns `Ok` with [`GenerateReport::stopped`]
+    /// set. `N` below 1 means 1.
     pub checkpoint: Option<(usize, PathBuf)>,
     /// Write a capture of the fetched tiles to this path. Tiles are recorded by the assembler in plan
     /// order, so the capture is deterministic, and a crash loses the tiles that were fetched but not
