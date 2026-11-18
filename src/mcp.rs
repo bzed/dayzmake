@@ -326,6 +326,7 @@ fn tool(name: &str, description: &str, props: &[(&str, char, &str)], required: &
             'b' => json!({"type": "boolean"}),
             'i' => json!({"type": "integer", "minimum": 0}),
             'a' => json!({"type": "array", "items": {"type": "string"}}),
+            'n' => json!({"type": ["number", "string"]}),
             _ => json!({"type": "string"}),
         };
         if let Some(o) = schema.as_object_mut() {
@@ -850,7 +851,7 @@ fn tools() -> Value {
                 ),
                 (
                     "sea_level",
-                    's',
+                    'n',
                     "Sea level in metres instead of the server's deep sea height."
                 ),
                 (
@@ -893,6 +894,16 @@ fn opt_str(args: &Args, key: &str) -> Result<Option<String>, Error> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(error!("argument \"{key}\" must be a string")),
+    }
+}
+
+/// A number given as a JSON number or as a string (the text is parsed later, with the CLI's messages).
+fn num_or_str_arg(args: &Args, key: &str) -> Result<Option<String>, Error> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(_) => Err(error!("argument \"{key}\" must be a number or a string")),
     }
 }
 
@@ -989,6 +1000,9 @@ fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
         }
         "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args, warnings),
         "navmesh_probe" => {
+            if matches!(args.get("server"), Some(Value::Array(_))) {
+                return Err(error!("probe takes one server"));
+            }
             let mut out = Vec::new();
             navmesh::cmd_navmesh_probe(
                 opt_str(args, "server")?.as_deref(),
@@ -1316,7 +1330,7 @@ fn navmesh_generate(args: &Args, warnings: &mut dyn WarningSink) -> Result<Strin
         checkpoint: count_arg(args, "checkpoint")?,
         threads: count_arg(args, "threads")?,
         connections: count_arg(args, "connections")?,
-        sea_level: opt_str(args, "sea_level")?,
+        sea_level: num_or_str_arg(args, "sea_level")?,
         doors: opt_str(args, "doors")?,
         no_links: bool_arg(args, "no_links")?,
         no_island_filter: bool_arg(args, "no_island_filter")?,

@@ -170,6 +170,23 @@ fn probe_tile() {
 }
 
 #[test]
+fn probe_takes_one_server() {
+    let env = Env::new();
+    let out = env.run(&[
+        "navmesh",
+        "probe",
+        "--server",
+        "127.0.0.1:1",
+        "--server",
+        "127.0.0.1:2",
+    ]);
+    // The usage line has one `--server` for probe, so the argument parser refuses a second one
+    // before anything connects (the MCP tool says "probe takes one server").
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("Invalid arguments"), "{}", out.stderr);
+}
+
+#[test]
 fn probe_no_server() {
     let env = Env::new();
     // a port nobody listens on: bind, note the port, drop

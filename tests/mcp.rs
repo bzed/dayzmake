@@ -1645,6 +1645,61 @@ mod navmesh {
         assert!(t.contains("sea_level: ") && !t.contains("--"), "{t}");
     }
 
+    /// `sea_level` is a number in the schema's spirit; a string works as before.
+    #[test]
+    fn mcp_navmesh_generate_sea_level_accepts_a_number_or_a_string() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let call_with = |id, target: &str, sea: Value| {
+            call(
+                id,
+                "navmesh_generate",
+                &json!({"capture": s(&cap), "target": target, "threads": 2, "range": "0,0,0,0", "sea_level": sea}),
+            )
+        };
+        let r = run(
+            &[
+                call_with(1, "n.nm", json!(1.5)),
+                call_with(2, "s.nm", json!("1.5")),
+                call_with(3, "i.nm", json!(-2)),
+                call_with(4, "b.nm", json!(true)),
+            ],
+            tmp.path(),
+        );
+        for reply in &r.replies[..3] {
+            assert!(!is_error(reply), "{}", text(reply));
+        }
+        assert_eq!(
+            fs::read(tmp.path().join("n.nm")).expect("number"),
+            fs::read(tmp.path().join("s.nm")).expect("string")
+        );
+        assert!(is_error(&r.replies[3]));
+        assert!(
+            text(&r.replies[3]).contains("sea_level"),
+            "{}",
+            text(&r.replies[3])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_probe_takes_one_server() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let r = run(
+            &[call(
+                1,
+                "navmesh_probe",
+                &json!({"server": ["127.0.0.1:1", "127.0.0.1:2"]}),
+            )],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("probe takes one server"),
+            "{}",
+            text(&r.replies[0])
+        );
+    }
+
     #[test]
     fn mcp_navmesh_generate_existing_record_says_force() {
         let tmp = tempfile::tempdir().expect("tmp");
