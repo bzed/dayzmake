@@ -148,12 +148,12 @@ fn offset_table_vector() {
 }
 
 #[test]
-fn version_7_is_read_and_written_as_9() {
+fn version_7_is_read_as_7_and_written_as_9() {
     let set = two_tile_set();
     let mut bytes = to_bytes(&set);
     put_i32(&mut bytes, 4, 7);
     let back = read(&bytes).expect("version 7 reads");
-    assert_eq!(back.version, 9, "normalised on read");
+    assert_eq!(back.version, 7, "the version read is kept");
     let out = to_bytes(&back);
     assert_eq!(&out[4..8], &9i32.to_le_bytes());
     put_i32(&mut bytes, 4, 9);

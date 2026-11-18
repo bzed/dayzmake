@@ -216,7 +216,7 @@ dayzmake navmesh info [-v] [--json] [--tiles] <source>
 | `--json` | off | Print one JSON object instead of text. |
 | `--tiles` | off | List every tile: `x z ref polys verts offmesh parts obstacles`. |
 
-The summary gives the file version, the grid and the size of a tile, the number of tile slots (`max tiles`), the
+The summary gives the file version as read (7 or 9; `generate` always writes 9), the grid and the size of a tile, the number of tile slots (`max tiles`), the
 number of tiles and the totals of polygons, vertices and off-mesh connections (the jump, climb and ladder links).
 `ref` is the tile reference in hex, `parts` the door and object parts of the tile and `obstacles` its tree obstacles.
 

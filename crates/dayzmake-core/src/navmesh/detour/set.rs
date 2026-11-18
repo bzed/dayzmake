@@ -83,7 +83,8 @@ pub struct SetTile {
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct NavMeshSet {
-    /// The set version. Reading normalises version 7 to [`SET_VERSION`]; writing ignores this field.
+    /// The set version read from the file (7 or 9). Writing ignores this field and always writes
+    /// [`SET_VERSION`].
     pub version: i32,
     /// Grid width in tiles.
     pub tiles_x: i32,
@@ -205,7 +206,7 @@ impl NavMeshSet {
             });
         }
         Ok(Self {
-            version: SET_VERSION,
+            version,
             tiles_x,
             tiles_z,
             params,

@@ -350,6 +350,22 @@ fn info_prints_totals() {
 }
 
 #[test]
+fn info_prints_the_version_read() {
+    let env = Env::new();
+    let nm = env.nm();
+    let mut bytes = fs::read(&nm).expect("read");
+    bytes[4..8].copy_from_slice(&7_i32.to_le_bytes());
+    let old = env.path("old.nm");
+    fs::write(&old, bytes).expect("write");
+    let out = env.run(&["navmesh", "info", s(&old)]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(out.stdout.contains("navmesh version 7,"), "{}", out.stdout);
+    let json = env.run(&["navmesh", "info", "--json", s(&old)]);
+    let json: Value = serde_json::from_str(&json.stdout).expect("JSON");
+    assert_eq!(json["version"], 7);
+}
+
+#[test]
 fn info_tiles_lists_each_tile() {
     let env = Env::new();
     let nm = env.nm();
