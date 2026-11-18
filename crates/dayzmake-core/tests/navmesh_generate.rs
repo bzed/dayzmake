@@ -305,13 +305,15 @@ fn failing_checkpoint_stops_the_run_but_returns_the_report() {
     let (params, tiles) = synthetic_world();
     let dir = tempfile::TempDir::new().expect("tmp");
     let mut options = opts();
-    options.range = Some([0, 0, 2, 0]);
+    // The range contains tile (1,1), where the seed is: a running island filter would find it.
+    options.range = Some([0, 0, 1, 1]);
     options.checkpoint = Some((1, dir.path().join("missing/out.nm")));
-    let (report, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
+    let (report, warnings) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     let stopped = report.stopped.expect("stopped");
     assert!(stopped.contains("checkpoint"), "{stopped}");
     // The island filter did not run; what was assembled is in the set.
     assert!(report.islands.is_none());
+    assert!(!warning_names(&warnings).contains(&"navmesh-seed"));
     assert_ne!(report.set.tiles.len(), 0);
 }
 
@@ -427,24 +429,6 @@ fn a_huge_range_is_refused_before_anything_is_allocated() {
     assert!(e.to_string().contains("limit 4194304"), "{e}");
     // The range, not the world, counts.
     assert!(plan_tiles(&grid(1 << 14, 1 << 9), Some([0, 0, 9, 9])).is_ok());
-}
-
-#[test]
-fn a_panicking_build_fails_that_tile_only() {
-    let (params, tiles) = synthetic_world();
-    let mut options = opts();
-    options.range = Some([0, 0, 2, 0]);
-    options.panic_tile = Some((1, 0));
-    let (report, warnings) = run(Source::Capture(capture_of(&params, &tiles)), &options);
-    assert_eq!(report.built, 2);
-    assert_eq!(report.failed.len(), 1);
-    assert_eq!((report.failed[0].0, report.failed[0].1), (1, 0));
-    assert!(
-        report.failed[0].2.contains("tile build panicked"),
-        "{:?}",
-        report.failed
-    );
-    assert!(warning_names(&warnings).contains(&"navmesh-tile-failed"));
 }
 
 #[test]

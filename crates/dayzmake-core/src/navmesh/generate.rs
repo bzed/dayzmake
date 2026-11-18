@@ -106,9 +106,6 @@ pub struct GenerateOptions {
     /// Test hook: the size of the claim window instead of the computed one.
     #[doc(hidden)]
     pub window: Option<usize>,
-    /// Test hook: the build of this tile panics.
-    #[doc(hidden)]
-    pub panic_tile: Option<(i32, i32)>,
 }
 
 impl Default for GenerateOptions {
@@ -126,7 +123,6 @@ impl Default for GenerateOptions {
             build: BuildOptions::default(),
             retry: RetryPolicy::default(),
             window: None,
-            panic_tile: None,
         }
     }
 }
@@ -174,11 +170,12 @@ pub struct GenerateReport {
     /// holds what was assembled until then and the island filter did not run. Callers should save
     /// `set` and then report this as an error.
     pub stopped: Option<String>,
-    /// Test hook: the largest number of results the reorder buffer held.
-    #[doc(hidden)]
+    /// Diagnostic: the largest number of finished tiles the reorder buffer held while waiting for an
+    /// earlier tile. It never exceeds [`GenerateReport::window`] (the final drain of unfetched tiles
+    /// after every connection failed is exempt).
     pub peak_pending: usize,
-    /// Test hook: the claim window of the run.
-    #[doc(hidden)]
+    /// Diagnostic: the claim window of the run, the number of plan indices a fetcher may be ahead of
+    /// the first tile not yet applied.
     pub window: usize,
 }
 
@@ -421,19 +418,9 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
     }
 }
 
-/// Builds one tile; a panic of the build (a bug on hostile geometry) fails the tile and nothing else.
-fn build_guarded(world: &WorldParams, options: &GenerateOptions, input: &TileInput) -> Outcome {
-    let built = catch_unwind(AssertUnwindSafe(|| {
-        // Test hook (`GenerateOptions::panic_tile`).
-        assert!(
-            options.panic_tile != Some((input.x, input.z)),
-            "build panic requested for tile ({},{})",
-            input.x,
-            input.z
-        );
-        build_tile(world, input, &options.build)
-    }));
-    match built {
+/// Runs a tile build; a panic of the build (a bug on hostile geometry) fails the tile and nothing else.
+fn build_guarded(build: impl FnOnce() -> io::Result<TileOutcome>) -> Outcome {
+    match catch_unwind(AssertUnwindSafe(build)) {
         Ok(Ok(outcome)) => Outcome::Tile(Box::new(outcome)),
         Ok(Err(e)) => Outcome::Failed(e.to_string()),
         Err(_) => Outcome::Failed("internal error: tile build panicked".to_owned()),
@@ -457,7 +444,7 @@ fn builder(
         };
         let (outcome, input) = match what {
             Fetch::Tile(input) => {
-                let outcome = build_guarded(world, options, &input);
+                let outcome = build_guarded(|| build_tile(world, &input, &options.build));
                 (outcome, record.then_some(input))
             }
             Fetch::Skipped => (Outcome::Skipped, None),
@@ -826,4 +813,22 @@ pub fn generate(
         elapsed: start.elapsed(),
     });
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panicking_build_becomes_a_failed_tile() {
+        // `resume_unwind` raises a panic without calling the panic hook: no noise, no global hook change.
+        let outcome = build_guarded(|| std::panic::resume_unwind(Box::new("boom")));
+        assert!(
+            matches!(&outcome, Outcome::Failed(m) if m == "internal error: tile build panicked")
+        );
+        let outcome = build_guarded(|| Err(error!("bad tile")));
+        assert!(matches!(&outcome, Outcome::Failed(m) if m == "bad tile"));
+        let outcome = build_guarded(|| Ok(TileOutcome::Empty));
+        assert!(matches!(&outcome, Outcome::Tile(t) if **t == TileOutcome::Empty));
+    }
 }
