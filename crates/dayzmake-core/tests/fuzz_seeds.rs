@@ -9,7 +9,9 @@ use dayzmake_core::config::Config;
 #[cfg(feature = "navmesh")]
 use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
 #[cfg(feature = "navmesh")]
-use dayzmake_core::navmesh::detour::{NavMeshSet, TileData};
+use dayzmake_core::navmesh::detour::{NavMesh, NavMeshSet, TileData};
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::islands::filter_islands;
 #[cfg(feature = "navmesh")]
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 use dayzmake_core::odol::Odol;
@@ -185,6 +187,7 @@ fn navmesh_wire_seeds() -> io::Result<()> {
 #[cfg(feature = "navmesh")]
 #[test]
 fn navmesh_nm_seeds() -> io::Result<()> {
+    let mut flooded = 0_u32;
     for seed in seeds("navmesh_nm")? {
         // Same as the fuzz target: the first byte selects the reader.
         let Some((&selector, data)) = seed.split_first() else {
@@ -199,6 +202,18 @@ fn navmesh_nm_seeds() -> io::Result<()> {
             continue;
         }
         if let Ok(set) = NavMeshSet::read(&mut &data[..]) {
+            // Linking and the island flood, as in the fuzz target.
+            if let Ok(mut mesh) = NavMesh::from_set(&set) {
+                let centre = set.tiles.first().map_or([0.0; 3], |t| {
+                    let (lo, hi) = (t.data.header.bmin, t.data.header.bmax);
+                    [0, 1, 2].map(|i| lo[i] * 0.5 + hi[i] * 0.5)
+                });
+                for seed in [centre, [f32::NAN; 3], [0.0; 3]] {
+                    let first = filter_islands(&mut mesh, seed);
+                    assert_eq!(filter_islands(&mut mesh, seed), first);
+                    flooded += u32::from(first.is_some());
+                }
+            }
             let mut bytes = Vec::new();
             if set.write(&mut bytes).is_ok() {
                 let again = NavMeshSet::read(&mut &bytes[..])?;
@@ -208,5 +223,7 @@ fn navmesh_nm_seeds() -> io::Result<()> {
             }
         }
     }
+    // The islands_* seeds reach the flood (a seed that never links would test nothing).
+    assert!(flooded >= 3, "only {flooded} floods ran");
     Ok(())
 }

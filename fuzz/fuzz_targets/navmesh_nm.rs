@@ -1,6 +1,7 @@
 #![no_main]
 
-use dayzmake_core::navmesh::detour::{NavMeshSet, TileData};
+use dayzmake_core::navmesh::detour::{NavMesh, NavMeshSet, TileData};
+use dayzmake_core::navmesh::islands::filter_islands;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -21,6 +22,18 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     if let Ok(set) = NavMeshSet::read(&mut &data[..]) {
+        // Linking (`from_set` recomputes every link) and the island flood see the same hostile tiles.
+        if let Ok(mut mesh) = NavMesh::from_set(&set) {
+            let centre = set.tiles.first().map_or([0.0; 3], |t| {
+                let (lo, hi) = (t.data.header.bmin, t.data.header.bmax);
+                [0, 1, 2].map(|i| lo[i] * 0.5 + hi[i] * 0.5)
+            });
+            for seed in [centre, [f32::NAN; 3], [0.0; 3]] {
+                let first = filter_islands(&mut mesh, seed);
+                // The filter clears its own flags first, so a second run gives the same result.
+                assert_eq!(filter_islands(&mut mesh, seed), first);
+            }
+        }
         // Files that read can still be unwritable (a slot at or above maxTiles, two tiles in one
         // slot), and a file is not canonical (version 7, ignored offset table, padding of the
         // table), so only the second write is compared for whole files; the tile blobs inside
