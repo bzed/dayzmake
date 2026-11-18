@@ -31,7 +31,7 @@ is maintained here.
 
 ### Unreleased
 
-- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default).
+- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`.
 
 ### 3.1.0
 
@@ -565,6 +565,8 @@ Tools:
 - `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `extract`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
   commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
+- `navmesh_probe`, `navmesh_generate`, `navmesh_info`: `dayzmake navmesh probe`, `generate` and `info`. `navmesh_generate`
+  reports no progress and returns when the run is over, which takes many minutes for a whole map (use `range`).
 
 The tools take file paths as given (relative to the server's working directory) and act with the permissions of
 the user running the server: they can read, create and, with `force`, overwrite any file that user can. Only

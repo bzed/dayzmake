@@ -18,6 +18,7 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::api::{self, ApiContext};
 use crate::cli_io::AtomicTarget;
+use crate::commands::navmesh::{self, GenerateArgs, NoProgress};
 use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
@@ -783,6 +784,105 @@ fn tools() -> Value {
             ],
             &["source", "target"],
         ),
+        tool(
+            "navmesh_probe",
+            "Ask the navmesh data server of DayZDiag_x64.exe (started with -startNavmeshDataServer) for the world parameters and, with tile, one tile.",
+            &[
+                (
+                    "server",
+                    's',
+                    "Data server, host or host:port (port 36533 by default, host 127.0.0.1)."
+                ),
+                (
+                    "tile",
+                    's',
+                    "Also fetch this tile and summarise it, as \"x,z\"."
+                ),
+                JSON_ARG,
+            ],
+            &[],
+        ),
+        tool(
+            "navmesh_generate",
+            "Build the navmesh (.nm) of a terrain mod from a navmesh data server or a capture and save it to target. A whole map can take many minutes (the call returns when the run is over); use range for a part. The mesh is saved even when some tiles failed, and the call then reports an error that says so.",
+            &[
+                ("target", 's', "The .nm file to write."),
+                (
+                    "server",
+                    'a',
+                    "Data servers, each host or host:port (default 127.0.0.1); several share the work. Not with capture."
+                ),
+                (
+                    "capture",
+                    's',
+                    "Read the tiles from this .dzgeo capture instead of a server."
+                ),
+                (
+                    "record",
+                    's',
+                    "Write the fetched tiles to this .dzgeo capture."
+                ),
+                (
+                    "range",
+                    's',
+                    "Tile range to build as \"x0,z0,x1,z1\" (inclusive, clamped to the world)."
+                ),
+                ("base", 's', "Patch the new tiles into this existing .nm."),
+                (
+                    "skip_existing",
+                    'b',
+                    "Leave out the tiles that base already has (needs base)."
+                ),
+                (
+                    "checkpoint",
+                    'i',
+                    "Save the target after every n finished tiles (0: off)."
+                ),
+                (
+                    "threads",
+                    'i',
+                    "Builder threads (default: cores - 1, at least 1)."
+                ),
+                (
+                    "connections",
+                    'i',
+                    "Connections to the data servers (default: one per server)."
+                ),
+                (
+                    "sea_level",
+                    's',
+                    "Sea level in metres instead of the server's deep sea height."
+                ),
+                (
+                    "doors",
+                    's',
+                    "Door state baked into the mesh: closed (default), open or enabled."
+                ),
+                (
+                    "seed",
+                    's',
+                    "Island filter seed as \"x,y,z\" instead of the world's seed position."
+                ),
+                ("no_links", 'b', "No jump, climb or ladder links."),
+                (
+                    "no_island_filter",
+                    'b',
+                    "Do not flag polygons that the seed cannot reach."
+                ),
+                FORCE_ARG,
+            ],
+            &["target"],
+        ),
+        tool(
+            "navmesh_info",
+            "Summarise a .nm navmesh: the grid and the totals, with tiles one line per tile.",
+            &[
+                ("source", 's', "The .nm file."),
+                ("tiles", 'b', "One line (or JSON object) per tile."),
+                JSON_ARG,
+            ],
+            &["source"],
+        ),
     ])
 }
 
@@ -888,6 +988,27 @@ fn call_tool(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Result<
             ))
         }
         "pbo_pack" | "pbo_build" => pack(name == "pbo_build", args, warnings),
+        "navmesh_probe" => {
+            let mut out = Vec::new();
+            navmesh::cmd_navmesh_probe(
+                opt_str(args, "server")?.as_deref(),
+                opt_str(args, "tile")?.as_deref(),
+                bool_arg(args, "json")?,
+                &mut out,
+            )?;
+            Ok(String::from_utf8_lossy(&out).into_owned())
+        }
+        "navmesh_info" => {
+            let mut out = Vec::new();
+            navmesh::cmd_navmesh_info(
+                &path_arg(args, "source")?,
+                bool_arg(args, "tiles")?,
+                bool_arg(args, "json")?,
+                &mut out,
+            )?;
+            Ok(String::from_utf8_lossy(&out).into_owned())
+        }
+        "navmesh_generate" => navmesh_generate(args, warnings),
         _ => file_tool(name, args, warnings),
     }
 }
@@ -1160,6 +1281,55 @@ fn pbo_cat(args: &Args) -> Result<String, Error> {
             e.as_bytes().len()
         )
     })
+}
+
+/// A count argument: a non-negative integer, or its decimal text; handed on as the text the CLI option takes.
+fn count_arg(args: &Args, key: &str) -> Result<Option<String>, Error> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(Value::Number(n)) if n.is_u64() => Ok(Some(n.to_string())),
+        Some(_) => Err(error!("argument \"{key}\" must be a non-negative integer")),
+    }
+}
+
+/// `navmesh_generate`: like the CLI command, without progress output (stdout is the protocol channel). A partial
+/// run is an error that carries the summary, the saved path and the command that continues it.
+fn navmesh_generate(args: &Args, warnings: &mut dyn WarningSink) -> Result<String, Error> {
+    let target = path_arg(args, "target")?;
+    let force = bool_arg(args, "force")?;
+    if !force && target.exists() {
+        return Err(error!(
+            "Target file \"{}\" already exists. Pass force to overwrite.",
+            target.display()
+        ));
+    }
+    let generate_args = GenerateArgs {
+        force,
+        servers: strs_arg(args, "server")?,
+        capture: opt_str(args, "capture")?,
+        record: opt_str(args, "record")?,
+        range: opt_str(args, "range")?,
+        base: opt_str(args, "base")?,
+        skip_existing: bool_arg(args, "skip_existing")?,
+        checkpoint: count_arg(args, "checkpoint")?,
+        threads: count_arg(args, "threads")?,
+        connections: count_arg(args, "connections")?,
+        sea_level: opt_str(args, "sea_level")?,
+        doors: opt_str(args, "doors")?,
+        no_links: bool_arg(args, "no_links")?,
+        no_island_filter: bool_arg(args, "no_island_filter")?,
+        seed: opt_str(args, "seed")?,
+    };
+    let mut out = Vec::new();
+    let result =
+        navmesh::run_generate(&generate_args, &target, &mut out, warnings, &mut NoProgress);
+    let summary = String::from_utf8_lossy(&out).into_owned();
+    match result {
+        Ok(()) => Ok(summary),
+        Err(e) if summary.is_empty() => Err(e),
+        Err(e) => Err(error!("{summary}failed: {e}")),
+    }
 }
 
 /// `pbo_pack` and `pbo_build`: like the CLI commands, including signing with `key`.

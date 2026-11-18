@@ -386,6 +386,21 @@ fn progress_line(p: &Progress) -> String {
     )
 }
 
+/// Receives the progress of a run.
+pub trait ProgressSink {
+    /// A tile finished (or the run ended).
+    fn update(&mut self, progress: &Progress);
+    /// The run is over; ends a progress line that was left open.
+    fn finish(&mut self) {}
+}
+
+/// Ignores the progress; for callers whose stdout and stderr are not for humans (the MCP server).
+pub struct NoProgress;
+
+impl ProgressSink for NoProgress {
+    fn update(&mut self, _progress: &Progress) {}
+}
+
 /// Prints progress to stderr: rewritten with `\r` on a terminal, otherwise one line per 5 % of the run.
 struct ProgressPrinter<'a> {
     terminal: bool,
@@ -407,7 +422,7 @@ impl<'a> ProgressPrinter<'a> {
         }
     }
 
-    fn update(&mut self, p: &Progress) {
+    fn update_line(&mut self, p: &Progress) {
         let finished = p.done >= p.total;
         let percent = p.done.saturating_mul(100) / p.total.max(1);
         let due = if self.terminal {
@@ -434,6 +449,12 @@ impl<'a> ProgressPrinter<'a> {
         } else {
             writeln!(io::stderr(), "{line}")
         };
+    }
+}
+
+impl ProgressSink for ProgressPrinter<'_> {
+    fn update(&mut self, p: &Progress) {
+        self.update_line(p);
     }
 
     /// Ends a rewritten line that was left open (a stopped run).
@@ -579,6 +600,28 @@ pub fn cmd_navmesh_generate(
     out: &mut dyn Write,
     warnings: &mut dyn WarningSink,
 ) -> Result<(), Error> {
+    let pending_line = Cell::new(false);
+    let mut printer = ProgressPrinter::new(&pending_line);
+    let mut sink = LineEnding {
+        inner: warnings,
+        pending_line: &pending_line,
+    };
+    run_generate(args, target, out, &mut sink, &mut printer)
+}
+
+/// The run behind `cmd_navmesh_generate` with the progress going to `progress`, so that the MCP tool can
+/// keep it off its channel. Writes the summary to `out` before it fails for a partial run.
+///
+/// # Errors
+///
+/// The errors of `cmd_navmesh_generate`.
+pub fn run_generate(
+    args: &GenerateArgs,
+    target: &Path,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+    progress: &mut dyn ProgressSink,
+) -> Result<(), Error> {
     if !args.force && target.exists() {
         return Err(existing_target_error(target));
     }
@@ -638,14 +681,8 @@ pub fn cmd_navmesh_generate(
         )
     };
 
-    let pending_line = Cell::new(false);
-    let mut printer = ProgressPrinter::new(&pending_line);
-    let mut sink = LineEnding {
-        inner: warnings,
-        pending_line: &pending_line,
-    };
-    let result = generate(source, &options, &mut |p| printer.update(p), &mut sink);
-    printer.finish();
+    let result = generate(source, &options, &mut |p| progress.update(p), warnings);
+    progress.finish();
     let report = result?;
 
     report

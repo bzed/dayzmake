@@ -468,3 +468,52 @@ Binarize a model with BI's binarize.exe (Windows; on Linux through Proton).
 | `force` | boolean | no | Overwrite existing target files. |
 
 Result: `wrote <target>`, or an error when DayZ Tools or Proton cannot be found (see [Binarizing models](binarize.md)).
+
+### navmesh_probe
+
+Ask the navmesh data server of `DayZDiag_x64.exe` (started with `-startNavmeshDataServer`) for the world parameters and, with `tile`, one tile.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `server` | string | no | Data server, host or `host:port` (port 36533 by default, host 127.0.0.1). |
+| `tile` | string | no | Also fetch this tile and summarise it, as `"x,z"`. |
+| `json` | boolean | no | Return JSON instead of text. |
+
+Result: the text of `dayzmake navmesh probe` (JSON with `json`), or an error that names the server and how to start it. See [navmesh](navmesh.md).
+
+### navmesh_generate
+
+Build the navmesh (`.nm`) of a terrain mod from a navmesh data server or a capture and save it to `target`. A whole map can take many minutes, and the call returns only when the run is over; use `range` for a part. The mesh is saved even when some tiles failed, and the call then reports an error that says so.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `target` | string | yes | The `.nm` file to write. |
+| `server` | array of strings | no | Data servers, each host or `host:port` (default 127.0.0.1); several share the work. Not with `capture`. |
+| `capture` | string | no | Read the tiles from this `.dzgeo` capture instead of a server. |
+| `record` | string | no | Write the fetched tiles to this `.dzgeo` capture. |
+| `range` | string | no | Tile range to build as `"x0,z0,x1,z1"` (inclusive, clamped to the world). |
+| `base` | string | no | Patch the new tiles into this existing `.nm`. |
+| `skip_existing` | boolean | no | Leave out the tiles that `base` already has (needs `base`). |
+| `checkpoint` | integer (&ge; 0) | no | Save the target after every n finished tiles (0: off). |
+| `threads` | integer (&ge; 0) | no | Builder threads (default: cores - 1, at least 1). |
+| `connections` | integer (&ge; 0) | no | Connections to the data servers (default: one per server). |
+| `sea_level` | string | no | Sea level in metres instead of the server's deep sea height. |
+| `doors` | string | no | Door state baked into the mesh: `closed` (default), `open` or `enabled`. |
+| `seed` | string | no | Island filter seed as `"x,y,z"` instead of the world's seed position. |
+| `no_links` | boolean | no | No jump, climb or ladder links. |
+| `no_island_filter` | boolean | no | Do not flag polygons that the seed cannot reach. |
+| `force` | boolean | no | Overwrite existing target and record files. |
+
+Result: the summary of `dayzmake navmesh generate` (`built <n> tiles, ...`, `wrote <target>`), after the warnings; no progress is reported. A run that was stopped or that lost tiles is an error result that starts with the same summary and ends with `failed: <reason>`; the partial mesh is saved all the same, and the text names the command that continues it. See [navmesh](navmesh.md).
+
+### navmesh_info
+
+Summarise a `.nm` navmesh: the grid and the totals, with `tiles` one line per tile.
+
+| Argument | Type | Required | Meaning |
+|---|---|---|---|
+| `source` | string | yes | The `.nm` file. |
+| `tiles` | boolean | no | One line (or JSON object) per tile. |
+| `json` | boolean | no | Return JSON instead of text. |
+
+Result: the text of `dayzmake navmesh info` (JSON with `json`).
