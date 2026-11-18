@@ -325,3 +325,58 @@ fn stacked_surfaces_exceed_the_span_budget() {
     // The same input within a generous budget still builds (or is empty), proving the limit is the cause.
     assert!(build_tile_with_span_limit(&p, &input, &BuildOptions::default(), 50_000_000).is_ok());
 }
+
+/// The largest x of a shallow-water (area 2) polygon vertex of a ramp under a flat water surface, for
+/// an agent that climbs `step` metres. The ground rises 4 cm per metre from 8.0 m; the water is at
+/// 9.65 m (voxel 96) over the tile and 10 m beyond it.
+#[expect(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "test helper on a tile built here"
+)]
+fn shallow_shore(step: f32) -> f32 {
+    let mut p = world_params();
+    p.world.max_step_height = step;
+    let mut input = flat_tile(0.0);
+    for v in &mut input.groups[0].verts {
+        v[1] = 8.0 + 0.04 * v[0];
+    }
+    let (lo, hi, y) = (-10.0_f32, 60.0_f32, 9.65_f32);
+    let mut water = TileGroup::default();
+    water.area = 2;
+    water.verts = vec![
+        [lo, y, lo],
+        [hi, y, lo],
+        [hi, y, hi],
+        [lo, y, lo],
+        [hi, y, hi],
+        [lo, y, hi],
+    ];
+    input.groups.push(water);
+    let (data, _, _) = built(build_tile(&p, &input, &BuildOptions::default()).unwrap());
+    let xs: Vec<f32> = data
+        .polys
+        .iter()
+        .filter(|poly| poly.area() == 2)
+        .flat_map(|poly| poly.verts[..usize::from(poly.vert_count)].iter())
+        .filter_map(|&i| data.verts.get(usize::from(i)).map(|v| v[0]))
+        .collect();
+    assert!(!xs.is_empty(), "no shallow water at step {step}");
+    xs.into_iter().fold(f32::MIN, f32::max)
+}
+
+/// Ruling R14: ground under water is shallow water (area 2) only when the water is at least
+/// `walkableClimb` voxels above the span's lower limit, so the shore follows `walkableClimb`: each
+/// voxel of depth moves it 2.5 m on this ramp.
+#[test]
+fn shallow_water_needs_a_step_of_depth() {
+    // Steps of 4, 5 and 6 voxels (0.45 m is the shipped 5): shores 2.5 m apart.
+    let (four, five, six) = (
+        shallow_shore(0.35),
+        shallow_shore(0.45),
+        shallow_shore(0.55),
+    );
+    assert!((29.0..31.0).contains(&five), "5 voxels: shore at x {five}");
+    assert!((31.5..33.5).contains(&four), "4 voxels: shore at x {four}");
+    assert!((26.5..28.5).contains(&six), "6 voxels: shore at x {six}");
+}

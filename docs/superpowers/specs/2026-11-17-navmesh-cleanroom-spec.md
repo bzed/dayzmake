@@ -507,8 +507,8 @@ survive the link-stage filter (6.1).
    collecting groups of area 15 (ladders) for later; with `partCounter = 0` initially, by area:
    * **6, 7, 8, 9, 11:** ADD with the slope test, area = group area.
    * **2 (water):** two passes over all triangles of the group with mode WATER, no slope test: first area 2 with
-     `waterDepth = 0`, then area 3 with `waterDepth = deepWaterDepth` (voxels). (The pond cell test of mode WATER is
-     in 5.3.)
+     `waterDepth = walkableClimb` (voxels, ruling R14), then area 3 with `waterDepth = deepWaterDepth` (voxels). (The
+     pond cell test of mode WATER is in 5.3.)
    * **10 (trees):** if the group has no parts: every triangle with mode TREE, area 10, subArea 0. Else for each part
      `k` (0-based within the group): if `B.obstacles != 0`: mode TREE, area 10, subArea `k`; otherwise the part's
      triangles are added as ADD with area 0 (a plain blocker), subArea 0.
@@ -1335,3 +1335,10 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     (the same happens when A and B straddle a power of two, where their ulps differ) moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The shipped value is the single f32 subtraction `B - A`; `FMA`
     gives the same value in the observed case but is not needed. dayzmake uses `dir = B - A`; with it all five validation
     sets match the shipped meshes completely (inner tiles).
+16. **Shallow water depth (ruling R14, #117).** The first water pass (area 2) uses `waterDepth = walkableClimb`, not 0. With 0
+    the shallow band reaches ground that is only a voxel under the surface, and on a sloped shore it is 1 m to 2 m too wide
+    (Livonia tiles 130,220, 131,220, 131,221 and 131,222: the shipped shallow-water polygons end where the ground is 5 voxels
+    below the water piece's lower limit, and with `walkableClimb` the polygons, vertices and off-mesh connections of all four
+    tiles are identical to the shipped ones; the values 0 to 4 and 6 do not match). Every shipped world has 5 voxels both
+    for `walkableClimb` (0.45 m) and for `ceil(proneHeight / 0.1)` (0.5 m), so the data cannot say which one DayZ means;
+    dayzmake uses `walkableClimb`, the step height a walker can wade up. A world with other agent values would settle it.

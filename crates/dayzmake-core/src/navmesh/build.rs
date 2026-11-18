@@ -310,7 +310,8 @@ fn rasterize_objects<'a>(
             6 | 7 | 8 | 9 | 11 => raster_triangles(hf, &g.verts, &params, slope),
             2 => {
                 params.mode = RasterMode::Water;
-                params.water_depth = 0;
+                // Ruling R14: shallow water starts a step (walkableClimb) under the surface.
+                params.water_depth = cfg.walkable_climb;
                 raster_triangles(hf, &g.verts, &params, None);
                 params.area = 3;
                 params.water_depth = cfg.deep_water;
