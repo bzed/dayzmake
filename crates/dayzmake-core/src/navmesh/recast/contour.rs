@@ -971,4 +971,62 @@ mod tests {
         assert_eq!(outline.len(), 8 + 3 + 2);
         assert_eq!(outline[0], pt(0, -5));
     }
+
+    #[test]
+    fn many_equal_diagonals_take_the_partition_order() {
+        // Fourteen outline vertices at the squared distance 2500 or 2501 from the hole's leftmost vertex:
+        // more than eight candidates, so the sort partitions, and it moves equal candidates (R18). The
+        // bridge goes to (30, -40); the stable sort took (-48, 14).
+        let ring = [
+            (-50, 1),
+            (-48, 14),
+            (-40, 30),
+            (0, 50),
+            (48, 14),
+            (50, -1),
+            (48, -14),
+            (30, -40),
+            (14, -48),
+            (1, -50),
+            (-30, -40),
+            (-40, -30),
+            (-48, -14),
+            (-50, -1),
+        ];
+        let mut outline: Vec<[i32; 4]> = ring.iter().map(|&(x, z)| pt(x, z)).collect();
+        let mut holes = vec![hole(vec![pt(0, 0), pt(10, -10), pt(10, 10)])];
+        merge_region_holes(&mut outline, &mut holes);
+        assert!(holes[0].merged);
+        assert_eq!(outline[0], pt(30, -40));
+    }
+
+    #[test]
+    fn holes_with_equal_keys_are_merged_in_the_msvc_qsort_order() {
+        // Three holes with the same leftmost vertex: the short sort of three equal keys gives the
+        // order 1, 2, 0 (R18), so the hole with the 3s is merged first and the one with the 2s last;
+        // the stable sort merged them in the order 0, 1, 2.
+        let mut outline = vec![
+            pt(30, -40),
+            pt(0, -50),
+            pt(-30, -40),
+            pt(-50, 0),
+            pt(-30, 40),
+            pt(0, 50),
+            pt(30, 40),
+            pt(50, 0),
+        ];
+        let mut holes = vec![
+            hole(vec![pt(0, 0), pt(2, -1), pt(2, 1)]),
+            hole(vec![pt(0, 0), pt(3, -1), pt(3, 1)]),
+            hole(vec![pt(0, 0), pt(4, -1), pt(4, 1)]),
+        ];
+        merge_region_holes(&mut outline, &mut holes);
+        assert!(holes.iter().all(|h| h.merged));
+        let tails: Vec<i32> = outline
+            .iter()
+            .filter(|v| (2..10).contains(&v[0]))
+            .map(|v| v[0])
+            .collect();
+        assert_eq!(tails, vec![3, 3, 4, 4, 2, 2]);
+    }
 }

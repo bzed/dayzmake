@@ -1443,21 +1443,32 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     Badlands tile 216,184 (a hole merged into a 31-vertex outline): the triangulation of the merged contour then
     differed (3 polygons for the 2 of the shipped mesh) while the outline was the same. With the order of
     `msvc_qsort` (item 3: a selection sort up to 8 items, a median-of-three partition above) for both sorts, that
-    tile matches. `msvc_qsort` is generic now and lives in `navmesh/qsort.rs`; the BV tree uses it as before.
+    tile matches. Over the whole central half (inner tiles) the change fixes 14 tiles (98 to 84 with a difference, none
+    new); 12 of them are polygon differences that the `bmax`/`ground` classification did not count. `msvc_qsort` is generic now and lives in `navmesh/qsort.rs`; the BV tree uses it as before.
 21. **Animated objects are a snapshot (ruling R19, #123, #124).** In the Badlands area at tiles 171 to 178 by 210 to
     230 (six towers with a turning top, some 160 to 320 triangles of area 8 each) the tile input of one object differs
     from tile to tile: the triangles up to a height of about 292 m are the same in every tile, those above it are
-    rotated about a vertical axis. Evidence from the capture: a corner of the top platform (a rectangle of about 3.6 by
+    moved: they turn and they also change height (the highest vertex of one tower moves by up to 0.08 m within a block
+    of nine tiles, and ours and the shipped `bmax.y` differ by up to 5.7 m at 175 to 177 by 228 to 230), so it is not a
+    pure turn about a vertical axis. Evidence from the capture: a corner of the top platform (a rectangle of about 3.6 by
     1.4 m at y 298.95) has the angle 177.00 degrees about the platform centre in tile 171,210, 177.03 in 172,210,
     177.36 in 171,211, 172,211 and 173,211, and 177.90 in 172,212 and 173,212: tiles of one row of the grid share an
     angle, each further row turns it by 0.3 to 0.5 degrees, so the pose follows the time of the request (the capture
     is made row by row). A control region of 26 by 26 tiles elsewhere has no object whose triangles differ between two
     tiles that both contain them. What follows:
     * `bmax.y` of the header is the highest vertex of the input plus `proneHeight * 0.1` (section 7.3), and the
-      highest vertex is on the turning top. 43 tiles with identical polygons differ in `bmax.y` only (ours is
+      highest vertex is on the turning top. 43 tiles differ in `bmax.y`; 35 of them have identical polygons (ours is
       higher by 0.38 m in 171,210 and 172,210, by 0.14 m in 172,211; lower in some other tiles, by 1.0 m in 172,218).
+    * The shipped meshes drift the same way: the shipped `bmax.y` of 171 to 173 by 210 to 212 is 309.878, 309.887,
+      309.931 (row 210), 310.125, 310.130, 310.133 (row 211) and 310.246, 310.247, 310.251 (row 212): a small change
+      within a row and a step between rows, like ours (310.262, .265, .266, then .271, .271, .269, then .193, .190,
+      .186). The sites 174 to 175 by 214 to 216 (308.93, 308.77, 308.54) and 175 to 177 by 228 to 230 (about 314.3,
+      313.0, 312.1) show it too. So the shipped build also took one snapshot per tile; one pose per object would not
+      reproduce it, and the generator has no object id for these triangles (the area 8 group has no parts) to keep
+      one anyway.
     * The walkable top platform (y 298.95) and the ground around the tower foot are contoured from that pose, so the
-      polygons differ where the platform or its shadow is: 172,211, 172,218, 175,224, 176,229, 177,220 and 177,221.
+      polygons differ where the platform or its shadow is: 172,211, 172,218, 175,224, 176,229, 177,220 and 177,221, and 174,215 (320 polygons, 729 vertices) and 175,215 (one vertex), which the
+      classification missed because the polygon count is unchanged.
       The outline of the differing polygons is the rotated platform (172,211: the shipped platform lies about 90
       degrees away from ours).
     The shipped mesh was made at another time, so no rule of the generator can reproduce it. The generator is
@@ -1465,12 +1476,16 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 22. **The order of door objects (ruling R20, #124).** The input order of the objects in a door group (area 12 and 13)
     decides the order of the parts list, the part ids, and which of two overlapping door footprints a span gets (the
     later part overwrites the earlier one, 5.3 PAINT_BELOW). In Badlands tile 191,188 five door objects of one building
-    come in the order 26b, 26c, 26d, 26f, 270 (the last two hex digits of the object ids); the shipped mesh lists them
+    come in the order 26b, 26c, 26d, 26f, 270 (the last three hex digits of the object ids); the shipped mesh lists them
     as 26b, 26d, 26c, 270, 26f, and has a different boundary between the footprints of 26f and 270 (about 0.5 m, 3 polygons in 2 regions).
     Building the tile from the capture with the objects in the shipped order (group-wise, both areas) gives a tile
-    that is identical to the shipped one in the ground polygons, the parts list and everything else. Other tiles with
-    door objects keep the input order and match (Badlands 137,101 lists 1d0b, 3362, 24bc as the server does), and
-    no sort rule fits both (the position, the id and the id order reversed each fail on one of them), so the order
-    is data. The painting rule itself is not changed: painting first-wins instead of last-wins fixes 191,188 but breaks
+    that is identical to the shipped one in the ground polygons, the parts list and everything else. The class has 8 inner tiles with the same parts list as the shipped one in a different order: 191,188 (the only one
+    with a ground difference), 192,188, 191,189 and 192,189 (the same five objects, the shipped order is the same in
+    all four), and 200,100, 201,100, 200,101 and 201,101 (objects ending 417 and 418: live descending, shipped
+    ascending). Of the 16,328 groups with two or more door objects in the inner central half, 16,218 are in tiles that
+    are identical to the shipped ones, where the input order is the shipped order (Badlands 137,101 lists 1d0b, 3362,
+    24bc as the server does). No sort key fits: the object id, its low 16 bits, x, y, z, (z, x), (x, z) and the
+    reverse of each reorder 11,781 to 15,253 of those 16,218 groups (y ascending gives 191,188 by chance and breaks
+    14,384 groups). Keeping the input order is the only fit, so the order is data. The painting rule itself is not changed: painting first-wins instead of last-wins fixes 191,188 but breaks
     five tiles of the regression sets.
 
