@@ -314,13 +314,21 @@ struct FetchShared<'a> {
 struct Handback {
     /// The error of the first failed try (reported when the tile ends up failed).
     why: String,
-    /// On how many connections the tile has failed.
-    failures: u32,
+    /// On how many connections that had been served before (so they were working) the tile has failed.
+    proven: u32,
+    /// On how many connections that had not been served yet (a refused or reset start looks the same as a
+    /// tile the server cannot answer) the tile has failed.
+    unproven: u32,
 }
 
-/// The tile is reported as failed when it failed on this many connections: the tile is the likely cause,
-/// not the connections.
-const TILE_FAILURES: u32 = 2;
+impl Handback {
+    /// The tile is reported as failed when the tile is the likely cause, not the connections: it failed
+    /// on two working connections, or on a working one and another one. Failures on connections that
+    /// were never served count only together with a working one, so a refused start loses no tile.
+    fn is_poison(&self) -> bool {
+        self.proven >= 2 || (self.proven >= 1 && self.unproven >= 1)
+    }
+}
 
 /// What the fetchers coordinate on, under one lock: how many plan indices the assembler has applied (the
 /// claim window), the hand-back queue and the number of indices in flight.
@@ -534,7 +542,11 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         armed: true,
     };
     let mut client: Option<Client> = None;
-    // The connection has delivered a tile: a failure on it then says something about the tile.
+    // This fetcher has been served by its server at least once: a failure of a connection of its then says
+    // something about the tile. It is kept when the connection is closed to wait or replaced, so a poison
+    // tile cannot take every connection down uncounted. Known limit: with three or more connections to a
+    // server that serves one client at a time, a reconnect that is reset can still count against an innocent
+    // tile; the result is a spurious fetch error for that tile (resumable), never a lost run.
     let mut delivered = false;
     let others_on_host = shares_host(shared, slot);
     while let Some((idx, back)) = shared.gate.claim(shared, true, !delivered, &mut || {
@@ -542,7 +554,6 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         // nobody else can be waiting for a server that only this fetcher uses.
         if others_on_host {
             client = None;
-            delivered = false;
         }
     }) {
         let Some(&at) = shared.plan.get(idx) else {
@@ -552,20 +563,29 @@ fn fetcher(shared: &FetchShared<'_>, slot: usize, tx: &SyncSender<Fetched>) {
         let what = match fetch_one(shared, slot, &mut client, at) {
             Got::Done(what) => what,
             Got::Dead(message) => {
-                // A connection that never delivered a tile (refused, reset at the start) says nothing
-                // about the tile, so only a connection that had worked counts against it.
-                let failures = back.as_ref().map_or(0, |b| b.failures) + u32::from(delivered);
+                let (mut proven, mut unproven) =
+                    back.as_ref().map_or((0, 0), |b| (b.proven, b.unproven));
+                if delivered {
+                    proven += 1;
+                } else {
+                    unproven += 1;
+                }
                 let why = back.map_or(message, |b| b.why);
-                if failures < TILE_FAILURES {
+                let hand = Handback {
+                    why,
+                    proven,
+                    unproven,
+                };
+                if !hand.is_poison() {
                     // This connection is dead. The tile goes back for the live connections and
                     // fails only when none is left (the last fetcher reports it below).
-                    shared.gate.done(idx, Some(Handback { why, failures }));
+                    shared.gate.done(idx, Some(hand));
                     break;
                 }
+                let why = hand.why;
                 // The tile failed on another connection too: report it and carry on with a fresh
                 // connection of our own.
                 client = None;
-                delivered = false;
                 Fetch::Net(why)
             }
         };

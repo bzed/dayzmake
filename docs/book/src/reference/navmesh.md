@@ -37,9 +37,10 @@ wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1
 (10 seconds of waiting; an attempt that cannot connect can also wait up to the 10 second connect timeout, so a host
 that does not answer at all costs about a minute). When a connection is still failing after its five attempts
 (a server that refuses or resets it, as a server that serves one client at a time does for the others), that
-connection stops and its tile goes back to the queue for the connections that are left. A connection that had not
-yet delivered a tile does not count against the tile. A tile that fails on two connections that had worked is
-reported as not fetched and the second connection carries on, so one bad tile costs one tile, not the run. A
+connection stops and its tile goes back to the queue for the connections that are left. A tile that fails on two connections that had delivered a tile, or on one that had and another one, is reported as not
+fetched, and the connection that reported it carries on, so one bad tile costs one tile, not the run. Failures on
+connections that never delivered a tile (a refused or reset start) count only together with one that had, so a refused
+start loses no tile. A
 complete answer that is wrong (not a tile, another tile, an unknown cell class) is a failure of that tile alone: the
 connection is not dead, because the whole frame was read and the next request uses a fresh connection. A tile is
 reported as not fetched because of dead connections only when no connection is left; the text of its error is that of

@@ -848,3 +848,33 @@ fn a_single_connection_is_not_closed_and_reopened_while_it_waits() {
     assert_eq!(report.built + report.empty, 9);
     assert_eq!(server.connections(), 2);
 }
+
+#[test]
+fn a_poison_tile_with_waiting_fetchers_still_fails_alone() {
+    // Window 2 makes the fetchers wait (and close their connections) while one retries the poison tile;
+    // a fetcher that forgot it had delivered would then fail the handed-back tile without counting it,
+    // and every connection would die on it. Looped, because which fetcher meets the tile is a race.
+    for round in 0..10 {
+        let (params, tiles) = synthetic_world();
+        let server = FakeServer::start(
+            params,
+            tiles,
+            Faults::none().fault_tile((1, 0), Fault::Close),
+        );
+        let host = Host::parse(&server.addr().to_string()).expect("host");
+        let mut options = opts();
+        options.retry = quick_retry();
+        options.retry.attempts = 1;
+        options.connections = Some(3);
+        options.window = Some(2);
+        let (report, _) = run(Source::Servers(vec![host]), &options);
+        assert_eq!(
+            report.fetch_errors.len(),
+            1,
+            "round {round}: {:?}",
+            report.fetch_errors
+        );
+        assert_eq!((report.fetch_errors[0].0, report.fetch_errors[0].1), (1, 0));
+        assert_eq!(report.built + report.empty, 8, "round {round}");
+    }
+}
