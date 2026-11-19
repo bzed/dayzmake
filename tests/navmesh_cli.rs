@@ -348,6 +348,30 @@ fn generate_skip_existing_needs_base() {
 }
 
 #[test]
+fn generate_prints_the_island_filter_result() {
+    // Quoted in the guide and the reference; update them when this changes.
+    let env = Env::new();
+    let cap = env.capture();
+    let nm = env.path("filter.nm");
+    let out = env.run(&[
+        "navmesh",
+        "generate",
+        "--capture",
+        s(&cap),
+        "--threads",
+        "2",
+        s(&nm),
+    ]);
+    assert_eq!(out.code, 0, "{}", out.stderr);
+    assert!(
+        out.stdout
+            .contains("island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys"),
+        "{}",
+        out.stdout
+    );
+}
+
+#[test]
 fn info_prints_totals() {
     let env = Env::new();
     let nm = env.nm();
