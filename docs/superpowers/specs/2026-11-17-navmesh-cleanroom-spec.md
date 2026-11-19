@@ -486,7 +486,8 @@ smax)` is the new piece's voxel range; all comparisons are on integers.
   **Hide part layer (R21), a model:** the shipped meshes list a link in the part of the roof or slab that it passes
   although such a span has `subArea` 0, so the tool must keep that id somewhere, or derive the part from the part
   geometry; where it lives is **not known**. This spec models it as a second per-span id, `hidePart` (0 = none), which
-  reproduces the shipped data on 949 tiles and the whole central half (item 23) and may differ from the tool's storage.
+  reproduces the shipped data except 8 connections in 8 of the 949 tiles of item 23 (the residual of #127), and may
+  differ from the tool's storage.
   The rules of the model: `hidePart` is written only by this mode and read only by the link walk (6.4); the regions,
   contours and meshes never look at it. A span that is painted gets `hidePart = subArea` only if it has none yet (the
   first part keeps it: a second copy of an object does not take it over); the span that `addSpan` makes for the piece
@@ -706,11 +707,13 @@ heights are relative (taken above the start floor).
 (pass 0 jumps along `+n`, pass 1 along `-n`; spans of both are appended in that order; this two-sided sweep is DayZ 1.30
 behaviour, earlier versions swept one side):
 
-1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (`normalize3(v) = v * (1.0f / |v|)`, ruling R16) (if the 3-D length
+1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (`normalize3(v) = v
+   * (1.0f / |v|)`, ruling R16) (if the 3-D length
    is `< FLT_EPSILON` use `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback
    `(dn.z, 1, -dn.x)`).
 2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the
-   reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
+   reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`;
+   `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
    **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
    about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
    `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
@@ -1360,7 +1363,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): the one ulp error of `(n*(-h) + B) - S0` that R13 saw came from a `n` normalised by division, and `B - A` is not the rule.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
     the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
     moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
-    power of two, where their ulps differ. At the time of R13 the shipped value was taken to be the single f32 subtraction `B - A`, and dayzmake used
+    power of two, where their ulps differ. At the time of R13 the shipped value was taken to be the single f32
+    subtraction `B - A`, and dayzmake used
     `dir = B - A` (with it all five validation sets then matched byte for byte, inner tiles, apart from the polygon
     flags and the link array). That was a compensation for the division-normalised `n`; R16 (14.18) replaces it:
     dayzmake no longer uses `B - A`.
@@ -1451,7 +1455,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     parts list classes: `extra` 397 to 47 tiles, `extra_data_size` 384 to 25. No class grew; `bmax`, the position,
     ground polygon and field classes are as before. The five validation sets of 14.15 match completely. Not explained:
     in 46 tiles 43 connections are in a part that the shipped mesh does not list, 18 are missing and 27 are in another
-    part (for example Badlands 162,176, where the shipped mesh puts four connections into the box part next to the
+    part (the 174-tile set of the later analysis, item 23, gives 19 missing for the same R17 state; the two reports
+    disagree on that one number, 18 against 19, and it was not re-measured) (for example Badlands 162,176, where the shipped mesh puts four connections into the box part next to the
     part the walk visits); the shipped rule has more conditions than the above. 14 more tiles differ in the part lists
     of ground polygons (not off-mesh polygons); that is not part of this ruling.
     **R21 (item 23) explains most of what is left here: the visits are read from a `hidePart` layer, not from `subArea`.**
@@ -1513,9 +1518,13 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     the `subArea` of the spans that a trajectory visits. That field is wrong for the purpose in three ways, found by
     dumping, for every run of valid samples, the spans each walk visited and joining the runs to the shipped
     connections by tile and start point (949 tiles: every tile whose shipped mesh has a connection in a part, 382, the
-    174 tiles of the earlier analyses and 500 random ones; about 1,930 connections in a part). Over those tiles R17 gave 41
-    connections in a part that the shipped mesh does not list, 17 missing and 27 in another part (32 tiles); R21
-    gives 6, 1 and 1 (8 tiles).
+    174 tiles of the earlier analyses and 500 random ones; about 1,930 connections in a part). Over those 949 tiles R17 gave 41
+    connections in a part that the shipped mesh does not list, 17 missing and 27 in another part (85 wrong in 32
+    tiles); R21 gives 6, 1 and 1 (8 wrong in 8 tiles). The numbers of the *174-tile set* (84 residual tiles and the
+    115 of the earlier analysis; 13,328 connections, 11,669 matched) are marked as such below: R17 43 extra, 19
+    missing and 27 in another part (89 wrong, 542 matching). The 949 tiles contain the 174, yet the 949-tile R17
+    figures for extra and missing (41, 17) are lower than the 174-tile ones (43, 19); the reports do not explain this
+    (a different R17 build or counting is likely) and it was not re-measured, so compare numbers within one set only.
     * **The span that `addSpan` makes for a hide piece has `subArea` 0 (5.3, 10.2), but the shipped meshes put its
       connections into the piece's part.** A roof or slab of a hide object lies above the ground and the walls, so its
       cells are added, not painted (PAINT_OR_ADD, no hit): the span has `subArea` 0 and the walk found the part of
@@ -1526,7 +1535,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       and 172 of the 542 matching connections and the polygons of tiles that matched (162,176: 427 polygons, the
       shipped mesh has 434) are lost. So the part is modelled as a second id, `hidePart`, that only the walk reads (5.3). This is a model: it reproduces
       the data, and where the tool keeps the id (or whether it derives the part from the part geometry) is not known. With this
-      alone 8 of the 27 stay in another part, 1 is missing and 43 are extra (52 wrong in all, 89 before).
+      alone 8 of the 27 stay in another part, 1 is missing and 43 are extra (174-tile set: 52 wrong in all, 89 before).
     * **The first copy of an object keeps the span.** Two objects with the same geometry (Badlands 58,126: ...211 and
       ...212, parts 226 to 228 and 229 to 231) paint the same cells; the shipped connections are in the first copy's
       part (227), not in the last one's (230): an added span keeps the `hidePart` of a span it merges with (46 wrong,
@@ -1536,7 +1545,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     * **Tree indices are not parts.** Tree spans carry a tree index in `subArea` (area 10), and after the filters the
       same spans have area 0 with the index kept. The index can be the index of a hide part, and a walk over a tree
       then "visited" that part: most of the 43 extra connections of #127 were of this kind (`(n, 10)` and `(n, 0)` visits
-      of one id; 43 fall to 5 when `hidePart` is read, with the quarter threshold). The first attempt, excluding area 10 spans, did not remove the area 0 ones;
+      of one id; 43 fall to 5 on the 174-tile set when `hidePart` is read, with the quarter threshold). The first attempt, excluding area 10 spans, did not remove the area 0 ones;
       reading `hidePart`, which trees and doors never write, does. With it every visit counts, whatever the area of
       the span is (the filters make hide spans unwalkable; 69,219 has members whose visits are all of area 0 spans, so
       counting only area 14 spans loses 2 members and gains one in a tie).
@@ -1550,7 +1559,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     early variant broke, matches). The 9 tiles that are left in the two
     classes and are not data (R19, R20) are the ones under *Not explained* below, and 146,83, which has the same
     off-mesh polygons in the same parts and the same part lists as the shipped mesh; only the order of two tree obstacles
-    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (to be filed on its own). The five validation sets of 14.15 match completely.
+    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (issue #128). The five validation sets of 14.15 match completely.
     **Closed by R21 (the other bullets of #127):** the *class 4 false positives* were the tree-index collision: on the
     174-tile set R17 had 19 of its 43 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
     whose visits are `(n, 10)` and `(n, 0)` spans of one tree index; with R21 no class 4 connection is extra (the 5
@@ -1559,7 +1568,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     have their own items; the tiles of that list with an off-mesh cause are the ones fixed above. No separate
     measurement of the 14 was made beyond the class table (`ground` 7 tiles, as before).
     **Ties:** none are left under R21, so the lowest id of R17 stays.
-    Rejected on the way, measured on the same connections (the wrong ones, extra + missing + other part, with R17 as 89):
+    Rejected on the way, measured on the same connections (the wrong ones, extra + missing + other part, on the 174-tile set, with R17 as 89):
     first, last, highest id or lowest id of the visits instead of the most visited (22, 9, 25, 53); the part of the
     span that gives `last` at the step that gives `hiU` or `loU` (227 to 374: the floor's id is not the link's); the
     part of the spans the four ends of the span snap to (342 found, 246 missing); the break span counted (197 wrong, 191 of them in

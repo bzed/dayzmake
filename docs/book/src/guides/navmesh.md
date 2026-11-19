@@ -181,8 +181,8 @@ you need them.
 ### Speed
 
 Tiles are fetched and built in parallel: `--threads` builder threads (the default is the number of cores minus one)
-and one connection per `--server` (`--connections` changes that; keep it at one per `DayZDiag_x64.exe`, which serves one client at a time). If fetching is the slow part, start
-`DayZDiag_x64.exe` on several machines and give `--server a --server b --server c`; they must load the same world.
+and one connection per `--server` (`--connections` changes that; keep it at one per `DayZDiag_x64.exe`, which serves
+one client at a time). If fetching is the slow part, start `DayZDiag_x64.exe` on several machines and give `--server a --server b --server c`; they must load the same world.
 The output does not depend on the number of threads, connections or servers.
 
 ### When a run is interrupted
@@ -286,16 +286,18 @@ Detour builds when a tile is added to the mesh, so what is stored is not meaning
     this is a property of the data, not of the generator;
   - 8 differ in the order of door objects within a tile, which the game does not always send in the same order and
     which decides which of two overlapping door footprints a cell belongs to (data as well);
-  - 8 have a few off-mesh connections that the generator still assigns to another door or object part than the shipped
-    mesh (open issue [#127](https://github.com/bzed/dayzmake/issues/127));
+  - 8 have one off-mesh connection whose hide-part membership differs from the shipped mesh: six are listed in a part
+    where the shipped mesh lists none, one is missing and one is in another part of the same object (open issue
+    [#127](https://github.com/bzed/dayzmake/issues/127); doors never hold off-mesh polygons, so this is not a door
+    matter). These are the counts on the 949 tiles that were analysed in detail, which include these tiles;
   - 1 differs in the order of two tree obstacles (open issue
     [#128](https://github.com/bzed/dayzmake/issues/128)).
 
   (One tile, 171,213, is both in the tower area and one of the #127 cases.) The three tiles of the first row that were
   fetched again without `--record` are not in the capture and are outside the comparison.
 - **Earlier blocks, all inner tiles identical:** on Livonia, tiles 128-131 x 128-131 (open terrain) and 128-131 x
-  220-223 (a dense town); on Badlands, the blocks of the dense area and the two blocks with the irrigation tunnels,
-  whose floors are walkable below the surface.
+  220-223 (a dense town); on Badlands, a dense block (136-139 x 100-103) and two blocks with the irrigation tunnels (180-183 x
+  186-189 and 183-186 x 198-201), whose floors are walkable below the surface.
 
 So the claim is exact and limited: the inner tiles of the central half of Badlands and of five earlier blocks, with the
 polygon flags and the link array excluded, and with the 60 tiles above as the known differences. It does not cover the
