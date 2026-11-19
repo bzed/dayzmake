@@ -709,7 +709,8 @@ behaviour, earlier versions swept one side):
 1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (`normalize3(v) = v * (1.0f / |v|)`, ruling R16) (if the 3-D length
    is `< FLT_EPSILON` use `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback
    `(dn.z, 1, -dn.x)`).
-2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
+2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the
+   reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
    **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
    about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
    `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
@@ -1359,9 +1360,10 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): the one ulp error of `(n*(-h) + B) - S0` that R13 saw came from a `n` normalised by division, and `B - A` is not the rule.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
     the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
     moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
-    power of two, where their ulps differ. The shipped value is the single f32 subtraction `B - A`; `FMA`
-    gives the same value in the observed case but is not needed. dayzmake uses `dir = B - A`; with it all five validation
-    sets match the shipped meshes byte for byte (inner tiles), apart from the polygon flags and the link array.
+    power of two, where their ulps differ. At the time of R13 the shipped value was taken to be the single f32 subtraction `B - A`, and dayzmake used
+    `dir = B - A` (with it all five validation sets then matched byte for byte, inner tiles, apart from the polygon
+    flags and the link array). That was a compensation for the division-normalised `n`; R16 (14.18) replaces it:
+    dayzmake no longer uses `B - A`.
 16. **Shallow water depth (ruling R14, #117).** The first water pass (area 2) uses `waterDepth = walkableClimb`, not 0. With 0
     the shallow band reaches ground that is only a voxel under the surface, and on a sloped shore it is 1 m to 2 m too wide
     (Livonia tiles 130,220, 131,220, 131,221 and 131,222: the shipped shallow-water polygons end where the ground is 5 voxels
@@ -1376,6 +1378,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     exact rounding tie of `p0 + (p1 - p0)*t` at x of about 6510, and so both end points of two links by 1 mm. With the
     reciprocal all five validation sets match the shipped meshes completely (inner tiles); a lerp `p0*(1-t) + p1*t`
     for that point fixes the tile but breaks every set, and neither FMA nor a reciprocal in `normalize` changes it.
+    (A reciprocal in `normalize` does matter for `n` and `dir`: that is R16, 14.18.)
 18. **Normalisation by the reciprocal (ruling R16, #120, #121).** Every `normalize` of the link code (`refine_edge` frame and
     facing test, pass direction and normal) computes `v * (1.0f / |v|)`, not `v / |v|`. The two differ in the last bit for
     some `v` (`(-4.06, 0, -0.67)`: x is -0.98665547 by division and -0.9866554 by the reciprocal). With the reciprocal,
@@ -1549,7 +1552,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     off-mesh polygons in the same parts and the same part lists as the shipped mesh; only the order of two tree obstacles
     (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (to be filed on its own). The five validation sets of 14.15 match completely.
     **Closed by R21 (the other bullets of #127):** the *class 4 false positives* were the tree-index collision: on the
-    174-tile set R17 had 19 of its 41 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
+    174-tile set R17 had 19 of its 43 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
     whose visits are `(n, 10)` and `(n, 0)` spans of one tree index; with R21 no class 4 connection is extra (the 5
     extra of that set are class 0 and 1). The *14 tiles with ground part-list differences* were not caused by the
     off-mesh rule: those tiles (172,211, 191,188 and the like) are the geometry of R19 and the door order of R20, which

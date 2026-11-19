@@ -148,7 +148,7 @@ synthetic world looks like this:
 ```text
 $ dayzmake navmesh generate --capture world.dzgeo --threads 2 mymap.nm
 built 9 tiles, 0 empty, 0 failed in 0.4 s
-island filter: seed (60.0 10.0 60.0) -> 87 reachable, 1 isolated polys
+island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote mymap.nm
 ```
 
@@ -163,7 +163,7 @@ another spot, and `--no-island-filter` switches it off.
 ```text
 $ dayzmake navmesh info mymap.nm
 navmesh version 9, grid 3 x 3 tiles of 50.0 x 50.0 m, max tiles 9
-tiles 9, polys 88, verts 161, off-mesh connections 12
+tiles 9, polys 85, verts 159, off-mesh connections 12
 ```
 
 An existing target is never overwritten without `-f`; this is checked before the first tile is fetched, so you do
@@ -181,7 +181,7 @@ you need them.
 ### Speed
 
 Tiles are fetched and built in parallel: `--threads` builder threads (the default is the number of cores minus one)
-and one connection per `--server` (`--connections` changes that). If fetching is the slow part, start
+and one connection per `--server` (`--connections` changes that; keep it at one per `DayZDiag_x64.exe`, which serves one client at a time). If fetching is the slow part, start
 `DayZDiag_x64.exe` on several machines and give `--server a --server b --server c`; they must load the same world.
 The output does not depend on the number of threads, connections or servers.
 
@@ -193,11 +193,12 @@ or thousands of tiles), not a small one. To continue, give the file as the base 
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,2,0 --threads 2 --record rec.dzgeo part.nm
+warning: island filter skipped: no polygon near the seed (60.0 10.0 60.0) [navmesh-seed]
 built 3 tiles, 0 empty, 0 failed in 0.1 s
 wrote part.nm
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --base part.nm --skip-existing --threads 2 -f part.nm
 built 6 tiles, 0 empty, 0 failed in 0.3 s
-island filter: seed (60.0 10.0 60.0) -> 87 reachable, 1 isolated polys
+island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote part.nm
 ```
 
@@ -270,19 +271,36 @@ A capture holds the geometry of a whole world, so it is large; keep it with your
 ## Validation
 
 The generator was compared with the navmeshes that ship with DayZ 1.30, using captures made from a live
-`DayZDiag_x64.exe` (GE-Proton) on Livonia and on Badlands:
+`DayZDiag_x64.exe` (GE-Proton) on Livonia and on Badlands. Only the **inner tiles** can be compared, one tile in from
+the edge of what was built: an off-mesh connection (jump or climb link) into a neighbouring tile has its far end
+snapped to that tile's mesh only when the neighbour exists, and the tiles at the edge of a block have neighbours
+outside the capture. Two parts of a tile are left out of every comparison and are not errors: the polygon flags (they
+come from the island filter, which was off) and the Detour link array between polygons and its size, which stock
+Detour builds when a tile is added to the mesh, so what is stored is not meaningful for a comparison.
 
-- Livonia, open terrain (tiles 128-131 x 128-131) and the town block (128-131 x 220-223);
-- Badlands, a dense block (136-139 x 100-103) and two blocks with the irrigation tunnels (180-183 x 186-189 and
-  183-186 x 198-201), whose floors are walkable below the surface.
+- **The central half of Badlands.** Tiles 48-278 on both axes were rebuilt from one live capture (DayZ 1.30, recorded
+  2026-11-18) with the island filter off: 53,358 tiles built, none failed, in 1124 s on 24 cores. Of the 52,441 inner
+  tiles (49-277) **52,381 are byte-identical** to the shipped mesh. The other 60 all have a known cause:
+  - 44 lie in the area of the animated towers (171-178 x 210-230). Objects with moving parts are sent in the pose they
+    have at the moment of the request, so the same object has a different pose in each tile and in the shipped mesh:
+    this is a property of the data, not of the generator;
+  - 8 differ in the order of door objects within a tile, which the game does not always send in the same order and
+    which decides which of two overlapping door footprints a cell belongs to (data as well);
+  - 8 have a few off-mesh connections that the generator still assigns to another door or object part than the shipped
+    mesh (open issue [#127](https://github.com/bzed/dayzmake/issues/127));
+  - 1 differs in the order of two tree obstacles (open issue
+    [#128](https://github.com/bzed/dayzmake/issues/128)).
 
-Every inner tile built from a capture is identical to the shipped one, byte for byte, with two exceptions that are
-not errors: the polygon flags (they come from the island filter, which was off in the comparison) and the Detour
-link array between polygons, which stock Detour builds when a tile is added to the mesh, so the stored links are not
-meaningful for a comparison. Only inner tiles can match for a different reason: an off-mesh connection (jump or
-climb link) that leads into a neighbouring tile has its far end snapped only when that neighbour exists, and the
-tiles at the edge of a block have neighbours outside the capture. The comparison covers these blocks, not a whole map, so the first mesh of your
-own terrain is still worth a look in the game.
+  (One tile, 171,213, is both in the tower area and one of the #127 cases.) The three tiles of the first row that were
+  fetched again without `--record` are not in the capture and are outside the comparison.
+- **Earlier blocks, all inner tiles identical:** on Livonia, tiles 128-131 x 128-131 (open terrain) and 128-131 x
+  220-223 (a dense town); on Badlands, the blocks of the dense area and the two blocks with the irrigation tunnels,
+  whose floors are walkable below the surface.
+
+So the claim is exact and limited: the inner tiles of the central half of Badlands and of five earlier blocks, with the
+polygon flags and the link array excluded, and with the 60 tiles above as the known differences. It does not cover the
+edge tiles, the outer parts of Badlands, whole maps or other maps, so the first mesh of your own terrain is still worth
+a look in the game.
 
 You can repeat the comparison with your own copy of the game data. The test is ignored by default, because it needs
 files that are not part of the repository: `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a capture

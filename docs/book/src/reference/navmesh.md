@@ -28,7 +28,7 @@ is still loading can be reset (`Connection reset by peer`): repeat `probe` until
 mission and the config the server needs are in the [guide](../guides/navmesh.md). The builder was compared with the
 navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-core` repeats the comparison (variables
 `DAYZ_NAVMESH`, `DAYZ_NAVMESH_CAPTURE` and `DAYZ_NAVMESH_INNER`, run with
-`cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared.
+`cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared and the result: the inner tiles of the central half of Badlands are identical to the shipped mesh except 60 tiles with known causes, and the polygon flags and the link array and its size are not compared.
 
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
@@ -48,6 +48,11 @@ the first failed try.
 A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 
+Use one connection per `DayZDiag_x64.exe` (`--connections` defaults to one per server): it serves one client at a
+time, and the others are refused or reset. With three or more connections to one such server a tile can also fail on
+two connections that had each delivered a tile; it is then reported as not fetched although the server may serve it, and the
+printed `to continue` command tries it again.
+
 A **capture** (`.dzgeo`) is a recording of the geometry that a server sent. `generate --record` writes one while it
 fetches, and `generate --capture` builds from one without any server. A capture lets you rebuild the mesh after a
 change of the generator, or on another machine, without starting the game.
@@ -57,7 +62,8 @@ change of the generator, or on another machine, without starting the game.
 are built. Only the tiles of `--range` are put into the index, so a range of a capture of many gigabytes needs memory in
 proportion to the tiles in that range; a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few
 seconds and about 300 MB. The format is unchanged, so existing captures work. Records that lie outside the world grid are ignored (one message says how many); a capture with more
-records than the world has tiles is refused. A tile that is
+records than the world has tiles is refused. A library caller that opens a capture with `CaptureFile` and a `range` must pass the range of the run to `generate`:
+a run whose range is not covered by the indexed range is an error, not a mesh without those tiles. A tile that is
 cut off at the end of a capture is ignored; a malformed tile record is reported when its tile is built, as a failed
 tile, not when the file is opened.
 
@@ -170,7 +176,7 @@ is raised for them); the result of the island filter; and `wrote <target>`.
 ```text
 $ dayzmake navmesh generate --capture world.dzgeo --threads 2 mymap.nm
 built 9 tiles, 0 empty, 0 failed in 0.4 s
-island filter: seed (60.0 10.0 60.0) -> 87 reachable, 1 isolated polys
+island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote mymap.nm
 ```
 
@@ -193,6 +199,7 @@ again. The printed command is quoted for a POSIX shell (single quotes around any
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
+warning: island filter skipped: no polygon near the seed (60.0 10.0 60.0) [navmesh-seed]
 built 0 tiles, 0 empty, 0 failed in 10.0 s
   tile (0,0): connection to 127.0.0.1:36533 closed by the server
 wrote lost.nm
@@ -205,16 +212,16 @@ is the same as an uninterrupted run:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,2,0 --threads 2 --record rec.dzgeo part.nm
+warning: island filter skipped: no polygon near the seed (60.0 10.0 60.0) [navmesh-seed]
 built 3 tiles, 0 empty, 0 failed in 0.1 s
 wrote part.nm
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --base part.nm --skip-existing --threads 2 -f part.nm
 built 6 tiles, 0 empty, 0 failed in 0.3 s
-island filter: seed (60.0 10.0 60.0) -> 87 reachable, 1 isolated polys
+island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote part.nm
 ```
 
-(The first run raised `warning: island filter skipped: no polygon near the seed (60.0 10.0 60.0) [navmesh-seed]`,
-because the seed lies in a row that was not built.)
+(The first run raised the warning `navmesh-seed` shown above, because the seed lies in a row that was not built.)
 
 Errors:
 
@@ -254,15 +261,15 @@ number of tiles and the totals of polygons, vertices and off-mesh connections (t
 ```text
 $ dayzmake navmesh info --tiles mymap.nm
 navmesh version 9, grid 3 x 3 tiles of 50.0 x 50.0 m, max tiles 9
-tiles 9, polys 88, verts 161, off-mesh connections 12
+tiles 9, polys 85, verts 159, off-mesh connections 12
 x z ref polys verts offmesh parts obstacles
 0 0 0x1000000000000 2 6 0 0 1
 1 0 0x1000000100000 1 4 0 2 0
 2 0 0x1000000200000 1 4 0 2 1
-0 1 0x1000000300000 7 13 0 0 1
+0 1 0x1000000300000 4 8 0 0 1
 1 1 0x1000000400000 41 85 12 2 0
 2 1 0x1000000500000 2 6 0 2 0
-0 2 0x1000000600000 30 31 0 0 0
+0 2 0x1000000600000 30 34 0 0 0
 1 2 0x1000000700000 2 6 0 0 1
 2 2 0x1000000800000 2 6 0 0 1
 ```
@@ -273,7 +280,7 @@ With `--json` the object has `version`, `tilesX`, `tilesZ`, `tileWidth`, `tileHe
 
 ```text
 $ dayzmake navmesh info --json mymap.nm
-{"maxPolys":1048576,"maxTiles":9,"offMesh":12,"polys":88,"tileCount":9,"tileHeight":50.0,"tileWidth":50.0,"tilesX":3,"tilesZ":3,"version":9,"verts":161}
+{"maxPolys":1048576,"maxTiles":9,"offMesh":12,"polys":85,"tileCount":9,"tileHeight":50.0,"tileWidth":50.0,"tilesX":3,"tilesZ":3,"version":9,"verts":159}
 ```
 
 A file that is not a navmesh set is an error.
