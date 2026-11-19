@@ -4,7 +4,8 @@
 
 use std::cmp::Ordering;
 
-/// The comparison of two items, `Equal` for an index outside the slice.
+/// The comparison of two items, `Equal` for an index outside the slice. The `Equal` arm is unreachable by
+/// construction (every caller checks the index range first); it only avoids a panic path.
 fn cmp_at<T>(items: &[T], a: usize, b: usize, cmp: &impl Fn(&T, &T) -> Ordering) -> Ordering {
     match (items.get(a), items.get(b)) {
         (Some(x), Some(y)) => cmp(x, y),

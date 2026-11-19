@@ -82,7 +82,7 @@ fn dist_sq(a: V, b: V) -> f32 {
     dot(d, d)
 }
 
-/// `v / |v|` when the length is at least `FLT_EPSILON`, else `(v.x, 1, v.z)` unnormalised.
+/// `v` times the reciprocal of `|v|` when the length is at least `FLT_EPSILON`, else `(v.x, 1, v.z)` unnormalised.
 fn normalize3(v: V) -> V {
     let l = len(v);
     if l >= FLT_EPSILON {
@@ -677,10 +677,8 @@ pub(crate) fn walk_trajectory(ctx: &ClassCtx<'_>, s: V, e: V, ys: f32, ye: f32) 
                 }
                 last = sp.smax;
                 if ctx.is_hide_part(sp.hide_part) {
-                    {
-                        let n = parts.entry(sp.hide_part).or_insert(0_u32);
-                        *n = n.saturating_add(1);
-                    }
+                    let n = parts.entry(sp.hide_part).or_insert(0_u32);
+                    *n = n.saturating_add(1);
                 }
                 if bot <= u32::from(sp.smax) && u32::from(sp.smin) <= top {
                     return fail(STATE_INVALID, parts);
@@ -1611,7 +1609,7 @@ mod tests {
     /// Many hide parts: the totals of a run hold one entry per part met, not per visit, and the
     /// result does not depend on how many there are.
     #[test]
-    fn many_hide_parts_stay_bounded() {
+    fn many_hide_parts_one_total_entry_per_part() {
         let mut run = RunVisits::default();
         for round in 0..3_u32 {
             let walk: Visits = (1..=60_000_u16).map(|p| (p, 1 + round)).collect();

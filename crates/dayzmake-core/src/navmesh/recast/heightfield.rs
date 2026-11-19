@@ -75,9 +75,9 @@ impl Span {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SpanPiece {
-    /// Column.
+    /// Column along the x axis (`0..width`).
     pub x: i32,
-    /// Column.
+    /// Column along the z axis (`0..height`).
     pub z: i32,
     /// Lower limit in voxels.
     pub smin: u16,
