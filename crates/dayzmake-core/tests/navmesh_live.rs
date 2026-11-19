@@ -2,8 +2,9 @@
 //! needs game data, which never goes into the repository).
 //!
 //! `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a `.dzgeo` capture of the same world
-//! and `DAYZ_NAVMESH_INNER` the tile range `x0,z0,x1,z1` to compare. Only inner tiles can match: a
-//! link whose far end is in a tile outside the capture is not made. The island filter is off, so the
+//! and `DAYZ_NAVMESH_INNER` the tile range `x0,z0,x1,z1` to compare. Only inner tiles can match: the
+//! far end of an off-mesh connection into a tile outside the capture is not snapped to that tile's mesh
+//! (and not linked), so the tiles at the edge of a block differ. The island filter is off, so the
 //! polygon flags are not compared. The optional `DAYZ_NAVMESH_RANGE` (`x0,z0,x1,z1`) limits the build to
 //! that tile range, which makes a block of a capture that is too big to build whole usable; build one
 //! tile more than `DAYZ_NAVMESH_INNER` on each side.
@@ -35,7 +36,7 @@ fn build(path: &str, threads: usize, range: Option<[i32; 4]>) -> (Vec<u8>, NavMe
         &CaptureFileOptions::new(),
         &mut warnings,
     )
-    .expect("capture");
+    .unwrap_or_else(|e| panic!("open {path} (DAYZ_NAVMESH_CAPTURE): {e}"));
     let mut options = GenerateOptions::default();
     options.island_filter = false;
     options.threads = Some(threads);
@@ -193,8 +194,11 @@ fn capture_matches_shipped_inner_tiles() {
     let range = std::env::var("DAYZ_NAVMESH_RANGE")
         .ok()
         .map(|r| rect("DAYZ_NAVMESH_RANGE", &r));
-    let shipped = NavMeshSet::read(&mut File::open(&shipped_path).expect("open the navmesh"))
-        .expect("read the navmesh");
+    let shipped = NavMeshSet::read(
+        &mut File::open(&shipped_path)
+            .unwrap_or_else(|e| panic!("open {shipped_path} (DAYZ_NAVMESH): {e}")),
+    )
+    .expect("read the navmesh");
 
     let (bytes, ours) = build(&capture_path, 1, range);
     let (bytes8, _) = build(&capture_path, 8, range);

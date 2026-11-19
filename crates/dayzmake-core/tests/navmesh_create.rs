@@ -358,3 +358,31 @@ fn bv_tree_tie_order_matches_shipped_small() {
     let nodes: Vec<i32> = data.bv_tree[..7].iter().map(|n| n.i).collect();
     assert_eq!(nodes, vec![-7, -3, 2, 1, -3, 0, 3]);
 }
+
+/// 20 polygons with equal bounds take the partition path of the sort (more than 8 items) with a
+/// comparator that ties everywhere: the tree must still be complete and its escape indices valid.
+#[test]
+fn bv_tree_of_20_identical_polys_is_complete() {
+    let n = 20;
+    let data = identical_tile(n);
+    assert_eq!(data.bv_tree.len(), 2 * n);
+    let used = 2 * n - 1;
+    let mut seen = vec![0u32; n];
+    let mut escapes = 0;
+    for (k, node) in data.bv_tree[..used].iter().enumerate() {
+        if node.i >= 0 {
+            seen[usize::try_from(node.i).expect("leaf index")] += 1;
+        } else {
+            let escape = usize::try_from(-node.i).expect("escape");
+            assert!(escape >= 2 && k + escape <= used, "escape {escape} at {k}");
+            escapes += 1;
+        }
+    }
+    assert!(
+        seen.iter().all(|&s| s == 1),
+        "every polygon in one leaf: {seen:?}"
+    );
+    assert_eq!(escapes, n - 1, "one inner node per split");
+    assert_eq!(data.bv_tree[used], BvNode::default());
+    assert_eq!(data, identical_tile(n));
+}

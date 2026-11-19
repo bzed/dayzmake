@@ -358,9 +358,11 @@ fn info_prints_totals() {
         "{}",
         out.stdout
     );
-    assert!(out.stdout.contains("tiles 9"), "{}", out.stdout);
+    // The totals of the synthetic world are quoted in the navmesh guide and reference; when the
+    // builder changes them, re-run the documented examples and update these numbers and the docs.
     assert!(
-        out.stdout.contains("off-mesh connections"),
+        out.stdout
+            .contains("tiles 9, polys 85, verts 159, off-mesh connections 12"),
         "{}",
         out.stdout
     );
