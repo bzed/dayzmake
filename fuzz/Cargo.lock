@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "dayzmake"
-version = "3.1.0"
+version = "3.2.0"
 dependencies = [
  "colored",
  "dayzmake-core",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "dayzmake-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "byteorder",
  "encoding_rs",

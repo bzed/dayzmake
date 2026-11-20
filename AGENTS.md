@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Rules for anyone (human or agent) changing dayzmake. dayzmake is a DayZ modding CLI (build, sign, verify,
-pack, unpack, binarize, derapify, PAA conversion). It is a fork of armake2 by KoffeinFlummi, licensed
-**GPL-2.0-or-later**; keep the licence and the original copyright holders (`Cargo.toml`, `LICENSE`). It reads
+pack, unpack, binarize, derapify, PAA conversion, navmesh generation). It is a fork of armake2 by KoffeinFlummi,
+licensed **GPL-2.0-or-later**; keep the licence and the original copyright holders (`Cargo.toml`, `LICENSE`). It reads
 PBO, config, P3D, PAA and key/signature files from mods the user did not write, so every reader must treat its
 input as hostile.
 
@@ -11,10 +11,10 @@ input as hostile.
 | Path | Content |
 |---|---|
 | `crates/dayzmake-core/` | library crate `dayzmake-core`: the file formats and their plumbing |
-| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `paa`, `sign`, `io` (readers and writers), `preprocess`, `eval`, `binarize`, `error`, `warning` |
-| `crates/dayzmake-core/tests/` | library tests (config, preprocessor, BI golden files, fuzz seeds of the format readers) |
+| `crates/dayzmake-core/src/` | `pbo`, `config`, `p3d`, `odol`, `paa`, `lzss`, `sign`, `io` (readers and writers), `extract`, `preprocess`, `eval`, `binarize`, `fileid`, `error`, `warning`; `navmesh/` (feature `navmesh`: data-server client and wire format, captures, the Recast/Detour tile builder, the `.nm` reader and writer, the generator; Rust ports of Recast and Detour, zlib licence) |
+| `crates/dayzmake-core/tests/` | library tests (config, preprocessor, BI golden files, navmesh builder and generator against a fake data server, fuzz seeds of the format readers); `navmesh_live` is ignored (needs game data) |
 | `crates/dayzmake-core/benches/` | `criterion` benchmarks (`preprocess`, `config`) |
-| `src/*.rs` | root crate `dayzmake`: the CLI (`run.rs`, `main.rs`), the MCP server and the script API index (`api/`) |
+| `src/*.rs` | root crate `dayzmake`: the CLI (`run.rs`, `main.rs`, `commands/`), the MCP server (`mcp.rs`) and the script API index (`api/`) |
 | `tests/` | binary-driven tests (CLI, MCP, snapshots) and tests of the root crate; `tests/fixtures/` is shared with core |
 | `tests/fixtures/bi/` | reference output of BI's tools on our own inputs (see its `README.md`) |
 | `testharness/` | end-to-end test against a real DayZ server (manual, not run by CI) |
@@ -175,7 +175,7 @@ Run `make check`. It must pass, because CI runs the same steps:
 | lint | `make lint` | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
 | rustdoc | `make doc` | `cargo doc --workspace --no-deps` with `RUSTDOCFLAGS="-D warnings"` |
 | dependencies | `make deny` | `cargo deny check`: licences, advisories, bans, sources |
-| features | `make features` | `dayzmake-core` builds with no features, `sign` only and `image` only |
+| features | `make features` | `dayzmake-core` builds with no features, `sign` only, `image` only and `navmesh` only |
 | docs.rs | `make docsrs` | `cargo +nightly doc -p dayzmake-core --all-features` with `--cfg docsrs` and warnings as errors; skipped without nightly |
 | book | `make book` | `mdbook build docs/book` into the target dir; skipped without `mdbook`. `tests/book_sources.rs` (in `make test`) fails when a command, option, MCP tool or warning has no page in `docs/book/src/reference/` |
 | packaging | `make package-check` | `cargo package --workspace`; CI runs it without `--allow-dirty` |

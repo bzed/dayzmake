@@ -30,8 +30,8 @@ float_cmp = "deny"
 
 [package]
 name = "dayzmake"
-version = "3.1.0"
-description = "DayZ modding tools"
+version = "3.2.0"
+description = "DayZ modding tools: PBO, config, models, PAA, signing, script API index and navmesh generation"
 license.workspace = true
 keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
 categories = ["command-line-utilities", "game-development"]
@@ -52,7 +52,7 @@ serde = { version = "1.0", features = ["derive"] }
 regex = "1.10"
 serde_json = "1"
 image = "0.24"
-dayzmake-core = { path = "crates/dayzmake-core", version = "0.3.0" }
+dayzmake-core = { path = "crates/dayzmake-core", version = "0.3.1" }
 sha1 = { version = "0.11", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

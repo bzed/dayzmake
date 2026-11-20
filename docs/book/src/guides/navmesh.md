@@ -242,17 +242,16 @@ $ dayzmake navmesh generate --base mymap.nm --range 10,20,14,24 -f mymap.nm
 The new tiles replace those of their cells; the other tiles stay, and a tile that became empty is removed.
 
 **Regenerating offline.** With `--record` the geometry that came from the game is saved in a `.dzgeo` file. Later you
-can build again from it without starting the game, for example with another door state or after an update of
-dayzmake:
+can build again from it without starting the game, for example with another door state or after an update of dayzmake:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --record mymap.dzgeo mymap.nm
 $ dayzmake navmesh generate --capture mymap.dzgeo --doors open -f mymap-open.nm
 ```
 
-A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO.
-A capture of a whole map can be tens of gigabytes; building a
-`--range` from it reads only the tiles of that range, so a small range stays fast and small.
+A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO. A
+capture of a whole map can be tens of gigabytes; building a `--range` from it reads only the tiles of that range, so a
+small range stays fast and small.
 
 ## Good to know
 
@@ -312,7 +311,9 @@ a look in the game.
 
 You can repeat the comparison with your own copy of the game data. The test is ignored by default, because it needs
 files that are not part of the repository: `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a capture
-(`--record`) of the same world and `DAYZ_NAVMESH_INNER` the inner tile range `x0,z0,x1,z1` to compare:
+(`--record`) of the same world and `DAYZ_NAVMESH_INNER` the inner tile range `x0,z0,x1,z1` to compare. A capture that is
+too big to build whole can be limited with `DAYZ_NAVMESH_RANGE` (`x0,z0,x1,z1`): only that range is built, so it must
+reach one tile beyond `DAYZ_NAVMESH_INNER` on each side:
 
 ```text
 DAYZ_NAVMESH=navmesh.nm DAYZ_NAVMESH_CAPTURE=world.dzgeo DAYZ_NAVMESH_INNER=128,128,131,131 \

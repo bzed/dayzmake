@@ -83,7 +83,7 @@ Commands:
     navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
                 or from a capture: probe shows the server's world parameters, generate builds the
                 mesh, info summarises a .nm file.
-    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
+    mcp         Run an MCP server on stdin/stdout (tools for the API index, the file commands and navmeshes).
 
 Options:
     -v --verbose                Enable verbose output.

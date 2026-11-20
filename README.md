@@ -13,7 +13,7 @@ Documentation: <https://bzed.github.io/dayzmake/> (guides and a reference of eve
 <!-- ANCHOR: intro -->
 DayZ modding tools written in Rust: PBO packing and unpacking, config
 preprocessing and rapification, model inspection and binarization, PAA
-conversion and signature handling.
+conversion, signature handling and navigation mesh (navmesh) generation for terrain mods.
 
 ## History
 
@@ -22,18 +22,19 @@ itself the successor to armake, diverged from it for DayZ modding: Arma 3
 targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
-
-**Status:** `paa2img` and `img2paa` work.
 <!-- ANCHOR_END: intro -->
 
 ## Changes
 <!-- ANCHOR: changes -->
 
-### Unreleased
+### 3.2.0
+
+With dayzmake-core 0.3.1.
+
 
 - New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default). A tile that needs more than 2^26 heightfield spans fails instead of exhausting memory, `--base` must match the world's grid and tile size, `navmesh info` shows the file version read (7 or 9), and the MCP `sea_level` takes a number or a string.
-- `navmesh generate --capture` no longer loads the whole capture: it indexes the file and reads only the tiles of the range (memory in proportion to the range, not to the file; a 3 x 3 range of a 50 GB capture ran in 6 s and 300 MB). `dayzmake-core` gets `capture::CaptureFile` and `Source::CaptureFile`; the capture format is unchanged.
-- `navmesh generate`: a data-server connection that is refused or reset is retried five times with 10 seconds of waiting (1, 2, 3 and 4 s between the tries, was 2, 4, 6 and 8 s), and when it still fails its tile goes back to the queue for the other connections instead of failing; a tile that fails on two working connections, or gets a wrong answer, is reported as not fetched without taking the connections down. `--record` may not name the `--capture` file. Only the tiles of `--range` are indexed from a capture (library: `CaptureFileOptions`; a run for a range wider than the indexed one is refused).
+- `navmesh generate --capture` does not load the whole capture: it indexes the file and reads only the tiles of the range (memory in proportion to the range, not to the file; a 3 x 3 range of a 50 GB capture ran in 6 s and 300 MB). `dayzmake-core` gets `capture::CaptureFile` and `Source::CaptureFile`; the capture format is unchanged.
+- `navmesh generate`: a data-server connection that is refused or reset is retried five times with 10 seconds of waiting (1, 2, 3 and 4 s between the tries), and when it still fails its tile goes back to the queue for the other connections instead of failing; a tile that fails on two working connections, or gets a wrong answer, is reported as not fetched without taking the connections down. `--record` may not name the `--capture` file. Only the tiles of `--range` are indexed from a capture (library: `CaptureFileOptions`; a run for a range wider than the indexed one is refused).
 
 ### 3.1.0
 
@@ -295,7 +296,7 @@ GitHub CLI (without a tag it downloads the latest release):
 gh release download -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
 ```
 
-On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.1.0-debian-trixie-x86_64.tar.gz`):
+On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.2.0-debian-trixie-x86_64.tar.gz`):
 
 ```
 gpg --import dayzmake-release-key.asc
@@ -328,7 +329,7 @@ $s = @(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>$null)
   [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] GOODSIG DF753D99D064EB7E ') -and
   [bool]($s | Select-String -Quiet -Pattern '^\[GNUPG:\] VALIDSIG 662441B36A5785AD18FB8667DF753D99D064EB7E ') -and
   -not ($s | Select-String -Quiet -Pattern '^\[GNUPG:\] (EXPSIG|EXPKEYSIG|REVKEYSIG|BADSIG|ERRSIG) ')
-$file = 'dayzmake-v3.1.0-windows-x86_64.zip'
+$file = 'dayzmake-v3.2.0-windows-x86_64.zip'
 $expected = ((Select-String -SimpleMatch $file SHA256SUMS).Line -split '\s+')[0]
 (Get-FileHash -Algorithm SHA256 $file).Hash -eq $expected.ToUpper()
 ```
@@ -423,7 +424,7 @@ Commands:
     navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
                 or from a capture: probe shows the server's world parameters, generate builds the
                 mesh, info summarises a .nm file.
-    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
+    mcp         Run an MCP server on stdin/stdout (tools for the API index, the file commands and navmeshes).
 
 Options:
     -v --verbose                Enable verbose output.
@@ -491,8 +492,9 @@ See `dayzmake --help` for more.
 <!-- ANCHOR: library -->
 
 The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
-(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures, with no CLI dependencies. It never
-prints; warnings go to a `WarningSink` you provide, so it is safe to use from many threads.
+(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures and navigation meshes (`.nm`, with their
+generator), with no CLI dependencies. It never prints; warnings go to a `WarningSink` you provide, so it is safe to use
+from many threads.
 
 ```
 cargo add dayzmake-core
