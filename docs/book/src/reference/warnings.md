@@ -255,7 +255,7 @@ In file data/broken.p3d: warning: Cannot check textures and materials: not an ML
 
 Raised by: `navmesh generate`.
 
-The island filter found no polygon near the seed position (a box of 30 m in x, 30 m in height and 3 m in z around it), so it was skipped and no polygon is flagged as an island. The seed is the world's `seedPosition` or the one given with `--seed`; it has to be on land, near walkable ground.
+The island filter found no polygon near the seed position (a box that reaches 30 m in x, 30 m in height and 3 m in z to each side of it), so it was skipped and no polygon is flagged as an island. The seed is the world's `seedPosition` or the one given with `--seed`; it has to be on land, near walkable ground.
 
 ```text
 warning: island filter skipped: no polygon near the seed (-5000.0 10.0 -5000.0) [navmesh-seed]

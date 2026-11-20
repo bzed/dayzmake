@@ -312,7 +312,7 @@ a look in the game.
 
 You can repeat the comparison with your own copy of the game data. The test is ignored by default, because it needs
 files that are not part of the repository: `DAYZ_NAVMESH` is the shipped `.nm`, `DAYZ_NAVMESH_CAPTURE` a capture
-(`--record`) of the same world and `DAYZ_NAVMESH_INNER` the inner tile range `x0,z0,x1,z1` to compare:
+(`--record`) of the same world and `DAYZ_NAVMESH_INNER` the inner tile range `x0,z0,x1,z1` to compare. A capture that is too big to build whole can be limited with `DAYZ_NAVMESH_RANGE` (`x0,z0,x1,z1`): only that range is built, so it must reach one tile beyond `DAYZ_NAVMESH_INNER` on each side:
 
 ```text
 DAYZ_NAVMESH=navmesh.nm DAYZ_NAVMESH_CAPTURE=world.dzgeo DAYZ_NAVMESH_INNER=128,128,131,131 \

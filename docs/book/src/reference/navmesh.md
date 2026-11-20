@@ -27,7 +27,7 @@ The data server opens its port about 25 seconds after `DayZDiag_x64.exe` starts,
 is still loading can be reset (`Connection reset by peer`): repeat `probe` until it answers. The command line, the
 mission and the config the server needs are in the [guide](../guides/navmesh.md). The builder was compared with the
 navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-core` repeats the comparison (variables
-`DAYZ_NAVMESH`, `DAYZ_NAVMESH_CAPTURE` and `DAYZ_NAVMESH_INNER`, run with
+`DAYZ_NAVMESH`, `DAYZ_NAVMESH_CAPTURE` and `DAYZ_NAVMESH_INNER`, and the optional `DAYZ_NAVMESH_RANGE`, run with
 `cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared and the result: the inner tiles of the central half of Badlands are identical to the shipped mesh except 60 tiles with known causes, and the polygon flags and the link array and its size are not compared.
 
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
