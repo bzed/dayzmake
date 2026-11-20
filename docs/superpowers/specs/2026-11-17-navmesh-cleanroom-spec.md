@@ -1559,7 +1559,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     early variant broke, matches). The 9 tiles that are left in the two
     classes and are not data (R19, R20) are the ones under *Not explained* below, and 146,83, which has the same
     off-mesh polygons in the same parts and the same part lists as the shipped mesh; only the order of two tree obstacles
-    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (issue #128, settled as data by R22, item 24). The five validation sets of 14.15 match completely.
+    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (issue #128, settled as
+    data by R22, item 24). The five validation sets of 14.15 match completely.
     **Closed by R21 (the other bullets of #127):** the *class 4 false positives* were the tree-index collision: on the
     174-tile set R17 had 19 of its 43 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
     whose visits are `(n, 10)` and `(n, 0)` spans of one tree index; with R21 no class 4 connection is extra (the 5
@@ -1596,6 +1597,11 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     3,497, vertex count descending 5,572, x ascending 4,157 and descending 1,389, z 3,335 and 1,895, y 2,435 and 2,988,
     (x, z) as x, (z, x) as z, the bounding box minimum x 4,302 and z 3,407, the centroid x 4,171 and z 3,333, the height
     2,086 and 3,009, the bounding box area 1,973 and 3,104, (radius, vertex count) descending 3,718, (vertex count,
-    radius) ascending 3,712. The best key breaks three of four tiles, so the order is not a sort of the generator.
+    radius) ascending 3,712. The best key (vertex count ascending) breaks two of three tiles, so the order is
+    not a sort of the generator.
+    Confirmation, as for R20: 146,83 and its neighbours were written to a capture with the input of parts 7 and 8
+    swapped (their vertex ranges exchanged, nothing else) and built with the live test (`navmesh_live`, island filter
+    off); the tile then matches the shipped one in every compared section (the unchanged capture differs in the
+    obstacle order only). So the swap has no other effect, and the shipped order is the input order the server gave.
     It is the order in which the data server listed the objects of that tile, as for doors (R20): data. Nothing is
     changed in the generator; 146,83 stays the one tile of the half that differs only in an obstacle order.
