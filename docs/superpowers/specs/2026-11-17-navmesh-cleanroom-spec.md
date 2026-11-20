@@ -341,7 +341,8 @@ Objects' door **state is not sent** by the server (hence `--doors`).
 * A dead connection **hands its tile back**: the tile goes to a queue, and the connections that are left take it
   before they claim a fresh tile (a connection that has not delivered a tile yet takes a fresh one first, so that it
   proves itself on a tile that nobody failed). The fetcher of the dead connection stops. The tile is reported as
-  failed (`tile (x,z): <message of its first failed try>`) when it is **poison**, or when no connection is left (the
+  failed (`tile (x,z): <the last error of the first connection that died>`) when it is **poison**, or when no
+  connection is left (the
   last fetcher to stop reports every tile that is still handed back or unclaimed). A tile is poison when its
   connection died on two connections that had delivered a tile before (*proven*), or on one proven connection and
   one that had not (*unproven*). Deaths on unproven connections alone do not count: a server that refuses or resets
@@ -764,9 +765,11 @@ behaviour, earlier versions swept one side):
         span is in 2..6: result **water** (state 2); stop.
       * If `inRange` and the solid column has spans: `last = 0`; `top = (u32)(i64)((y + traj[j].ymax - bmin.y)/ch)`,
         `bot = (u32)(i64)((y + traj[j].ymin - bmin.y)/ch)` (negative values wrap as unsigned); walk the spans in order
-        keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `s.hidePart` is the index of a **hide part**
-        (a part of an area 14 group of the extras list, 5.1; part 0 is a part, the layer's mark for "none" is 65535, item 23; R21: whatever the span's area, the filters
-        make hide spans unwalkable and the links over them are listed all the same), count one visit for that part id in the sample's *part visits*
+        keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `s.hidePart` is the
+        index of a **hide part** (a part of an area 14 group of the extras list, 5.1; part 0 is a part, the layer's
+        mark for "none" is 65535, item 23; R21: whatever the span's area, the filters
+        make hide spans unwalkable and the links over them are listed all the same), count one visit for that part id
+        in the sample's *part visits*
         (R17); if `bot <= s.smax && s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a
         block): if `prev` exists and its area is in 2..6, result **water** and stop. (The span that makes the loop break,
         the first one above the window, is not counted. The part visits of a sample that fails are not used.)
@@ -932,7 +935,8 @@ obstacle's y to the nearest point's y. (The `.nm` therefore stores snapped heigh
   (inner), then tiles inside the block row by row (`z` outer, `x` inner), clipped to `x1, z1`. This keeps the data
   server's streaming cache warm. An `include` predicate (used for `--skip-existing`) removes tiles from this list.
 * Threads: fetchers (default one per host) claim the next plan index (3.6: the hand-back queue first, then a shared
-  counter, never further than the claim window ahead of the first tile that is not yet applied). A bounded queue of at most **64**
+  counter, never further than the claim window ahead of the first tile that is not yet applied). A bounded queue
+  of at most **64**
   fetched-but-unbuilt tiles separates fetchers from builders; builders (default `cores - 1`, minimum 1) push results into
   a bounded queue of `builders * 4`; a single assembler consumes results **in completion order** and calls `setTile`.
   Consequently the tile-slot order (and the order in which links were allocated) depends on completion order unless a
@@ -1554,7 +1558,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     174 tiles of the earlier analyses and 500 random ones; about 1,930 connections in a part). Over those 949 tiles R17 gave 41
     connections in a part that the shipped mesh does not list, 17 missing and 27 in another part (85 wrong in 32
     tiles); R21 gives 6, 1 and 1 (8 wrong in 8 tiles). The numbers of the *174-tile set* (the 84 residual tiles
-    and the 115 tiles of the earlier analysis, 25 of which are in both: 84 + 115 - 25 = 174; 13,328 connections,
+    and the 115 tiles of the earlier analysis; the overlap of 25 tiles is derived, 84 + 115 - 174, not counted; 13,328
+    connections,
     11,669 matched) are marked as such below: R17 43 extra, 19
     missing and 27 in another part (89 wrong, 542 matching). The 949 tiles contain the 174, yet the 949-tile R17
     figures for extra and missing (41, 17) are lower than the 174-tile ones (43, 19); the reports do not explain this
@@ -1588,8 +1593,9 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       id of the first part of a tile, so a hide part 0 could never get a link, and a later part could take its spans.
       Measured on the shipped Badlands mesh (106,929 tiles): 1,688 tiles list polygons in part 0 of their extras list,
       all of them ground polygons and none of area 14, and no tile lists an off-mesh polygon there. So the case does
-      not occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; a tile has
-      far fewer than 65,535 parts) leaves every measured tile as it was: the 8 connections of #127 (123,239, 149,252,
+      not occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; ids wrap at
+      65,536, ruling R11, so the part with id 65535 counts as none) leaves every measured tile as it was: the 8
+      connections of #127 (123,239, 149,252,
       196,77, 99,201, 172,89, 171,213, 167,244 and 194,225) and the regression sets are unchanged.
     The quarter threshold (item 19) is still needed and still a placeholder for a missing condition. On the 949 tiles R21
     gives 12 wrong connections without it (11 extra, 1 other part) and 8 with it (6 extra, 1 missing, 1 other part): it
@@ -1637,16 +1643,17 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     the geometry. No sort key keeps the 19,875 tiles and fixes 146,83: of 19,875 tiles that must keep their order,
     radius descending keeps 4,065 (it fixes 146,83), the vertex count ascending 6,547 (fixes it), radius ascending
     3,497, vertex count descending 5,572, x ascending 4,157 and descending 1,389, z 3,335 and 1,895, y 2,435 and 2,988,
-    (x, z) as x, (z, x) as z, the bounding box minimum x 4,302 and z 3,407 ascending (1,322 and 1,839 descending), the centroid x 4,171 and
-    z 3,333 ascending (1,384 and 1,900 descending), the height
+    (x, z) as x, (z, x) as z, the bounding box minimum x 4,302 and z 3,407 ascending (1,322 and 1,839 descending),
+    the centroid x 4,171 and z 3,333 ascending (1,384 and 1,900 descending), the height
     2,086 and 3,009, the bounding box area 1,973 and 3,104, (radius, vertex count) descending 3,718, (vertex count,
     radius) ascending 3,712. The best key (vertex count ascending) breaks two of three tiles, so the order is
     not a sort of the generator.
     Confirmation, as for R20: 146,83 and its neighbours were written to a capture with the input of parts 7 and 8
     swapped (their vertex ranges exchanged, nothing else) and built with the live test (`navmesh_live`, island filter
     off); the tile then matches the shipped one in every compared section (the unchanged capture differs in the
-    obstacle order only). So the swap has no other effect: the shipped order is an input order of the generator. That the server gave it
-    in that order is inferred by elimination (no sort key reproduces both this tile and the other 19,875), not
+    obstacle order only). So the swap has no other effect: the shipped order is an input order of the generator.
+    That the server gave it in that order is inferred by elimination (no sort key reproduces both this tile and the
+    other 19,875), not
     shown by a capture of the server's own order. It is the order in which the data server listed the objects of
     that tile, as for doors (R20): data. Nothing is
     changed in the generator; 146,83 stays the one tile of the half that differs only in an obstacle order.

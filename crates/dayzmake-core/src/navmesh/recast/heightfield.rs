@@ -56,7 +56,7 @@ pub struct Span {
     /// The hide part (area 14 group) that the span belongs to, [`NO_HIDE_PART`] for none. A second
     /// id layer next to [`Span::sub_area`]: only the hide part rasterisation writes it (ruling R21),
     /// the regions and contours do not look at it, and the link trajectory walk reads it. Part 0 is
-    /// a part like any other; the id 65535 cannot be told from "none" (a tile has far fewer parts).
+    /// a part like any other. Part ids wrap at 65,536 (ruling R11), so the part with id 65535 is treated as "none".
     pub hide_part: u16,
 }
 

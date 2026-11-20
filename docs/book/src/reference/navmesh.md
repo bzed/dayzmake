@@ -43,8 +43,9 @@ connections that never delivered a tile (a refused or reset start) count only to
 start loses no tile. A
 complete answer that is wrong (not a tile, another tile, an unknown cell class) is a failure of that tile alone: the
 connection is not dead, because the whole frame was read and the next request uses a fresh connection. A tile is
-reported as not fetched because of dead connections only when no connection is left; the text of its error is that of
-the first failed try.
+reported as not fetched because of dead connections only when no connection is left; the text of its error is the last
+error
+of the first connection that died.
 A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
 not repeated. All data from a server is checked and limited before it is used.
 

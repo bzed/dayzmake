@@ -321,7 +321,7 @@ struct FetchShared<'a> {
 
 /// A tile handed back after its connection died.
 struct Handback {
-    /// The error of the first failed try (reported when the tile ends up failed).
+    /// The last error of the first connection that died on the tile (reported when the tile ends up failed).
     why: String,
     /// On how many connections that had been served before (so they were working) the tile has failed.
     proven: u32,
