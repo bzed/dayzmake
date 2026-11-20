@@ -338,18 +338,17 @@ Objects' door **state is not sent** by the server (hence `--doors`).
   default: 1, 2, 3, 4 s) and retries on a fresh connection; the 5th failure (attempts 0..4) is final, and that
   **connection is dead**. (The first sleep used to be 2 s, as in the original: 2, 4, 6, 8; dayzmake waits half as
   long, #126.)
-* A dead connection **hands its tile back**: the tile goes to a queue, and the connections that are left take it
-  before they claim a fresh tile (a connection that has not delivered a tile yet takes a fresh one first, so that it
-  proves itself on a tile that nobody failed). The fetcher of the dead connection stops. The tile is reported as
-  failed (`tile (x,z): <the last error of the first connection that died>`) when it is **poison**, or when no
-  connection is left (the
-  last fetcher to stop reports every tile that is still handed back or unclaimed). A tile is poison when its
-  connection died on two connections that had delivered a tile before (*proven*), or on one proven connection and
-  one that had not (*unproven*). Deaths on unproven connections alone do not count: a server that refuses or resets
-  a new connection looks the same as a tile that it cannot answer, so a refused start loses no tile. For a poison
-  tile the connection that met it carries on with a fresh connection of its own. Known limit: with three or more
-  connections to a server that serves one client at a time, a reset reconnect can count against an innocent tile;
-  the tile is then reported as failed although the server may serve it (a resume fetches it again).
+* A dead connection **hands its tile back**: the tile goes to a queue, and the connections that are left take it before
+  they claim a fresh tile (a connection that has not delivered a tile yet takes a fresh one first, so that it proves
+  itself on a tile that nobody failed). The fetcher of the dead connection stops. The tile is reported as failed
+  (`tile (x,z): <the last error of the first connection that died>`) when it is **poison**, or when no connection is
+  left (the last fetcher to stop reports every tile that is still handed back or unclaimed). A tile is poison when its
+  connection died on two connections that had delivered a tile before (*proven*), or on one proven connection and one
+  that had not (*unproven*). Deaths on unproven connections alone do not count: a server that refuses or resets a new
+  connection looks the same as a tile that it cannot answer, so a refused start loses no tile. For a poison tile the
+  connection that met it carries on with a fresh connection of its own. Known limit: with three or more connections to a
+  server that serves one client at a time, a reset reconnect can count against an innocent tile; the tile is then
+  reported as failed although the server may serve it (a resume fetches it again).
 * A **wrong answer** (a complete frame that is not a tile message, a tile with other coordinates than the ones asked,
   an unknown cell class) is retried like a network failure, but it is the fault of the tile, not of the connection,
   because the whole frame was read: after the 5th such failure only that tile fails, and the connection is not dead.
@@ -666,10 +665,9 @@ lies inside the tile** (7.3).
 ### 6.1 Ladders
 
 For each ladder group (area 15) in group order, for each vertex pair `(verts[i], verts[i+1])`, `i = 0, 2, 4, ...`
-(`i + 1 < vertexCount`): one connection: start = first vertex, end = second vertex, centre height 0.0, radius 1.0,
-flags `0x40`, area 15, direction value 1 (bidirectional flag), userId 0. These come first in the list. (A source
-comment calls them one-way and says they are unused in shipped maps; the code passes direction value 1. See open
-questions.)
+(`i + 1 < vertexCount`): one connection: start = first vertex, end = second vertex, centre height 0.0, radius 1.0, flags
+`0x40`, area 15, direction value 1 (bidirectional flag), userId 0. These come first in the list. (A source comment calls
+them one-way and says they are unused in shipped maps; the code passes direction value 1. See open questions.)
 
 ### 6.2 Candidate edges
 
@@ -744,12 +742,11 @@ behaviour, earlier versions swept one side):
 1. `A = E.p0`, `B = E.p1`, `side = +1` (pass 0) or `-1` (pass 1). `dn = normalize3(B - A) * side` (with
    `normalize3(v) = v * (1.0f / |v|)`, ruling R16; if the 3-D length is `< FLT_EPSILON` use
    `(B.x - A.x, 1, B.z - A.z)` unnormalised); `n = normalize3((dn.z, 0, -dn.x))` (fallback `(dn.z, 1, -dn.x)`).
-2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the
-   reciprocal-normalised `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`;
-   `P1 = n*L2 + A`; `Ebase = n*h + A` (computed
-   **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and changes cell lookups on
-   about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if `nS <= 0`;
-   `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
+2. `S0 = n*(-h) + A`; `dir = (n*(-h) + B) - S0` (both sums with rounded products, in f32; with the reciprocal-normalised
+   `n` this is the shipped value and `B - A` is not, see 14.15 and 14.18); `P0 = n*(-L2) + A`; `P1 = n*L2 + A`;
+   `Ebase = n*h + A` (computed **once**; it must not be recomputed as `(dir*t + n*h) + A`, which rounds differently and
+   changes cell lookups on about 1 % of tiles); `dirLen = |dir|`; `nS = (int)ceil(dirLen / cs)`; skip the pass if
+   `nS <= 0`; `step = (nS == 1) ? 0 : 1.0f / float(nS - 1)`. `state[0..nS) = 1` (invalid), `value[] = 0`.
 3. For `k = 0..nS-1`, `t = float(k) * step`, `S = dir*t + S0`, `E_k = dir*t + Ebase`, `cy = dir.y*t + A.y`:
    1. `yS` = floor of `S` in the **compact** heightfield: cell `(floor((S.x - bmin.x)/cs), floor((S.z - bmin.z)/cs))`,
       among that cell's spans with area != 0 the one whose height `span.y * ch + bmin.y` is closest to `S.y`
@@ -768,13 +765,12 @@ behaviour, earlier versions swept one side):
       * If `inRange` and the solid column has spans: `last = 0`; `top = (u32)(i64)((y + traj[j].ymax - bmin.y)/ch)`,
         `bot = (u32)(i64)((y + traj[j].ymin - bmin.y)/ch)` (negative values wrap as unsigned); walk the spans in order
         keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `s.hidePart` is the
-        index of a **hide part** (a part of an area 14 group of the extras list, 5.1; part 0 is a part, the layer's
-        mark for "none" is 65535, item 23; R21: whatever the span's area, the filters
-        make hide spans unwalkable and the links over them are listed all the same), count one visit for that part id
-        in the sample's *part visits*
-        (R17); if `bot <= s.smax && s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a
-        block): if `prev` exists and its area is in 2..6, result **water** and stop. (The span that makes the loop break,
-        the first one above the window, is not counted. The part visits of a sample that fails are not used.)
+        index of a **hide part** (a part of an area 14 group of the extras list, 5.1; part 0 is a part, the layer's mark
+        for "none" is 65535, item 23; R21: whatever the span's area, the filters make hide spans unwalkable and the
+        links over them are listed all the same), count one visit for that part id in the sample's *part visits* (R17);
+        if `bot <= s.smax && s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a
+        block): if `prev` exists and its area is in 2..6, result **water** and stop. (The span that makes the loop
+        break, the first one above the window, is not counted. The part visits of a sample that fails are not used.)
       * `hiU = max(hiU, (u16)last)`; `loU = min(loU, (u16)last)`.
    7. If a failure state was set, `state[k] = that`, continue to the next `k`. Otherwise `hsel = (mch >= 0) ? hiU : loU`;
       `centerH = float(hsel + 1) * ch + bmin.y - cy`; `value[k] = centerH`; `state[k] = 1` (invalid) if
@@ -937,12 +933,11 @@ obstacle's y to the nearest point's y. (The `.nm` therefore stores snapped heigh
   (inner), then tiles inside the block row by row (`z` outer, `x` inner), clipped to `x1, z1`. This keeps the data
   server's streaming cache warm. An `include` predicate (used for `--skip-existing`) removes tiles from this list.
 * Threads: fetchers (default one per host) claim the next plan index (3.6: the hand-back queue first, then a shared
-  counter, never further than the claim window ahead of the first tile that is not yet applied). A bounded queue
-  of at most **64**
-  fetched-but-unbuilt tiles separates fetchers from builders; builders (default `cores - 1`, minimum 1) push results into
-  a bounded queue of `builders * 4`; a single assembler consumes results **in completion order** and calls `setTile`.
-  Consequently the tile-slot order (and the order in which links were allocated) depends on completion order unless a
-  single builder is used (`--threads 1`; the original's parity tests use one thread for determinism).
+  counter, never further than the claim window ahead of the first tile that is not yet applied). A bounded queue of at
+  most **64** fetched-but-unbuilt tiles separates fetchers from builders; builders (default `cores - 1`, minimum 1) push
+  results into a bounded queue of `builders * 4`; a single assembler consumes results **in completion order** and calls
+  `setTile`. Consequently the tile-slot order (and the order in which links were allocated) depends on completion order
+  unless a single builder is used (`--threads 1`; the original's parity tests use one thread for determinism).
 * Failed fetch for a tile (3.6): a network-class failure kills that connection, and the tile goes to the other
   connections and is lost only when it is poison or no connection is left; a wrong answer or a wire-class failure
   loses only that tile.
@@ -1295,8 +1290,8 @@ comparison against DayZ's own tool output and against the old C++ engine. What c
 
 ### 13.1 Constants and sizes
 
-* Poly ref: `encodePolyRef(salt 1, tile 5, poly 7)`: salt 1, tile 5, poly 7 round-trip; `encodePolyRef(1, 1, 0) =
-  0x0001000000100000`.
+* Poly ref: `encodePolyRef(salt 1, tile 5, poly 7)`: salt 1, tile 5, poly 7 round-trip;
+  `encodePolyRef(1, 1, 0) = 0x0001000000100000`.
 * World-params body size: `0x54 + 4 + n_cells*16 + 4 + n_links*0x34`; with 2 cell classes and 1 link class = 176 bytes
   (excluding the 4-byte protocol version).
 * Hand-made two-tile file (`tilesX 2, tilesZ 1, tileWidth = tileHeight = 50, maxTiles 2, maxPolys 1<<20`, each tile with 3
@@ -1344,9 +1339,9 @@ Capture of this world: `capture-info` prints "9 tiles".
   34 tiles are around animated objects and differ from capture to capture.
 * DayZ 1.30: a 49-tile range from the 1.30 tools, same DayZDiag session, sea level pinned to 0.60, byte-identical including
   object order and every jump link. The island filter reproduces shipped Chernarus byte for byte.
-* Two bugs found this way worth testing: (1) the jump-link sample far end computed as `dir*t + (n*h + A)` (1 % of tiles);
-  (2) door parts at the heightfield min edge (tile 108,76 of the validation set: 0 links expected vs 73 with the wrong
-  clipping).
+* Two bugs found this way worth testing: (1) the jump-link sample far end computed as `dir*t + (n*h + A)` (1 % of
+  tiles); (2) door parts at the heightfield min edge (tile 108,76 of the validation set: 0 links expected vs 73 with the
+  wrong clipping).
 
 ### 13.4 Rebuild tests
 
@@ -1378,8 +1373,8 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 5. **Door state** is not sent by the server (references have random "disabled" bits for about 30 % of door parts), so the
    baked state is a policy; the game updates it at runtime.
 6. **Ladders:** a comment says "one-way ladder links, unused in shipped maps" but the direction value passed is `1`
-   (meaning bidirectional in the connection arrays). Which is right in DayZ is unknown. Group 15 as input is documented as
-   observed.
+   (meaning bidirectional in the connection arrays). Which is right in DayZ is unknown. Group 15 as input is documented
+   as observed.
 7. **Meaning of input areas 6, 7, 9, 11, 14, 18 and 16/17 sources** is only inferred from the code: 7, 9 map to terrain (1) and
    11 to building (8) after erosion; 14 "hide parts" are dilated by the agent radius and become polygons of area 14 with flag
    0x01; 18 "WallWithHole" is a ceiling for crawl/crouch clearance; crawl (16) also grows by dilation.
@@ -1399,12 +1394,13 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     run-time interplay (for example how DayZDiag reacts to concurrent requests) are unverified.
 14. **135° facing test precision.** Whether the 135° facing test of `refineEdge` (§6.3 step 4) compares in `f32` (`cosf`)
     or in double; exact 45° grid diagonals land on the threshold. dayzmake compares in `f32` (ruling R12).
-15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): the one ulp error of `(n*(-h) + B) - S0` that R13 saw came from a `n` normalised by division, and `B - A` is not the rule.** The spec text above gave `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to
-    the coordinate is a tie between two floats, the sums `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which
-    moved both ends of one link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a
-    power of two, where their ulps differ. At the time of R13 the shipped value was taken to be the single f32
-    subtraction `B - A`, and dayzmake used
-    `dir = B - A` (with it all five validation sets then matched byte for byte, inner tiles, apart from the polygon
+15. **Pass direction `dir` (ruling R13, #116). Superseded by R16 (14.18): the one ulp error of `(n*(-h) + B) - S0` that
+    R13 saw came from a `n` normalised by division, and `B - A` is not the rule.** The spec text above gave
+    `dir = (n*(-h) + B) - S0`. When `n.z*(-h)` added to the coordinate is a tie between two floats, the sums
+    `n*(-h) + A` and `n*(-h) + B` round in opposite directions and `dir` is one ulp off, which moved both ends of one
+    link by one ulp (Badlands tile 138,102, link 46). The same happens when A and B straddle a power of two, where their
+    ulps differ. At the time of R13 the shipped value was taken to be the single f32 subtraction `B - A`, and dayzmake
+    used `dir = B - A` (with it all five validation sets then matched byte for byte, inner tiles, apart from the polygon
     flags and the link array). That was a compensation for the division-normalised `n`; R16 (14.18) replaces it:
     dayzmake no longer uses `B - A`.
 16. **Shallow water depth (ruling R14, #117).** The first water pass (area 2) uses `waterDepth = walkableClimb`, not 0. With 0
@@ -1531,12 +1527,11 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       reproduce it, and the generator has no object id for these triangles (the area 8 group has no parts) to keep
       one anyway.
     * The walkable top platform (y 298.95) and the ground around the tower foot are contoured from that pose, so the
-      polygons differ where the platform or its shadow is: 172,211, 172,218, 175,224, 176,229, 177,220 and 177,221, and 174,215 (320 polygons, 729 vertices) and 175,215 (one vertex), which the
-      classification missed because the polygon count is unchanged.
-      The outline of the differing polygons is the rotated platform (172,211: the shipped platform lies about 90
-      degrees away from ours).
-    The shipped mesh was made at another time, so no rule of the generator can reproduce it. The generator is
-    right to use what the server sends, and nothing is changed for R19.
+      polygons differ where the platform or its shadow is: 172,211, 172,218, 175,224, 176,229, 177,220 and 177,221, and
+      174,215 (320 polygons, 729 vertices) and 175,215 (one vertex), which the classification missed because the polygon
+      count is unchanged. The outline of the differing polygons is the rotated platform (172,211: the shipped platform
+      lies about 90 degrees away from ours). The shipped mesh was made at another time, so no rule of the generator can
+      reproduce it. The generator is right to use what the server sends, and nothing is changed for R19.
 22. **The order of door objects (ruling R20, #124).** The input order of the objects in a door group (area 12 and 13)
     decides the order of the parts list, the part ids, and which of two overlapping door footprints a span gets (the
     later part overwrites the earlier one, 5.3 PAINT_BELOW). In Badlands tile 191,188 five door objects of one building
@@ -1555,17 +1550,16 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
 
 23. **The hide part is a layer of its own on the solid span (ruling R21, #127).** R17 (item 19) took the part ids from
     the `subArea` of the spans that a trajectory visits. That field is wrong for the purpose in three ways, found by
-    dumping, for every run of valid samples, the spans each walk visited and joining the runs to the shipped
-    connections by tile and start point (949 tiles: every tile whose shipped mesh has a connection in a part, 382, the
-    174 tiles of the earlier analyses and 500 random ones; about 1,930 connections in a part). Over those 949 tiles R17 gave 41
-    connections in a part that the shipped mesh does not list, 17 missing and 27 in another part (85 wrong in 32
-    tiles); R21 gives 6, 1 and 1 (8 wrong in 8 tiles). The numbers of the *174-tile set* (the 84 residual tiles
-    and the 115 tiles of the earlier analysis; the overlap of 25 tiles is derived, 84 + 115 - 174, not counted; 13,328
-    connections,
-    11,669 matched) are marked as such below: R17 43 extra, 19
-    missing and 27 in another part (89 wrong, 542 matching). The 949 tiles contain the 174, yet the 949-tile R17
-    figures for extra and missing (41, 17) are lower than the 174-tile ones (43, 19); the reports do not explain this
-    (a different R17 build or counting is likely) and it was not re-measured, so compare numbers within one set only.
+    dumping, for every run of valid samples, the spans each walk visited and joining the runs to the shipped connections
+    by tile and start point (949 tiles: every tile whose shipped mesh has a connection in a part, 382, the 174 tiles of
+    the earlier analyses and 500 random ones; about 1,930 connections in a part). Over those 949 tiles R17 gave 41
+    connections in a part that the shipped mesh does not list, 17 missing and 27 in another part (85 wrong in 32 tiles);
+    R21 gives 6, 1 and 1 (8 wrong in 8 tiles). The numbers of the *174-tile set* (the 84 residual tiles and the 115
+    tiles of the earlier analysis; the overlap of 25 tiles is derived, 84 + 115 - 174, not counted; 13,328 connections,
+    11,669 matched) are marked as such below: R17 43 extra, 19 missing and 27 in another part (89 wrong, 542 matching).
+    The 949 tiles contain the 174, yet the 949-tile R17 figures for extra and missing (41, 17) are lower than the
+    174-tile ones (43, 19); the reports do not explain this (a different R17 build or counting is likely) and it was not
+    re-measured, so compare numbers within one set only.
     * **The span that `addSpan` makes for a hide piece has `subArea` 0 (5.3, 10.2), but the shipped meshes put its
       connections into the piece's part.** A roof or slab of a hide object lies above the ground and the walls, so its
       cells are added, not painted (PAINT_OR_ADD, no hit): the span has `subArea` 0 and the walk found the part of
@@ -1594,11 +1588,11 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     * **Part 0 is a part (the mark for "none" is 65535).** The layer first used 0 for "no hide part", which is also the
       id of the first part of a tile, so a hide part 0 could never get a link, and a later part could take its spans.
       Measured on the shipped Badlands mesh (106,929 tiles): 1,688 tiles list polygons in part 0 of their extras list,
-      all of them ground polygons and none of area 14, and no tile lists an off-mesh polygon there. So the case does
-      not occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; ids wrap at
+      all of them ground polygons and none of area 14, and no tile lists an off-mesh polygon there. So the case does not
+      occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; ids wrap at
       65,536 as in 5.4, so the part with id 65535 counts as none) leaves every measured tile as it was: the 8
-      connections of #127 (123,239, 149,252,
-      196,77, 99,201, 172,89, 171,213, 167,244 and 194,225) and the regression sets are unchanged.
+      connections of #127 (123,239, 149,252, 196,77, 99,201, 172,89, 171,213, 167,244 and 194,225) and the regression
+      sets are unchanged.
     The quarter threshold (item 19) is still needed and still a placeholder for a missing condition. On the 949 tiles R21
     gives 12 wrong connections without it (11 extra, 1 other part) and 8 with it (6 extra, 1 missing, 1 other part): it
     removes 5 false positives for the loss of 1 member (167,244). On the 11,669 connections of the first set no threshold
@@ -1652,10 +1646,9 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     not a sort of the generator.
     Confirmation, as for R20: 146,83 and its neighbours were written to a capture with the input of parts 7 and 8
     swapped (their vertex ranges exchanged, nothing else) and built with the live test (`navmesh_live`, island filter
-    off); the tile then matches the shipped one in every compared section (the unchanged capture differs in the
-    obstacle order only). So the swap has no other effect: the shipped order is an input order of the generator.
-    That the server gave it in that order is inferred by elimination (no sort key reproduces both this tile and the
-    other 19,875), not
-    shown by a capture of the server's own order. It is the order in which the data server listed the objects of
-    that tile, as for doors (R20): data. Nothing is
-    changed in the generator; 146,83 stays the one tile of the half that differs only in an obstacle order.
+    off); the tile then matches the shipped one in every compared section (the unchanged capture differs in the obstacle
+    order only). So the swap has no other effect: the shipped order is an input order of the generator. That the server
+    gave it in that order is inferred by elimination (no sort key reproduces both this tile and the other 19,875), not
+    shown by a capture of the server's own order. It is the order in which the data server listed the objects of that
+    tile, as for doors (R20): data. Nothing is changed in the generator; 146,83 stays the one tile of the half that
+    differs only in an obstacle order.
