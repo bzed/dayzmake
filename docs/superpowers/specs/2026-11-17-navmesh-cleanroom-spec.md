@@ -566,9 +566,10 @@ survive the link-stage filter (6.1).
    Part ids for doors/hides are a running counter in group-then-part order across all area 12, 13 and 14 groups; the
    extras list built in 5.1 indexes parts of **all** non-tree groups in group/part order, so the two numberings agree
    when the only groups with parts are 12/13/14/10 (the shipped situation). Tree ids and door ids share the same
-   16-bit span field; this is the root of the "stray part id" case (12.3). The counter is a 16-bit value that wraps
-   at 65,536, like C's `(unsigned short)counter++`, so 65,536 parts wrap to 0 instead of saturating (cited in the code
-   as "spec 5.4, part ids").
+   16-bit span field; this is the root of the "stray part id" case (12.3). The counter is a `usize` of which only the low 16 bits are stored (`counter & 0xffff`, like C's
+   `(unsigned short)counter++`), so id 65535 is followed by 0: 65,536 parts wrap to 0 instead of saturating. This holds
+   for door and hide parts and for tree part ids alike. Cited in the code as "spec 5.4, part ids" (`part_id` and its
+   test in `build.rs`, and `Span::hide_part` in `recast/heightfield.rs`).
 4. **Span filters**, in this order:
    1. *Multi-height low-height filter* with heights `(proneHeight, crouchHeight, walkableHeight)` = (3, 8, 15 in the
       example) and areas `(0, 16, 17)`, flagged ceiling area 18: for each column and each span `s` that has a span
