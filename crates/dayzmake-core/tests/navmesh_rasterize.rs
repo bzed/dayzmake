@@ -546,8 +546,8 @@ fn a_plain_add_span_resets_the_hide_part_of_the_spans_it_merges() {
     assert_eq!(hf.column(0, 0), &[span(20, 30, 14)]);
 }
 
-/// Part 0 is a hide part like any other: its spans stay in it when a later part is painted over them
-/// (the "no part" mark of the layer is not a part id).
+/// Part 0 is a hide part like any other: its spans stay in it when a later part is added to them or
+/// painted over them (the "no part" mark of the layer is not a part id).
 #[test]
 fn the_first_part_id_is_a_hide_part_too() {
     let mut first = params(RasterMode::PaintOrAdd, 14);
@@ -574,4 +574,23 @@ fn a_piece_past_the_span_budget_is_refused_and_counted() {
     assert_eq!(hf.span_count(), 1);
     let e = hf.check_span_budget().expect_err("over budget");
     assert!(e.to_string().contains("too many spans (2, limit 1)"), "{e}");
+}
+
+/// The painting path of the same rule: a later part whose piece reaches past the top of a part 0 span paints
+/// the area and the sub area, and leaves the hide part 0.
+#[test]
+fn a_later_part_painted_over_part_zero_leaves_the_hide_part() {
+    let mut first = params(RasterMode::PaintOrAdd, 14);
+    first.sub_area = 0;
+    first.flag_merge_threshold = 1;
+    let mut second = first;
+    second.sub_area = 9;
+    let mut hf = hf4();
+    raster(&mut hf, &wall(0.0, 20.0, 25.0), &first);
+    raster(&mut hf, &wall(0.0, 22.0, 30.0), &second);
+    assert_eq!(hf.column(0, 0).len(), 1);
+    assert_eq!(
+        (hf.column(0, 0)[0].sub_area, hf.column(0, 0)[0].hide_part),
+        (9, 0)
+    );
 }
