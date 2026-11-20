@@ -290,8 +290,10 @@ Detour builds when a tile is added to the mesh, so what is stored is not meaning
     where the shipped mesh lists none, one is missing and one is in another part of the same object (open issue
     [#127](https://github.com/bzed/dayzmake/issues/127); doors never hold off-mesh polygons, so this is not a door
     matter). These are the counts on the 949 tiles that were analysed in detail, which include these tiles;
-  - 1 differs in the order of two tree obstacles (open issue
-    [#128](https://github.com/bzed/dayzmake/issues/128)).
+  - 1 (146,83) differs in the order of two tree obstacles, which is data as well: tree obstacles come in the
+    input order of the tree parts, which holds on the other 19,875 tiles of the half with two or more of them, and no
+    sort key (radius, size, position, ...) reproduces both
+    ([#128](https://github.com/bzed/dayzmake/issues/128), ruling R22).
 
   (One tile, 171,213, is both in the tower area and one of the #127 cases.) The three tiles of the first row that were
   fetched again without `--record` are not in the capture and are outside the comparison.

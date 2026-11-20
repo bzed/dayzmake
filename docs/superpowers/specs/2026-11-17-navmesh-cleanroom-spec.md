@@ -1559,7 +1559,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     early variant broke, matches). The 9 tiles that are left in the two
     classes and are not data (R19, R20) are the ones under *Not explained* below, and 146,83, which has the same
     off-mesh polygons in the same parts and the same part lists as the shipped mesh; only the order of two tree obstacles
-    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (issue #128). The five validation sets of 14.15 match completely.
+    (radius 0.40 and 0.45) differs there, which is neither an off-mesh nor a door order matter (issue #128, settled as data by R22, item 24). The five validation sets of 14.15 match completely.
     **Closed by R21 (the other bullets of #127):** the *class 4 false positives* were the tree-index collision: on the
     174-tile set R17 had 19 of its 43 extra connections in class 4 (the rest in classes 0 to 8), all of them runs
     whose visits are `(n, 10)` and `(n, 0)` spans of one tree index; with R21 no class 4 connection is extra (the 5
@@ -1583,3 +1583,19 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
     the shipped mesh lists none; three class 1 and 5 runs with 10 to 60 percent of the samples visiting a part, where a
     member of the same kind (167,244: 2 of 12 samples, the end floor is the part) is listed and a non-member (165,204:
     2 of 11, the same floor) is not. A condition on the end floor or a threshold per link class would fit some, not all.
+
+24. **The order of tree obstacle records (ruling R22, #128).** The obstacle records of the extra section come in the
+    order of the tree parts of the last area 10 group (5.4 step 6: one record per surviving part, by part id); the
+    part order is the input order. Of the 19,876 inner tiles of the central half of Badlands (49..277) that have two
+    or more obstacles in the shipped mesh, 19,875 list them in the input order of the parts (checked exactly: the
+    part behind each record was taken from the build, 0 records without a part); the other is 146,83 (parts 2, 3, 4,
+    8, 7 of 11: radius 0.80, 0.70, 0.55, 0.45, 0.40; the shipped mesh has 8 before 7, ours 7 before 8; the other
+    sections of the tile are identical). Tree parts carry object id 0 and part index 0, so the only per-part facts are
+    the geometry. No sort key keeps the 19,875 tiles and fixes 146,83: of 19,875 tiles that must keep their order,
+    radius descending keeps 4,065 (it fixes 146,83), the vertex count ascending 6,547 (fixes it), radius ascending
+    3,497, vertex count descending 5,572, x ascending 4,157 and descending 1,389, z 3,335 and 1,895, y 2,435 and 2,988,
+    (x, z) as x, (z, x) as z, the bounding box minimum x 4,302 and z 3,407, the centroid x 4,171 and z 3,333, the height
+    2,086 and 3,009, the bounding box area 1,973 and 3,104, (radius, vertex count) descending 3,718, (vertex count,
+    radius) ascending 3,712. The best key breaks three of four tiles, so the order is not a sort of the generator.
+    It is the order in which the data server listed the objects of that tile, as for doors (R20): data. Nothing is
+    changed in the generator; 146,83 stays the one tile of the half that differs only in an obstacle order.
