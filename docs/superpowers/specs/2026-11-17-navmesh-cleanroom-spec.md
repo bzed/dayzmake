@@ -567,7 +567,9 @@ survive the link-stage filter (6.1).
    Part ids for doors/hides are a running counter in group-then-part order across all area 12, 13 and 14 groups; the
    extras list built in 5.1 indexes parts of **all** non-tree groups in group/part order, so the two numberings agree
    when the only groups with parts are 12/13/14/10 (the shipped situation). Tree ids and door ids share the same
-   16-bit span field; this is the root of the "stray part id" case (12.3).
+   16-bit span field; this is the root of the "stray part id" case (12.3). The counter is a 16-bit value that wraps
+   at 65,536, like C's `(unsigned short)counter++`, so 65,536 parts wrap to 0 instead of saturating (cited in the code
+   as "spec 5.4, part ids").
 4. **Span filters**, in this order:
    1. *Multi-height low-height filter* with heights `(proneHeight, crouchHeight, walkableHeight)` = (3, 8, 15 in the
       example) and areas `(0, 16, 17)`, flagged ceiling area 18: for each column and each span `s` that has a span
@@ -1594,7 +1596,7 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       Measured on the shipped Badlands mesh (106,929 tiles): 1,688 tiles list polygons in part 0 of their extras list,
       all of them ground polygons and none of area 14, and no tile lists an off-mesh polygon there. So the case does
       not occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; ids wrap at
-      65,536, ruling R11, so the part with id 65535 counts as none) leaves every measured tile as it was: the 8
+      65,536 as in 5.4, so the part with id 65535 counts as none) leaves every measured tile as it was: the 8
       connections of #127 (123,239, 149,252,
       196,77, 99,201, 172,89, 171,213, 167,244 and 194,225) and the regression sets are unchanged.
     The quarter threshold (item 19) is still needed and still a placeholder for a missing condition. On the 949 tiles R21

@@ -209,7 +209,7 @@ fn low_byte(area: u32) -> u8 {
 }
 
 /// A part id as the 16-bit span field holds it: wrapping like C's `(unsigned short)counter++`
-/// (ruling R11), so 65536 parts wrap to 0 instead of saturating.
+/// (spec 5.4, part ids), so 65536 parts wrap to 0 instead of saturating.
 fn part_id(counter: usize) -> u16 {
     u16::try_from(counter & 0xffff).unwrap_or_default()
 }
@@ -724,7 +724,7 @@ mod tests {
         assert_eq!(extras[0].polys, Vec::<u32>::new());
     }
 
-    /// Ruling R11: part ids wrap like C's `(unsigned short)counter++`.
+    /// Spec 5.4: part ids wrap like C's `(unsigned short)counter++`.
     #[test]
     fn part_ids_wrap_at_65536() {
         assert_eq!(part_id(0), 0);
