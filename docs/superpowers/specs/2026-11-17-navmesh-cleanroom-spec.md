@@ -334,18 +334,37 @@ Objects' door **state is not sent** by the server (hence `--doors`).
 
 * The world params request is tried once.
 * A tile request failing with a **network-class** error (connect failure, send/recv failure, timeout, peer closed,
-  invalid frame length, wrong message id, answered tile coordinates differ from those asked, unknown cell class) closes
-  the connection, sleeps `2 * (attempt + 1)` seconds (2, 4, 6, 8) and retries on a fresh connection; the 5th failure
-  (attempts 0..4) is final. The error for that tile is recorded as `tile (x,z): <message>` and **that fetcher stops**
-  (its remaining tiles are not fetched by it; other fetchers continue).
+  invalid frame length) closes the connection, sleeps `delay_unit * (attempt + 1)` seconds (`delay_unit` is 1 s by
+  default: 1, 2, 3, 4 s) and retries on a fresh connection; the 5th failure (attempts 0..4) is final, and that
+  **connection is dead**. (The first sleep used to be 2 s, as in the original: 2, 4, 6, 8; dayzmake waits half as
+  long, #126.)
+* A dead connection **hands its tile back**: the tile goes to a queue, and the connections that are left take it
+  before they claim a fresh tile (a connection that has not delivered a tile yet takes a fresh one first, so that it
+  proves itself on a tile that nobody failed). The fetcher of the dead connection stops. The tile is reported as
+  failed (`tile (x,z): <message of its first failed try>`) when it is **poison**, or when no connection is left (the
+  last fetcher to stop reports every tile that is still handed back or unclaimed). A tile is poison when its
+  connection died on two connections that had delivered a tile before (*proven*), or on one proven connection and
+  one that had not (*unproven*). Deaths on unproven connections alone do not count: a server that refuses or resets
+  a new connection looks the same as a tile that it cannot answer, so a refused start loses no tile. For a poison
+  tile the connection that met it carries on with a fresh connection of its own. Known limit: with three or more
+  connections to a server that serves one client at a time, a reset reconnect can count against an innocent tile;
+  the tile is then reported as failed although the server may serve it (a resume fetches it again).
+* A **wrong answer** (a complete frame that is not a tile message, a tile with other coordinates than the ones asked,
+  an unknown cell class) is retried like a network failure, but it is the fault of the tile, not of the connection,
+  because the whole frame was read: after the 5th such failure only that tile fails, and the connection is not dead.
 * A **wire-class** error (payload malformed: see 12.1) is not retried; the tile is recorded as failed and the fetcher
   continues with its next tile.
+* **Claims.** A fetcher claims its next tile from the hand-back queue first, then (in the order of the plan) fresh
+  tiles inside the claim window (8.4). When it finds nothing to claim because the window is full or another fetcher
+  still has a tile in flight (which may be handed back), it waits. It closes its connection before the first wait
+  only when another fetcher uses the same server: a server that serves one client at a time would otherwise keep
+  serving the idle connection while the others wait for it.
 * Invariants checked on each tile: answered `(x,z)` equals the requested one; `cellClass < cellClassCount`.
 
 ### 3.7 Multiple servers
 
 Hosts are numbered in the order given. Fetcher 0 uses host 0; the k-th additional connection uses host
-`k mod hostCount` (round robin), counting from 1. Fetchers pull the next planned tile from a shared atomic counter.
+`k mod hostCount` (round robin), counting from 1. Fetchers claim their tiles as in 3.6 and 8.4.
 
 ### 3.8 Capture files (`.dzgeo`)
 
@@ -355,6 +374,18 @@ payload **without** the leading protocol version), then repeated blocks `u32 siz
 "not a capture file"; other version: "unsupported capture version"; truncated before the world block: "capture
 truncated". A tile captured twice is served as the later copy. Tiles are written as they arrive (so a crashed run
 keeps its prefix).
+
+dayzmake does not load a capture: it **indexes** it. Opening reads the header, the world block and the first 8 bytes
+(`x`, `z`) of each record, skipping the rest of the record by seeking, and keeps the file offset of every record that
+lies inside the range of the run (`--range`; a capture without a range is indexed whole). A tile is read and parsed
+when it is built, so memory is proportional to the tiles of the range and the tiles in flight, and a malformed record
+fails only its tile (the in-memory reader of the library, `Capture::read`, parses every record and fails whole).
+Limits: a record is at most `MAX_FRAME` (1 GiB) and must end inside the file (a record that does not is the cut-off
+end and is ignored); a record shorter than 8 bytes is an error ("message truncated"); records outside the world
+grid are ignored (one note says how many); a capture with **more records than the world has tiles** is refused
+(the records are counted, not the distinct tiles; a recording never writes a tile twice); more than 4,194,304 tiles in
+the index are refused ("give a range"). A run whose range the index does not cover is an error, as is `--record`
+onto the capture that is being read.
 
 ### 3.9 Replay server (for testing a client)
 
@@ -901,12 +932,15 @@ obstacle's y to the nearest point's y. (The `.nm` therefore stores snapped heigh
   `(x0, z0)`** (not aligned to a global grid): for `bz = z0, z0 + block, ...` (outer), `bx = x0, x0 + block, ...`
   (inner), then tiles inside the block row by row (`z` outer, `x` inner), clipped to `x1, z1`. This keeps the data
   server's streaming cache warm. An `include` predicate (used for `--skip-existing`) removes tiles from this list.
-* Threads: fetchers (default one per host) pull the next index from an atomic counter. A bounded queue of at most **64**
+* Threads: fetchers (default one per host) claim the next plan index (3.6: the hand-back queue first, then a shared
+  counter, never further than the claim window ahead of the first tile that is not yet applied). A bounded queue of at most **64**
   fetched-but-unbuilt tiles separates fetchers from builders; builders (default `cores - 1`, minimum 1) push results into
   a bounded queue of `builders * 4`; a single assembler consumes results **in completion order** and calls `setTile`.
   Consequently the tile-slot order (and the order in which links were allocated) depends on completion order unless a
   single builder is used (`--threads 1`; the original's parity tests use one thread for determinism).
-* Failed fetch for tile: that fetcher stops (network class) or only that tile is lost (wire class).
+* Failed fetch for a tile (3.6): a network-class failure kills that connection, and the tile goes to the other
+  connections and is lost only when it is poison or no connection is left; a wrong answer or a wire-class failure
+  loses only that tile.
 * On cancel: queued tiles are dropped without being built.
 
 ### 8.5 Island filter
