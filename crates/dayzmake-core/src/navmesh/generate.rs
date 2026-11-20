@@ -194,6 +194,28 @@ pub struct GenerateReport {
     pub window: usize,
 }
 
+/// The tiles of the grid that `range` selects, as inclusive bounds `[x0, z0, x1, z1]`; `None` when
+/// nothing is left. Lower bounds below 0 become 0, an upper bound below 0 or beyond the grid becomes
+/// the last tile, and no range is the whole grid. [`plan_tiles`] and the index of a
+/// [`CaptureFile`](crate::navmesh::capture::CaptureFile) both use it, so a run and its capture cannot
+/// disagree about the range.
+pub(crate) fn clip_range(range: Option<[i32; 4]>, tiles_x: i32, tiles_z: i32) -> Option<[i32; 4]> {
+    let [rx0, rz0, rx1, rz1] = range.unwrap_or([0, 0, -1, -1]);
+    let last = |n: i32| n.saturating_sub(1);
+    let x1 = if rx1 < 0 {
+        last(tiles_x)
+    } else {
+        rx1.min(last(tiles_x))
+    };
+    let z1 = if rz1 < 0 {
+        last(tiles_z)
+    } else {
+        rz1.min(last(tiles_z))
+    };
+    let (x0, z0) = (rx0.max(0), rz0.max(0));
+    (x0 <= x1 && z0 <= z1).then_some([x0, z0, x1, z1])
+}
+
 /// The tiles of a run, in the order of spec 8.4.
 ///
 /// The range is clamped to the grid: lower bounds to 0, an upper bound below 0 or beyond the grid to the
@@ -205,22 +227,9 @@ pub struct GenerateReport {
 /// "empty tile range" when nothing is left of the range; "tile range too large (N tiles, limit
 /// 4194304)" above 2^22 tiles.
 pub fn plan_tiles(world: &WorldBlock, range: Option<[i32; 4]>) -> io::Result<Vec<(i32, i32)>> {
-    let [rx0, rz0, rx1, rz1] = range.unwrap_or([0, 0, -1, -1]);
-    let last = |n: i32| n.saturating_sub(1);
-    let (x0, z0) = (rx0.max(0), rz0.max(0));
-    let x1 = if rx1 < 0 {
-        last(world.tiles_x)
-    } else {
-        rx1.min(last(world.tiles_x))
-    };
-    let z1 = if rz1 < 0 {
-        last(world.tiles_z)
-    } else {
-        rz1.min(last(world.tiles_z))
-    };
-    if world.tiles_x <= 0 || world.tiles_z <= 0 || x0 > x1 || z0 > z1 {
+    let Some([x0, z0, x1, z1]) = clip_range(range, world.tiles_x, world.tiles_z) else {
         return Err(error!("empty tile range"));
-    }
+    };
     let count = (i64::from(x1) - i64::from(x0) + 1) * (i64::from(z1) - i64::from(z0) + 1);
     if count > MAX_PLAN {
         return Err(error!(

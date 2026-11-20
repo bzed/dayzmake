@@ -12,6 +12,7 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::error::ErrorExt;
 use crate::navmesh::client::{MAX_FRAME, read_chunked};
+use crate::navmesh::generate::clip_range;
 use crate::navmesh::wire::{TileInput, WorldParams};
 use crate::warning::{Warning, WarningSink};
 
@@ -181,23 +182,6 @@ impl std::fmt::Debug for CaptureFile {
     }
 }
 
-/// The part of the grid `range` selects, as inclusive bounds; `None` when it is empty.
-fn clip(range: Option<[i32; 4]>, tiles_x: i32, tiles_z: i32) -> Option<[i32; 4]> {
-    let [rx0, rz0, rx1, rz1] = range.unwrap_or([0, 0, -1, -1]);
-    let x1 = if rx1 < 0 {
-        tiles_x.saturating_sub(1)
-    } else {
-        rx1.min(tiles_x.saturating_sub(1))
-    };
-    let z1 = if rz1 < 0 {
-        tiles_z.saturating_sub(1)
-    } else {
-        rz1.min(tiles_z.saturating_sub(1))
-    };
-    let (x0, z0) = (rx0.max(0), rz0.max(0));
-    (x0 <= x1 && z0 <= z1).then_some([x0, z0, x1, z1])
-}
-
 impl CaptureFile {
     /// Opens and indexes the capture file at `path`; see [`CaptureFile::from_reader`].
     ///
@@ -245,7 +229,7 @@ impl CaptureFile {
         let block = read_block(&mut r)?.ok_or_else(truncated)?;
         let params = WorldParams::parse(&block).prepend_error("capture world params")?;
         let (tiles_x, tiles_z) = (params.world.tiles_x, params.world.tiles_z);
-        let wanted = clip(options.range, tiles_x, tiles_z);
+        let wanted = clip_range(options.range, tiles_x, tiles_z);
         let max_records = u64::try_from(i64::from(tiles_x) * i64::from(tiles_z)).unwrap_or(0);
         // 4 (magic) + 4 (version) + 4 (size) + the world block.
         let mut pos = u64::try_from(block.len())
@@ -324,7 +308,7 @@ impl CaptureFile {
     #[must_use]
     pub fn covers(&self, range: Option<[i32; 4]>) -> bool {
         let (tiles_x, tiles_z) = (self.params.world.tiles_x, self.params.world.tiles_z);
-        match (clip(range, tiles_x, tiles_z), self.indexed) {
+        match (clip_range(range, tiles_x, tiles_z), self.indexed) {
             (Some([x0, z0, x1, z1]), Some([ix0, iz0, ix1, iz1])) => {
                 x0 >= ix0 && z0 >= iz0 && x1 <= ix1 && z1 <= iz1
             }
