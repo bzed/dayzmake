@@ -64,6 +64,10 @@ impl Capture {
     /// Reads a capture. A capture cut short keeps every complete tile; a partial trailing block is
     /// ignored. A tile captured twice keeps the later copy; tiles are sorted by `(z, x)`.
     ///
+    /// Every record is parsed, so one malformed record fails the whole read. [`CaptureFile`] parses a
+    /// record only when its tile is asked for, and so fails only that tile (the tile of a run is
+    /// reported as failed, the others are built).
+    ///
     /// # Errors
     ///
     /// "not a capture file" (bad magic), "unsupported capture version N", "capture truncated" (cut
@@ -201,7 +205,10 @@ impl CaptureFile {
     /// Indexes a capture read from `reader`. A capture cut short keeps every complete record; a partial
     /// trailing block is ignored. A tile captured twice keeps the later copy. Records outside the world
     /// grid are ignored (one note says how many); records outside `options.range` are skipped. The
-    /// records are not parsed here: a malformed record is reported by [`CaptureFile::tile`].
+    /// records are not parsed here: a malformed record is reported by [`CaptureFile::tile`], and fails
+    /// that tile only (not the whole capture, as [`Capture::read`] does). The records are counted, not
+    /// the tiles: a capture with more records than the world has tiles is refused even if some of them
+    /// repeat a tile (a recording never writes a tile twice).
     ///
     /// # Errors
     ///
