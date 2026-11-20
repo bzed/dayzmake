@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Rules for anyone (human or agent) changing dayzmake. dayzmake is a DayZ modding CLI (build, sign, verify,
-pack, unpack, binarize, derapify, PAA conversion, navmesh generation). It is a fork of armake2 by KoffeinFlummi, licensed
-**GPL-2.0-or-later**; keep the licence and the original copyright holders (`Cargo.toml`, `LICENSE`). It reads
+pack, unpack, binarize, derapify, PAA conversion, navmesh generation). It is a fork of armake2 by KoffeinFlummi,
+licensed **GPL-2.0-or-later**; keep the licence and the original copyright holders (`Cargo.toml`, `LICENSE`). It reads
 PBO, config, P3D, PAA and key/signature files from mods the user did not write, so every reader must treat its
 input as hostile.
 
