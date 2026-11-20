@@ -6,7 +6,7 @@ use crate::api::query::Query;
 use crate::api::steam::Branch;
 use crate::cli_io::{AtomicTarget, Input, Output, StdoutState, open_input};
 use crate::cli_warnings::{PrintError, PrintWarnings};
-use crate::commands::{binarize, config, extract, p3d, paa, pbo, sign};
+use crate::commands::{binarize, config, extract, navmesh, p3d, paa, pbo, sign};
 use dayzmake_core::error;
 use dayzmake_core::error::ErrorExt;
 use dayzmake_core::extract::ExtractOptions;
@@ -49,6 +49,9 @@ Usage:
     dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
+    dayzmake navmesh probe [-v] [--json] [--server <host>] [--tile <x,z>]
+    dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--record <dzgeo>] [--range <x0,z0,x1,z1>] [--base <nm>] [--skip-existing] [--checkpoint <n>] [--threads <n>] [--connections <n>] [--sea-level <m>] [--doors <state>] [--no-links] [--no-island-filter] [--seed <x,y,z>] <target>
+    dayzmake navmesh info [-v] [--json] [--tiles] <source>
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -77,6 +80,9 @@ Commands:
                 with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
                 config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
+    navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
+                or from a capture: probe shows the server's world parameters, generate builds the
+                mesh, info summarises a .nm file.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
@@ -115,7 +121,24 @@ Options:
     --cat                       api src: print the full source files.
     --context <n>               api src: print n lines around each declaration, with line numbers.
     --lines <a-b>               api src: print lines a to b of each file, with line numbers.
-    --json                      api: print JSON instead of text.
+    --json                      api, navmesh probe, navmesh info: print JSON instead of text.
+    --server <host>             navmesh: data server, host or host:port (port 36533 by default, host 127.0.0.1).
+                                generate: repeatable; each server gets its own connection.
+    --tile <x,z>                navmesh probe: also fetch tile x,z and summarise it.
+    --capture <dzgeo>           navmesh generate: read the tiles from a capture file instead of a server.
+    --record <dzgeo>            navmesh generate: write the fetched tiles to a capture file.
+    --range <x0,z0,x1,z1>       navmesh generate: tile range to build (inclusive, clamped to the world).
+    --base <nm>                 navmesh generate: patch the new tiles into this existing mesh.
+    --skip-existing             navmesh generate: leave out the tiles that --base already has.
+    --checkpoint <n>            navmesh generate: save the target after every n finished tiles (0: off).
+    --threads <n>               navmesh generate: builder threads, at most 256 (default: cores - 1, at least 1).
+    --connections <n>           navmesh generate: connections to the data servers, at most 256 (default: one per server).
+    --sea-level <m>             navmesh generate: sea level in metres instead of the server's deep sea height.
+    --doors <state>             navmesh generate: door state baked into the mesh: closed (default), open or enabled.
+    --no-links                  navmesh generate: no jump, climb or ladder links.
+    --no-island-filter          navmesh generate: do not flag polygons that the seed cannot reach.
+    --seed <x,y,z>              navmesh generate: island filter seed instead of the world's seed position.
+    --tiles                     navmesh info: one line per tile.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ";
@@ -146,6 +169,10 @@ pub struct Args {
     cmd_verify: bool,
     cmd_api: bool,
     cmd_mcp: bool,
+    cmd_navmesh: bool,
+    cmd_probe: bool,
+    cmd_generate: bool,
+    cmd_info: bool,
     cmd_class: bool,
     cmd_find: bool,
     cmd_sub: bool,
@@ -171,6 +198,22 @@ pub struct Args {
     flag_context: Option<String>,
     flag_lines: Option<String>,
     flag_json: bool,
+    flag_server: Vec<String>,
+    flag_tile: Option<String>,
+    flag_tiles: bool,
+    flag_capture: Option<String>,
+    flag_record: Option<String>,
+    flag_range: Option<String>,
+    flag_base: Option<String>,
+    flag_skip_existing: bool,
+    flag_checkpoint: Option<String>,
+    flag_threads: Option<String>,
+    flag_connections: Option<String>,
+    flag_sea_level: Option<String>,
+    flag_doors: Option<String>,
+    flag_no_links: bool,
+    flag_no_island_filter: bool,
+    flag_seed: Option<String>,
     arg_name: String,
     arg_path: String,
     arg_regex: Option<String>,
@@ -243,6 +286,8 @@ fn run_command(
         crate::mcp::serve(std::io::stdin().lock(), stdout.writer(), args.flag_verbose)
     } else if args.cmd_api {
         run_api(args, &mut stdout.writer(), warnings)
+    } else if args.cmd_navmesh {
+        run_navmesh(args, &mut stdout.writer(), warnings)
     } else if args.cmd_binarize {
         let source = required_source(args)?;
         let target = required_target(args)?;
@@ -569,6 +614,50 @@ fn run_api(args: &Args, out: &mut dyn Write, warnings: &mut dyn WarningSink) -> 
         }
     }
     Ok(())
+}
+
+/// `dayzmake navmesh ...`.
+fn run_navmesh(
+    args: &Args,
+    out: &mut dyn Write,
+    warnings: &mut dyn WarningSink,
+) -> Result<(), Error> {
+    if args.cmd_probe {
+        navmesh::cmd_navmesh_probe(
+            args.flag_server.first().map(String::as_str),
+            args.flag_tile.as_deref(),
+            args.flag_json,
+            out,
+        )
+    } else if args.cmd_generate {
+        let generate = navmesh::GenerateArgs {
+            force: args.flag_force,
+            servers: args.flag_server.clone(),
+            capture: args.flag_capture.clone(),
+            record: args.flag_record.clone(),
+            range: args.flag_range.clone(),
+            base: args.flag_base.clone(),
+            skip_existing: args.flag_skip_existing,
+            checkpoint: args.flag_checkpoint.clone(),
+            threads: args.flag_threads.clone(),
+            connections: args.flag_connections.clone(),
+            sea_level: args.flag_sea_level.clone(),
+            doors: args.flag_doors.clone(),
+            no_links: args.flag_no_links,
+            no_island_filter: args.flag_no_island_filter,
+            seed: args.flag_seed.clone(),
+        };
+        navmesh::cmd_navmesh_generate(&generate, &required_target(args)?, out, warnings)
+    } else if args.cmd_info {
+        navmesh::cmd_navmesh_info(
+            &required_source(args)?,
+            args.flag_tiles,
+            args.flag_json,
+            out,
+        )
+    } else {
+        Err(error!("no navmesh command given"))
+    }
 }
 
 /// Returns the `<source>` argument, which docopt guarantees for these commands.

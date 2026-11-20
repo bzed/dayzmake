@@ -12,6 +12,7 @@
 - [Binarizing models on Linux](guides/binarize-linux.md)
 - [Textures and model checks](guides/textures.md)
 - [Looking up the script API](guides/script-api.md)
+- [Navigation meshes for a terrain mod](guides/navmesh.md)
 - [Using dayzmake from an MCP client](guides/mcp.md)
 
 # Reference
@@ -23,6 +24,7 @@
   - [Keys and signatures: keygen, sign, verify](reference/signing.md)
   - [Textures: paa2img, img2paa](reference/paa.md)
   - [Script API: api](reference/api.md)
+  - [Navigation meshes: navmesh](reference/navmesh.md)
   - [MCP server: mcp and its tools](reference/mcp.md)
 - [Environment and files](reference/environment.md)
 - [Warnings](reference/warnings.md)

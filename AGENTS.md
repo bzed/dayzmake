@@ -63,8 +63,8 @@ with `--locked`. Fuzzing and Miri need `nightly` (see below).
 
 - Total line coverage stays **at or above 70 %** (`COVERAGE_MIN` in the `Makefile`, `cargo llvm-cov`). A change
   must not lower it; raise the floor when coverage grows.
-- CI uploads the report to **Codecov** (`codecov.yml`: `project` `threshold: 0%`, `patch` `threshold: 5%`).
-- Never lower the threshold, and never exclude code (`--ignore-filename-regex`, `#[coverage(off)]`) to reach it.
+- CI uploads the report to **Codecov** (`codecov.yml`: `project` `threshold: 0%` on main and `1%` on pull requests, `patch` `threshold: 5%`).
+- Never lower the thresholds below these values, and never exclude code (`--ignore-filename-regex`, `#[coverage(off)]`) to reach it.
 
 ## Safe Rust
 

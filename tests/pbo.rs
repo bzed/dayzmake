@@ -453,6 +453,48 @@ fn inspect_and_cat_write_to_the_given_writer() {
     assert_eq!(out, b"hello");
 }
 
+/// A writer whose `fail_at`-th write call (counting from 0) fails like a closed pipe.
+struct FailingWriter {
+    fail_at: usize,
+    writes: usize,
+}
+
+impl std::io::Write for FailingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.writes;
+        self.writes += 1;
+        if n == self.fail_at {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        } else {
+            Ok(buf.len())
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Every write of `inspect` is checked: a writer that fails at any point makes it return the error, so the
+/// error path of each `?` (header lines and the entries loop) runs in this process on every run. The CLI
+/// test that closes stdout early cannot promise which of these writes meets the closed pipe (#111).
+#[test]
+fn inspect_returns_the_error_of_every_failing_write() {
+    let pbo = crafted_pbo(&[("a.txt", b"hello"), ("b.txt", b"x")], Some("pre"));
+    let mut failures = 0;
+    for fail_at in 0.. {
+        let mut out = FailingWriter { fail_at, writes: 0 };
+        let result =
+            dayzmake::commands::pbo::cmd_inspect(&mut std::io::Cursor::new(&pbo), &mut out);
+        if result.is_ok() {
+            break;
+        }
+        failures += 1;
+    }
+    // the header lines, the table head and at least one write per entry
+    assert!(failures > 8, "only {failures} writes failed");
+}
+
 #[test]
 fn read_headers_lists_names_without_the_data() {
     let pbo = crafted_pbo(&[("a.txt", b"hello"), ("sub\\b.c", b"x")], Some("pre"));

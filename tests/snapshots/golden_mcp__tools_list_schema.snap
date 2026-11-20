@@ -953,5 +953,136 @@ expression: "r.result(2)[\"tools\"]"
       "type": "object"
     },
     "name": "binarize"
+  },
+  {
+    "description": "Ask the navmesh data server of DayZDiag_x64.exe (started with -startNavmeshDataServer) for the world parameters and, with tile, one tile.",
+    "inputSchema": {
+      "properties": {
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "server": {
+          "description": "Data server, host or host:port (port 36533 by default, host 127.0.0.1).",
+          "type": "string"
+        },
+        "tile": {
+          "description": "Also fetch this tile and summarise it, as \"x,z\".",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "navmesh_probe"
+  },
+  {
+    "description": "Build the navmesh (.nm) of a terrain mod from a navmesh data server or a capture and save it to target. A whole map can take many minutes (the call returns when the run is over); use range for a part. The mesh is saved even when some tiles failed, and the call then reports an error that says so.",
+    "inputSchema": {
+      "properties": {
+        "base": {
+          "description": "Patch the new tiles into this existing .nm.",
+          "type": "string"
+        },
+        "capture": {
+          "description": "Read the tiles from this .dzgeo capture instead of a server.",
+          "type": "string"
+        },
+        "checkpoint": {
+          "description": "Save the target after every n finished tiles (0: off).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "connections": {
+          "description": "Connections to the data servers, 1 to 256; 0 or absent: one per server.",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "doors": {
+          "description": "Door state baked into the mesh: closed (default), open or enabled.",
+          "type": "string"
+        },
+        "force": {
+          "description": "Overwrite existing target and record files.",
+          "type": "boolean"
+        },
+        "no_island_filter": {
+          "description": "Do not flag polygons that the seed cannot reach.",
+          "type": "boolean"
+        },
+        "no_links": {
+          "description": "No jump, climb or ladder links.",
+          "type": "boolean"
+        },
+        "range": {
+          "description": "Tile range to build as \"x0,z0,x1,z1\" (inclusive, clamped to the world).",
+          "type": "string"
+        },
+        "record": {
+          "description": "Write the fetched tiles to this .dzgeo capture.",
+          "type": "string"
+        },
+        "sea_level": {
+          "description": "Sea level in metres instead of the server's deep sea height.",
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "seed": {
+          "description": "Island filter seed as \"x,y,z\" instead of the world's seed position.",
+          "type": "string"
+        },
+        "server": {
+          "description": "Data servers, each host or host:port (default 127.0.0.1); several share the work. Not with capture.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skip_existing": {
+          "description": "Leave out the tiles that base already has (needs base).",
+          "type": "boolean"
+        },
+        "target": {
+          "description": "The .nm file to write.",
+          "type": "string"
+        },
+        "threads": {
+          "description": "Builder threads, 1 to 256; 0 or absent: cores - 1, at least 1.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "type": "object"
+    },
+    "name": "navmesh_generate"
+  },
+  {
+    "description": "Summarise a .nm navmesh: the grid and the totals, with tiles one line per tile.",
+    "inputSchema": {
+      "properties": {
+        "json": {
+          "description": "Return JSON instead of text.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "The .nm file.",
+          "type": "string"
+        },
+        "tiles": {
+          "description": "One line (or JSON object) per tile.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "name": "navmesh_info"
   }
 ]

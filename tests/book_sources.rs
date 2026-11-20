@@ -164,6 +164,7 @@ const README_COVERED_BY: &[(&str, &str)] = &[
         "guides/textures.md",
     ),
     ("## Binarizing models on Linux", "guides/binarize-linux.md"),
+    ("## Navigation meshes", "guides/navmesh.md"),
 ];
 
 #[test]
@@ -247,7 +248,7 @@ fn reference_section(heading: &str) -> Option<String> {
         .map(|lines| lines.join("\n"))
 }
 
-/// The usage lines of the CLI as `(heading name, line)`, e.g. `("api class", "dayzmake api class ...")`.
+/// The usage lines of the CLI as `(heading name, line)`, e.g. `("api class", "dayzmake api class ...")` (`navmesh` has subcommands too).
 fn usage_commands() -> Vec<(String, String)> {
     // the lines between `Usage:` and the first blank line, whatever their indentation
     let block: Vec<&str> = dayzmake::run::USAGE
@@ -270,8 +271,8 @@ fn usage_commands() -> Vec<(String, String)> {
         }
         let mut words = rest.split_whitespace();
         let first = words.next().unwrap_or("");
-        let name = if first == "api" {
-            format!("api {}", words.next().unwrap_or(""))
+        let name = if first == "api" || first == "navmesh" {
+            format!("{first} {}", words.next().unwrap_or(""))
         } else {
             first.to_string()
         };

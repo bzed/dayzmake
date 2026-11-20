@@ -1,9 +1,17 @@
 coverage:
   status:
     project:
-      default:
+      # Pull requests may drop total coverage by up to 1 %.
+      pull-requests:
+        target: auto
+        threshold: 1%
+        only_pulls: true
+      # main stays strict.
+      main:
         target: auto
         threshold: 0%
+        branches:
+          - main
     patch:
       default:
         target: auto

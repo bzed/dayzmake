@@ -29,6 +29,12 @@ is maintained here.
 ## Changes
 <!-- ANCHOR: changes -->
 
+### Unreleased
+
+- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default). A tile that needs more than 2^26 heightfield spans fails instead of exhausting memory, `--base` must match the world's grid and tile size, `navmesh info` shows the file version read (7 or 9), and the MCP `sea_level` takes a number or a string.
+- `navmesh generate --capture` no longer loads the whole capture: it indexes the file and reads only the tiles of the range (memory in proportion to the range, not to the file; a 3 x 3 range of a 50 GB capture ran in 6 s and 300 MB). `dayzmake-core` gets `capture::CaptureFile` and `Source::CaptureFile`; the capture format is unchanged.
+- `navmesh generate`: a data-server connection that is refused or reset is retried five times with 10 seconds of waiting (1, 2, 3 and 4 s between the tries, was 2, 4, 6 and 8 s), and when it still fails its tile goes back to the queue for the other connections instead of failing; a tile that fails on two working connections, or gets a wrong answer, is reported as not fetched without taking the connections down. `--record` may not name the `--capture` file. Only the tiles of `--range` are indexed from a capture (library: `CaptureFileOptions`; a run for a range wider than the indexed one is refused).
+
 ### 3.1.0
 
 With dayzmake-core 0.3.0.
@@ -383,6 +389,9 @@ Usage:
     dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
+    dayzmake navmesh probe [-v] [--json] [--server <host>] [--tile <x,z>]
+    dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--record <dzgeo>] [--range <x0,z0,x1,z1>] [--base <nm>] [--skip-existing] [--checkpoint <n>] [--threads <n>] [--connections <n>] [--sea-level <m>] [--doors <state>] [--no-links] [--no-island-filter] [--seed <x,y,z>] <target>
+    dayzmake navmesh info [-v] [--json] [--tiles] <source>
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -411,6 +420,9 @@ Commands:
                 with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
                 config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
+    navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
+                or from a capture: probe shows the server's world parameters, generate builds the
+                mesh, info summarises a .nm file.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
@@ -449,7 +461,24 @@ Options:
     --cat                       api src: print the full source files.
     --context <n>               api src: print n lines around each declaration, with line numbers.
     --lines <a-b>               api src: print lines a to b of each file, with line numbers.
-    --json                      api: print JSON instead of text.
+    --json                      api, navmesh probe, navmesh info: print JSON instead of text.
+    --server <host>             navmesh: data server, host or host:port (port 36533 by default, host 127.0.0.1).
+                                generate: repeatable; each server gets its own connection.
+    --tile <x,z>                navmesh probe: also fetch tile x,z and summarise it.
+    --capture <dzgeo>           navmesh generate: read the tiles from a capture file instead of a server.
+    --record <dzgeo>            navmesh generate: write the fetched tiles to a capture file.
+    --range <x0,z0,x1,z1>       navmesh generate: tile range to build (inclusive, clamped to the world).
+    --base <nm>                 navmesh generate: patch the new tiles into this existing mesh.
+    --skip-existing             navmesh generate: leave out the tiles that --base already has.
+    --checkpoint <n>            navmesh generate: save the target after every n finished tiles (0: off).
+    --threads <n>               navmesh generate: builder threads, at most 256 (default: cores - 1, at least 1).
+    --connections <n>           navmesh generate: connections to the data servers, at most 256 (default: one per server).
+    --sea-level <m>             navmesh generate: sea level in metres instead of the server's deep sea height.
+    --doors <state>             navmesh generate: door state baked into the mesh: closed (default), open or enabled.
+    --no-links                  navmesh generate: no jump, climb or ladder links.
+    --no-island-filter          navmesh generate: do not flag polygons that the seed cannot reach.
+    --seed <x,y,z>              navmesh generate: island filter seed instead of the world's seed position.
+    --tiles                     navmesh info: one line per tile.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.
 ```
@@ -469,7 +498,8 @@ prints; warnings go to a `WarningSink` you provide, so it is safe to use from ma
 cargo add dayzmake-core
 ```
 
-Features: `sign` (BI keys and signatures) and `image` (PAA from and to images), both on by
+Features: `sign` (BI keys and signatures), `image` (PAA from and to images) and `navmesh` (the navmesh generator:
+the data-server client, the tile builder and the `.nm` reader and writer), all on by
 default; `default-features = false` builds without them. The
 [API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
 The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
@@ -537,6 +567,8 @@ Tools:
 - `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `extract`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
   commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
+- `navmesh_probe`, `navmesh_generate`, `navmesh_info`: `dayzmake navmesh probe`, `generate` and `info`. `navmesh_generate`
+  reports no progress and returns when the run is over, which takes many minutes for a whole map (use `range`).
 
 The tools take file paths as given (relative to the server's working directory) and act with the permissions of
 the user running the server: they can read, create and, with `force`, overwrite any file that user can. Only
@@ -549,6 +581,40 @@ the result, so a cut never drops them, and failures are results with `isError: t
 `dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections. For a binarized ODOL version 56 (the version of the game's models) it lists the skeleton, the bounding box, the LODs with vertex and face counts, textures, materials, proxies, properties, selections and animations; a damaged v56 model is an error. For other ODOL versions and for BMTR only the format and version are shown, with a note that only v56 is decoded. Without a model header, `inspect` treats the input as a PBO.
 
 `build` checks every MLOD model it is about to binarize (also without `--proton-binarize`) and warns about textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute with `-w`). References starting with the addon's prefix are looked up in the source folder, ignoring case. Other references (vanilla `dz\...`, other mods) are only checked if they exist below an `-i` folder or the current directory; if they don't, they are not reported because there is no way to tell whether they are wrong. Procedural textures (`#(argb,...)`) are skipped.
+
+## Navigation meshes
+
+`dayzmake navmesh generate` builds the navmesh (`.nm`) of a terrain mod. It asks the navmesh data server of
+`DayZDiag_x64.exe` (started with `-server -startNavmeshDataServer`, port 36533) for the geometry of the world, tile by
+tile, builds the mesh with a Rust port of Recast and Detour including the changes DayZ made to them, and writes the file
+atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file. The builder has been compared with the navmeshes shipped with DayZ 1.30, using live `DayZDiag_x64.exe` captures: of the 52,441 inner tiles of the central half of Badlands (tiles 49-277), 52,381 are byte-identical to the shipped mesh, and the other 60 have known causes (44 animated-tower, 8 door-order and 1 tree-obstacle-order tiles, which are data; 8 tiles with an off-mesh connection with a different hide-part membership than in the shipped mesh, #127; one tile is in two of these groups). Five earlier blocks of Livonia and Badlands, including the irrigation tunnels, match on every inner tile. Edge tiles, the polygon flags of the island filter and the polygon link array and its size are not compared. See [Validation](https://bzed.github.io/dayzmake/guides/navmesh.html#validation) in the guide.
+
+```
+dayzmake navmesh probe
+dayzmake navmesh generate --record mymap.dzgeo mymap.nm
+dayzmake navmesh generate --capture mymap.dzgeo --doors open -f mymap-open.nm   # offline, from the recording
+dayzmake navmesh generate --base mymap.nm --skip-existing -f mymap.nm           # continue a partial run
+dayzmake navmesh info --tiles mymap.nm
+```
+
+When a run is stopped, or tiles could not be fetched and none failed to build, it ends with the command that continues
+it; the command repeats the first run's options except `--record` (a repeated recording would be overwritten) and
+`--base`, and is quoted for a POSIX shell (PowerShell and `cmd.exe` users adapt the quotes). The same input
+gives the same bytes for any number of threads and connections; a failed tile does not stop the run
+(the file is saved and the exit status is 1). On x86 and x86_64 the generator uses the same approximate reciprocal square
+root as DayZ; other processors (and Intel versus AMD) may classify a slope that is almost exactly the maximum slope differently. The guide
+walks through a terrain mod, DayZDiag under Windows and Proton included:
+<https://bzed.github.io/dayzmake/guides/navmesh.html>, and the reference is at
+<https://bzed.github.io/dayzmake/reference/navmesh.html>.
+
+<!-- ANCHOR: thirdparty -->
+## Third-party code
+
+The `navmesh` module of `dayzmake-core` contains Rust ports of
+[Recast and Detour](https://github.com/recastnavigation/recastnavigation) by Mikko Mononen (zlib licence), altered
+for DayZ. The files keep the original copyright line and the zlib notice, and say that they were ported to Rust and
+altered and are not the original software. The zlib licence is compatible with GPL-2.0-or-later.
+<!-- ANCHOR_END: thirdparty -->
 
 ## Binarizing models on Linux
 

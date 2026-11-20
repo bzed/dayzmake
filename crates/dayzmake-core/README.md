@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/dayzmake-core/badge.svg)](https://docs.rs/dayzmake-core)
 
 Readers and writers for the DayZ file formats: PBO archives, rapified configs (with the preprocessor and
-`__EVAL`), P3D models, PAA textures, and BI keys and signatures. It is the library behind the
+`__EVAL`), P3D models, PAA textures, BI keys and signatures, and navigation meshes (`.nm`) with their generator. It is the library behind the
 [`dayzmake`](https://crates.io/crates/dayzmake) command line tool, a fork of armake2.
 
 Every reader treats its input as hostile: errors instead of panics, checked arithmetic, bounded recursion.
@@ -15,8 +15,9 @@ Every reader treats its input as hostile: errors instead of panics, checked arit
 |---|---|---|
 | `sign` | yes | the `sign` module (BI keys, `.bisign` creation and verification) |
 | `image` | yes | `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the re-exported `image` crate |
+| `navmesh` | yes | the `navmesh` module: the navmesh data-server client and wire format, captures (`.dzgeo`), the Recast/Detour tile builder and the `.nm` reader and writer (`navmesh::generate::generate`) |
 
-Without them (`default-features = false`) the crate builds without `sign` and `image`. PBO reading
+Without them (`default-features = false`) the crate builds without `sign`, `image` and `navmesh`. PBO reading
 and writing, configs, P3D and PAA reading/writing stay available.
 
 ## Usage
@@ -28,7 +29,28 @@ See the [API documentation](https://docs.rs/dayzmake-core) for the entry points 
 GPL-2.0-or-later, inherited from armake2 (KoffeinFlummi). Projects under AGPL or GPLv3 may link it; others
 need to be GPL-2.0-or-later compatible.
 
+### Third-party code
+
+The `navmesh` module contains Rust ports of [Recast and Detour](https://github.com/recastnavigation/recastnavigation)
+by Mikko Mononen (zlib licence), altered for DayZ. The ported source files keep the original copyright line and the zlib
+notice, and say that they were ported to Rust and altered and are not the original software. The zlib licence is
+compatible with GPL-2.0-or-later.
+
 ## Changes
+
+### Unreleased
+
+- New module `navmesh` (feature `navmesh`, on by default; it adds the dependency `safe_arch` on x86 and x86_64): `navmesh::client` (the data-server client with `Host` and `RetryPolicy`), `navmesh::wire` (world parameters and tile geometry), `navmesh::capture` (`.dzgeo` captures: `Capture` and `CaptureWriter`, and `CaptureFile` with `CaptureFileOptions`, which indexes a capture instead of loading it and reads the tiles of a range on demand), `navmesh::build` (the tile builder with `BuildOptions` and `DoorPolicy`), `navmesh::detour` (`NavMeshSet`, the `.nm` reader and atomic writer), `navmesh::islands` and `navmesh::generate` (`probe`, `generate` with `Source`, `GenerateOptions`, `Progress` and `GenerateReport`). It contains Rust ports of Recast and Detour (zlib licence, altered for DayZ). Its output does not depend on the number of threads. Three new warnings: `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. `GenerateReport::seed` is the seed the island filter used (or would have used). A data-server I/O error names the server (`connection to host:port closed by the server`) instead of showing the bare `failed to fill whole buffer`. The builder has been compared with the navmeshes shipped with DayZ 1.30, using live `DayZDiag_x64.exe` captures: of the 52,441 inner tiles of the central half of Badlands (tiles 49-277), 52,381 are byte-identical to the shipped mesh, and the other 60 have known causes (44 animated-tower, 8 door-order and 1 tree-obstacle-order tiles, which are data; 8 tiles with an off-mesh connection with a different hide-part membership than in the shipped mesh, #127; one tile is in two of these groups). Five earlier blocks of Livonia and Badlands, including the irrigation tunnels, match on every inner tile. Edge tiles, the polygon flags of the island filter and the polygon link array and its size are not compared. See [Validation](https://bzed.github.io/dayzmake/guides/navmesh.html#validation) in the guide. A tile whose heightfield needs more than 2^26 spans fails (`too many spans`); `NavMeshSet::version` keeps the version read (7 or 9; writing always writes 9); `NavMesh::into_set` is the consuming `to_set`; `GenerateReport::fetch_errors` is a list of `(x, z, message)` like `failed`, and a `GenerateOptions::base` that does not match the world is an error.
+  `Source::CaptureFile(CaptureFile)` builds from an indexed capture (a malformed record fails its tile only, where
+  `Capture::read` fails the whole read), and `generate` refuses a run whose range the index does not cover ("the
+  capture was indexed for the range ...") and a
+  `GenerateOptions::record` onto the capture that is being read. The default
+  `RetryPolicy::delay_unit` is 1 s (was 2 s): a tile request waits 1, 2, 3 and 4 s between its five attempts. A tile
+  that fails because its connection died goes to the other connections, and only a tile that fails on two connections,
+  at least
+  one of which had worked, or on no connection left, is reported as not fetched. The `internals` types `Span` and
+  `SpanPiece` gained
+  the hide-part layer (`Span::hide_part`, `NO_HIDE_PART`).
 
 ### 0.3.0
 

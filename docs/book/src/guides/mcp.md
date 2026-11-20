@@ -49,6 +49,9 @@ The tools are described to the assistant, so ordinary requests work:
 - "Sign `mymod.pbo` with `mykey.biprivatekey` and verify it." (`pbo_sign`, `pbo_verify`)
 - "Rapify this config and show me what it turned into." (`config_rapify`, `config_derapify`)
 - "Convert `a_co.paa` to PNG so I can look at it." (`paa_to_image`)
+- "Build the navmesh of `mymap` from my capture `mymap.dzgeo` into `mymap.nm` and tell me how many tiles it has."
+  (`navmesh_generate` with `capture` and `target`, then `navmesh_info`; a whole map from a live server takes many
+  minutes, so ask for a `range` first)
 
 The script API tools are vanilla-only by default. Say "including my mods" (the assistant passes `mods=all`) or
 name a mod ("with CF") to include them. The first run with `mods=all` builds the caches and can take a while;

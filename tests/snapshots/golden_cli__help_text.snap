@@ -31,6 +31,9 @@ Usage:
     dayzmake api config [-v] [--experimental] [--dayz <dir>] [-m <mods>] [--refresh] [--max <n>] [--json] <path>
     dayzmake api update [-v] [--experimental] [--dayz <dir>] [-m <mods>]
     dayzmake api mods [-v] [--experimental] [--dayz <dir>] [--json]
+    dayzmake navmesh probe [-v] [--json] [--server <host>] [--tile <x,z>]
+    dayzmake navmesh generate [-v] [-f] [--server <host>]... [--capture <dzgeo>] [--record <dzgeo>] [--range <x0,z0,x1,z1>] [--base <nm>] [--skip-existing] [--checkpoint <n>] [--threads <n>] [--connections <n>] [--sea-level <m>] [--doors <state>] [--no-links] [--no-island-filter] [--seed <x,y,z>] <target>
+    dayzmake navmesh info [-v] [--json] [--tiles] <source>
     dayzmake mcp [-v]
     dayzmake (-h | --help)
     dayzmake --version
@@ -59,6 +62,9 @@ Commands:
                 with -m, from mods: class, find, sub, enum, chain, src, grep, defines, update;
                 config looks up a config class (inheritance chain, resolved properties);
                 mods lists the installed mods.
+    navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
+                or from a capture: probe shows the server's world parameters, generate builds the
+                mesh, info summarises a .nm file.
     mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
 
 Options:
@@ -97,6 +103,23 @@ Options:
     --cat                       api src: print the full source files.
     --context <n>               api src: print n lines around each declaration, with line numbers.
     --lines <a-b>               api src: print lines a to b of each file, with line numbers.
-    --json                      api: print JSON instead of text.
+    --json                      api, navmesh probe, navmesh info: print JSON instead of text.
+    --server <host>             navmesh: data server, host or host:port (port 36533 by default, host 127.0.0.1).
+                                generate: repeatable; each server gets its own connection.
+    --tile <x,z>                navmesh probe: also fetch tile x,z and summarise it.
+    --capture <dzgeo>           navmesh generate: read the tiles from a capture file instead of a server.
+    --record <dzgeo>            navmesh generate: write the fetched tiles to a capture file.
+    --range <x0,z0,x1,z1>       navmesh generate: tile range to build (inclusive, clamped to the world).
+    --base <nm>                 navmesh generate: patch the new tiles into this existing mesh.
+    --skip-existing             navmesh generate: leave out the tiles that --base already has.
+    --checkpoint <n>            navmesh generate: save the target after every n finished tiles (0: off).
+    --threads <n>               navmesh generate: builder threads, at most 256 (default: cores - 1, at least 1).
+    --connections <n>           navmesh generate: connections to the data servers, at most 256 (default: one per server).
+    --sea-level <m>             navmesh generate: sea level in metres instead of the server's deep sea height.
+    --doors <state>             navmesh generate: door state baked into the mesh: closed (default), open or enabled.
+    --no-links                  navmesh generate: no jump, climb or ladder links.
+    --no-island-filter          navmesh generate: do not flag polygons that the seed cannot reach.
+    --seed <x,y,z>              navmesh generate: island filter seed instead of the world's seed position.
+    --tiles                     navmesh info: one line per tile.
     -h --help                   Show usage information and exit.
        --version                Print the version number and exit.

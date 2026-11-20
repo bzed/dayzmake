@@ -152,10 +152,13 @@ fn mcp_initialize_and_list_tools() {
         "pbo_verify",
         "binarize",
         "extract",
+        "navmesh_probe",
+        "navmesh_generate",
+        "navmesh_info",
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
-    assert_eq!(names.len(), 26);
+    assert_eq!(names.len(), 29);
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert!(t["description"].is_string());
@@ -1444,4 +1447,417 @@ fn mcp_config_tools_write_targets_and_sign_v2() {
     );
     assert_eq!(text(&r.replies[3]), "signed");
     assert!(p.join("t.pbo.armk.bisign").is_file());
+}
+
+// ---- navmesh ----
+
+#[cfg(unix)]
+#[path = "../crates/dayzmake-core/tests/support/navmesh_server.rs"]
+mod navmesh_server;
+#[cfg(unix)]
+#[path = "../crates/dayzmake-core/tests/support/navmesh_world.rs"]
+mod navmesh_world;
+
+#[cfg(unix)]
+mod navmesh {
+    use super::*;
+    use dayzmake_core::navmesh::capture::CaptureWriter;
+
+    use super::navmesh_server::{FakeServer, Faults};
+    use super::navmesh_world::synthetic_world;
+
+    fn capture(dir: &Path) -> PathBuf {
+        let (params, tiles) = synthetic_world();
+        let path = dir.join("world.dzgeo");
+        let file = fs::File::create(&path).expect("create capture");
+        let mut writer = CaptureWriter::new(file, &params).expect("capture header");
+        for tile in &tiles {
+            writer.add(tile).expect("capture tile");
+        }
+        path
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_from_capture() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "out.nm", "threads": 2}),
+                ),
+                // an existing target needs force
+                call(
+                    2,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "out.nm"}),
+                ),
+                call(
+                    3,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "out.nm", "force": true, "threads": "2", "range": "0,0,1,1"}),
+                ),
+                call(4, "navmesh_info", &json!({"source": "out.nm"})),
+            ],
+            tmp.path(),
+        );
+        assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("built 9 tiles"),
+            "{}",
+            text(&r.replies[0])
+        );
+        // progress never reaches the channel: one frame per request
+        assert_eq!(r.stdout.lines().count(), 4, "{}", r.stdout);
+        assert!(is_error(&r.replies[1]));
+        assert!(
+            text(&r.replies[1]).contains("already exists") && text(&r.replies[1]).contains("force"),
+            "{}",
+            text(&r.replies[1])
+        );
+        assert!(!is_error(&r.replies[2]), "{}", text(&r.replies[2]));
+        assert!(
+            text(&r.replies[2]).contains("built 4 tiles"),
+            "{}",
+            text(&r.replies[2])
+        );
+        assert!(tmp.path().join("out.nm").is_file());
+        assert!(
+            text(&r.replies[3]).contains("tiles 4,"),
+            "{}",
+            text(&r.replies[3])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_rejects_bad_arguments() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "range": "1,2,3"}),
+                ),
+                call(2, "navmesh_generate", &json!({"capture": s(&cap)})),
+                call(
+                    3,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "server": ["127.0.0.1:1"], "target": "o.nm"}),
+                ),
+                call(
+                    4,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "threads": true}),
+                ),
+            ],
+            tmp.path(),
+        );
+        for reply in &r.replies {
+            assert!(is_error(reply), "{}", text(reply));
+        }
+        assert!(
+            text(&r.replies[0]).contains("expected x0,z0,x1,z1"),
+            "{}",
+            text(&r.replies[0])
+        );
+        assert!(
+            text(&r.replies[1]).contains("target"),
+            "{}",
+            text(&r.replies[1])
+        );
+        assert!(
+            text(&r.replies[2]).contains("not both"),
+            "{}",
+            text(&r.replies[2])
+        );
+        assert!(!tmp.path().join("o.nm").exists());
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_unreachable_server_is_an_error() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+            .port();
+        let addr = format!("127.0.0.1:{port}");
+        let r = run(
+            &[call(
+                1,
+                "navmesh_generate",
+                &json!({"server": [addr], "target": "o.nm"}),
+            )],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("-startNavmeshDataServer"),
+            "{}",
+            text(&r.replies[0])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_failed_tile_is_an_error_with_summary_and_saved_mesh() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (params, mut tiles) = synthetic_world();
+        tiles
+            .iter_mut()
+            .find(|t| (t.x, t.z) == (2, 0))
+            .expect("tile")
+            .cell_class = 99;
+        let cap = tmp.path().join("bad.dzgeo");
+        let mut writer = CaptureWriter::new(fs::File::create(&cap).expect("create"), &params)
+            .expect("capture header");
+        for tile in &tiles {
+            writer.add(tile).expect("capture tile");
+        }
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "part.nm", "threads": 2, "record": "rec.dzgeo"}),
+                ),
+                call(
+                    2,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "record": "rec.dzgeo", "sea_level": "x"}),
+                ),
+            ],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        let t = text(&r.replies[0]);
+        assert!(t.contains("built 8 tiles, 0 empty, 1 failed"), "{t}");
+        assert!(t.contains("wrote part.nm"), "{t}");
+        // failed tiles would fail again, so (as in the CLI) there is nothing to continue
+        assert!(!t.contains("to continue"), "{t}");
+        assert!(t.contains("failed: 1 tiles could not be built"), "{t}");
+        assert!(tmp.path().join("part.nm").is_file());
+        // MCP wording: argument names, and force instead of --force
+        let t = text(&r.replies[1]);
+        assert!(t.contains("sea_level: ") && !t.contains("--"), "{t}");
+    }
+
+    /// `sea_level` is a number in the schema's spirit; a string works as before.
+    #[test]
+    fn mcp_navmesh_generate_sea_level_accepts_a_number_or_a_string() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let call_with = |id, target: &str, sea: Value| {
+            call(
+                id,
+                "navmesh_generate",
+                &json!({"capture": s(&cap), "target": target, "threads": 2, "range": "0,0,0,0", "sea_level": sea}),
+            )
+        };
+        let r = run(
+            &[
+                call_with(1, "n.nm", json!(1.5)),
+                call_with(2, "s.nm", json!("1.5")),
+                call_with(3, "i.nm", json!(-2)),
+                call_with(4, "b.nm", json!(true)),
+            ],
+            tmp.path(),
+        );
+        for reply in &r.replies[..3] {
+            assert!(!is_error(reply), "{}", text(reply));
+        }
+        assert_eq!(
+            fs::read(tmp.path().join("n.nm")).expect("number"),
+            fs::read(tmp.path().join("s.nm")).expect("string")
+        );
+        assert!(is_error(&r.replies[3]));
+        assert!(
+            text(&r.replies[3]).contains("sea_level"),
+            "{}",
+            text(&r.replies[3])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_probe_takes_one_server() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let r = run(
+            &[call(
+                1,
+                "navmesh_probe",
+                &json!({"server": ["127.0.0.1:1", "127.0.0.1:2"]}),
+            )],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("probe takes one server"),
+            "{}",
+            text(&r.replies[0])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_existing_record_says_force() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        fs::write(tmp.path().join("rec.dzgeo"), b"keep").expect("write");
+        let r = run(
+            &[call(
+                1,
+                "navmesh_generate",
+                &json!({"capture": s(&cap), "target": "o.nm", "record": "rec.dzgeo"}),
+            )],
+            tmp.path(),
+        );
+        assert!(is_error(&r.replies[0]));
+        assert!(
+            text(&r.replies[0]).contains("Pass force to overwrite")
+                && !text(&r.replies[0]).contains("--"),
+            "{}",
+            text(&r.replies[0])
+        );
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_huge_or_negative_counts_are_errors() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "threads": 100_000_000}),
+                ),
+                call(
+                    2,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "connections": "100000000"}),
+                ),
+                call(
+                    3,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "o.nm", "threads": -1}),
+                ),
+            ],
+            tmp.path(),
+        );
+        for reply in &r.replies {
+            assert!(is_error(reply), "{}", text(reply));
+        }
+        assert!(
+            text(&r.replies[0]).contains("threads: at most 256"),
+            "{}",
+            text(&r.replies[0])
+        );
+        assert!(
+            text(&r.replies[1]).contains("connections: at most 256"),
+            "{}",
+            text(&r.replies[1])
+        );
+        assert!(
+            text(&r.replies[2]).contains("non-negative integer"),
+            "{}",
+            text(&r.replies[2])
+        );
+        assert!(!tmp.path().join("o.nm").exists());
+    }
+
+    #[test]
+    fn mcp_navmesh_info() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let cap = capture(tmp.path());
+        let r = run(
+            &[
+                call(
+                    1,
+                    "navmesh_generate",
+                    &json!({"capture": s(&cap), "target": "out.nm"}),
+                ),
+                call(2, "navmesh_info", &json!({"source": "out.nm"})),
+                call(
+                    3,
+                    "navmesh_info",
+                    &json!({"source": "out.nm", "tiles": true}),
+                ),
+                call(
+                    4,
+                    "navmesh_info",
+                    &json!({"source": "out.nm", "json": true}),
+                ),
+                call(5, "navmesh_info", &json!({"source": "missing.nm"})),
+            ],
+            tmp.path(),
+        );
+        assert!(
+            text(&r.replies[1]).contains("grid 3 x 3 tiles"),
+            "{}",
+            text(&r.replies[1])
+        );
+        assert!(
+            text(&r.replies[2]).contains("x z ref polys"),
+            "{}",
+            text(&r.replies[2])
+        );
+        let json: Value = serde_json::from_str(text(&r.replies[3])).expect("JSON");
+        assert_eq!(json["tileCount"], 9);
+        assert!(is_error(&r.replies[4]));
+    }
+
+    #[test]
+    fn mcp_navmesh_probe_against_fake_server() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (params, tiles) = synthetic_world();
+        let server = FakeServer::start(params, tiles, Faults::none());
+        let addr = server.addr().to_string();
+        let r = run(
+            &[
+                call(1, "navmesh_probe", &json!({"server": addr})),
+                call(2, "navmesh_probe", &json!({"server": addr, "tile": "1,1"})),
+                call(
+                    3,
+                    "navmesh_probe",
+                    &json!({"server": addr, "tile": "1,1", "json": true}),
+                ),
+                call(4, "navmesh_probe", &json!({"server": addr, "tile": "x"})),
+            ],
+            tmp.path(),
+        );
+        assert!(
+            text(&r.replies[0]).contains("world 150.0 x 150.0 m, tiles 3 x 3 of 50.0 x 50.0 m"),
+            "{}",
+            text(&r.replies[0])
+        );
+        assert!(
+            text(&r.replies[1]).contains("tile (1,1) cell class 1"),
+            "{}",
+            text(&r.replies[1])
+        );
+        let json: Value = serde_json::from_str(text(&r.replies[2])).expect("JSON");
+        assert_eq!(json["tile"]["x"], 1);
+        assert!(is_error(&r.replies[3]));
+    }
+
+    #[test]
+    fn mcp_navmesh_generate_from_server_with_record() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let (params, tiles) = synthetic_world();
+        let server = FakeServer::start(params, tiles, Faults::none());
+        let addr = server.addr().to_string();
+        let r = run(
+            &[call(
+                1,
+                "navmesh_generate",
+                &json!({"server": [addr], "range": "0,0,2,0", "record": "rec.dzgeo", "target": "p.nm", "connections": 1}),
+            )],
+            tmp.path(),
+        );
+        assert!(!is_error(&r.replies[0]), "{}", text(&r.replies[0]));
+        assert!(text(&r.replies[0]).contains("built 3 tiles"));
+        assert!(tmp.path().join("rec.dzgeo").is_file());
+    }
 }

@@ -17,11 +17,13 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["sign", "image"]
+default = ["sign", "image", "navmesh"]
 # BI signatures and keys (`sign` module): keys, signing, verification and key generation use `rsa` (pure Rust).
 sign = ["dep:rsa", "dep:getrandom", "dep:zeroize"]
 # PAA <-> image conversion (`Paa::from_dynamic_image`, `Paa::to_dynamic_image`, `pub use image`).
 image = ["dep:image"]
+# Navmesh generation (`navmesh` module): the data-server client and wire format, the tile builder and the `.nm` reader and writer.
+navmesh = ["dep:safe_arch"]
 
 [dependencies]
 byteorder = "1.5"
@@ -41,6 +43,9 @@ lzokay-native = { version = "0.2.1", default-features = false, features = ["deco
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+[target.'cfg(any(target_arch = "x86", target_arch = "x86_64"))'.dependencies]
+safe_arch = { version = "1.2", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"

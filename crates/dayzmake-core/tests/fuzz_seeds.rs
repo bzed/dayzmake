@@ -6,6 +6,14 @@ use std::io::{self, Cursor};
 use std::path::Path;
 
 use dayzmake_core::config::Config;
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::capture::{Capture, CaptureWriter};
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::detour::{NavMesh, NavMeshSet, TileData};
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::islands::filter_islands;
+#[cfg(feature = "navmesh")]
+use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 use dayzmake_core::odol::Odol;
 use dayzmake_core::p3d::P3D;
 use dayzmake_core::paa::Paa;
@@ -133,6 +141,122 @@ fn sign_verify_seeds() -> io::Result<()> {
 fn odol_read_seeds() -> io::Result<()> {
     for data in seeds("odol_read")? {
         let _ = Odol::read(&mut Cursor::new(&data));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_wire_seeds() -> io::Result<()> {
+    for seed in seeds("navmesh_wire")? {
+        // Same as the fuzz target: the first byte selects the reader.
+        let Some((&selector, data)) = seed.split_first() else {
+            continue;
+        };
+        if selector & 1 == 1 {
+            if let Ok(capture) = Capture::read(&mut &data[..]) {
+                let mut out = Vec::new();
+                let mut w = CaptureWriter::new(&mut out, capture.params())?;
+                for t in capture.tiles() {
+                    w.add(t)?;
+                }
+                let again = Capture::read(&mut &out[..])?;
+                assert_eq!(again.params().encode(), capture.params().encode());
+                assert_eq!(again.tiles().len(), capture.tiles().len());
+                for (a, b) in again.tiles().iter().zip(capture.tiles()) {
+                    assert_eq!(a.encode(), b.encode());
+                }
+            }
+            continue;
+        }
+        // What parses must encode and parse again to the same bytes.
+        if let Ok(world) = WorldParams::parse(data) {
+            let bytes = world.encode();
+            assert_eq!(WorldParams::parse(&bytes)?.encode(), bytes);
+        }
+        let _ = WorldParams::parse_message(data);
+        if let Ok(tile) = TileInput::parse(data) {
+            let bytes = tile.encode();
+            let again = TileInput::parse(&bytes)?;
+            assert_eq!(again.encode(), bytes);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_nm_seeds() -> io::Result<()> {
+    let mut flooded = 0_u32;
+    for seed in seeds("navmesh_nm")? {
+        // Same as the fuzz target: the first byte selects the reader.
+        let Some((&selector, data)) = seed.split_first() else {
+            continue;
+        };
+        if selector & 1 == 1 {
+            if let Ok(tile) = TileData::parse(data) {
+                let bytes = tile.to_bytes();
+                assert_eq!(bytes, data, "write(parse(d)) != d");
+                assert_eq!(TileData::parse(&bytes)?.to_bytes(), bytes);
+            }
+            continue;
+        }
+        if let Ok(set) = NavMeshSet::read(&mut &data[..]) {
+            // Linking and the island flood, as in the fuzz target.
+            if let Ok(mut mesh) = NavMesh::from_set(&set) {
+                let centre = set.tiles.first().map_or([0.0; 3], |t| {
+                    let (lo, hi) = (t.data.header.bmin, t.data.header.bmax);
+                    [0, 1, 2].map(|i| lo[i] * 0.5 + hi[i] * 0.5)
+                });
+                for seed in [centre, [f32::NAN; 3], [0.0; 3]] {
+                    let first = filter_islands(&mut mesh, seed);
+                    assert_eq!(filter_islands(&mut mesh, seed), first);
+                    flooded += u32::from(first.is_some());
+                }
+            }
+            let mut bytes = Vec::new();
+            if set.write(&mut bytes).is_ok() {
+                let again = NavMeshSet::read(&mut &bytes[..])?;
+                let mut second = Vec::new();
+                again.write(&mut second)?;
+                assert_eq!(second, bytes);
+            }
+        }
+    }
+    // The islands_* seeds reach the flood (a seed that never links would test nothing).
+    assert!(flooded >= 3, "only {flooded} floods ran");
+    Ok(())
+}
+
+#[cfg(feature = "navmesh")]
+#[test]
+fn navmesh_capture_index_seeds() -> io::Result<()> {
+    use dayzmake_core::navmesh::capture::{CaptureFile, CaptureFileOptions};
+    use dayzmake_core::warning::Warnings;
+    for data in seeds("navmesh_capture_index")? {
+        // Same as the fuzz target: the index agrees with reading the whole capture.
+        let indexed = CaptureFile::from_reader(
+            Cursor::new(data.clone()),
+            &CaptureFileOptions::new(),
+            &mut Warnings::new(),
+        );
+        let Ok(indexed) = indexed else {
+            continue;
+        };
+        let _ = indexed.bounds();
+        if let Ok(whole) = Capture::read(&mut &data[..]) {
+            for t in whole.tiles() {
+                if let Ok(Some(found)) = indexed.tile(t.x, t.z) {
+                    assert_eq!(found.encode(), t.encode());
+                }
+            }
+        } else {
+            for z in 0..4 {
+                for x in 0..4 {
+                    let _ = indexed.tile(x, z);
+                }
+            }
+        }
     }
     Ok(())
 }
