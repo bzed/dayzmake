@@ -1793,14 +1793,19 @@ fn run_with_closed_stdout(args: &[&str], until: &[u8], cwd: &Path) -> (i32, Stri
     let mut stdout = child.stdout.take().unwrap();
     let mut seen = Vec::new();
     let mut chunk = [0u8; 256];
-    while !seen
-        .windows(until.len().max(1))
-        .any(|w| w.starts_with(until))
-        || seen.len() < 16
-    {
+    let mut found = until.is_empty();
+    while !found || seen.len() < 16 {
         let n = stdout.read(&mut chunk).unwrap();
         assert!(n > 0, "the output ended before {until:?}");
+        // Search only the new bytes, plus the tail of the old ones that a match may start in.
+        let from = seen.len().saturating_sub(until.len().saturating_sub(1));
         seen.extend_from_slice(chunk.get(..n).unwrap());
+        found = found
+            || seen
+                .get(from..)
+                .unwrap()
+                .windows(until.len())
+                .any(|w| w == until);
     }
     drop(stdout);
     let out = child.wait_with_output().unwrap();
