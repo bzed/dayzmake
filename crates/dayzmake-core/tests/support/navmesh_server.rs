@@ -187,9 +187,11 @@ impl Drop for FakeServer {
             // The client may be gone already.
             let _ = s.shutdown(Shutdown::Both);
         }
-        // Wake the blocking accept; the connection is not counted because `stop` is set.
+        // Wake the blocking accept; the connection is not counted because `stop` is set. A failed
+        // connect means the listener is gone already, which is the goal.
         let _ = TcpStream::connect(self.addr);
         if let Some(t) = self.thread.take() {
+            // A panic of the accept thread is not this test's failure; the tests assert on what the client saw.
             let _ = t.join();
         }
     }
@@ -206,6 +208,7 @@ fn accept_loop(listener: &TcpListener, shared: &Shared) {
         let number = shared.connections.fetch_add(1, Ordering::SeqCst);
         let (first, count) = shared.faults.refuse;
         if number >= first && number - first < count {
+            // The peer may be gone: there is nothing to do if the shutdown fails.
             let _ = stream.shutdown(Shutdown::Both);
             continue;
         }
@@ -217,12 +220,15 @@ fn accept_loop(listener: &TcpListener, shared: &Shared) {
         }
         // `Drop` sets `stop` before it takes `current`, so one of the two sees the other's step.
         if shared.stop.load(Ordering::SeqCst) {
+            // The peer may be gone: there is nothing to do if the shutdown fails.
             let _ = stream.shutdown(Shutdown::Both);
             return;
         }
-        // An I/O error just ends this client; the next one is accepted.
+        // An I/O error just ends this client; the next one is accepted (the fake server has no
+        // one to report it to).
         let _ = serve(&mut stream, shared);
-        // The clone in `current` would keep the connection open, so close it explicitly.
+        // The clone in `current` would keep the connection open, so close it explicitly (the peer may
+        // be gone; nothing to do then).
         let _ = stream.shutdown(Shutdown::Both);
         shared
             .current
