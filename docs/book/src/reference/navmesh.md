@@ -28,45 +28,46 @@ is still loading can be reset (`Connection reset by peer`): repeat `probe` until
 mission and the config the server needs are in the [guide](../guides/navmesh.md). The builder was compared with the
 navmeshes shipped with DayZ 1.30; the ignored test `navmesh_live` of `dayzmake-core` repeats the comparison (variables
 `DAYZ_NAVMESH`, `DAYZ_NAVMESH_CAPTURE` and `DAYZ_NAVMESH_INNER`, and the optional `DAYZ_NAVMESH_RANGE`, run with
-`cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared and the result: the inner tiles of the central half of Badlands are identical to the shipped mesh except 60 tiles with known causes, and the polygon flags and the link array and its size are not compared.
+`cargo test -p dayzmake-core --test navmesh_live -- --ignored`); the guide lists what was compared and the result: the
+inner tiles of the central half of Badlands are identical to the shipped mesh except 60 tiles with known causes, and the
+polygon flags and the link array and its size are not compared.
 
 `probe`, and the request for the world parameters at the start of `generate`, make one attempt: when the connection
 cannot be made within 10 seconds, or the answer fails, the command fails at once. Tile requests connect when they are
 first needed, and a tile request that fails on the network (a connect that fails, a closed connection, a timeout, a
-wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1, 2, 3 and 4 seconds between them
-(10 seconds of waiting; an attempt that cannot connect can also wait up to the 10 second connect timeout, so a host
-that does not answer at all costs about a minute). When a connection is still failing after its five attempts
-(a server that refuses or resets it, as a server that serves one client at a time does for the others), that
-connection stops and its tile goes back to the queue for the connections that are left. A tile that fails on two connections that had delivered a tile, or on one that had and another one, is reported as not
-fetched, and the connection that reported it carries on, so one bad tile costs one tile, not the run. Failures on
-connections that never delivered a tile (a refused or reset start) count only together with one that had, so a refused
-start loses no tile. A
-complete answer that is wrong (not a tile, another tile, an unknown cell class) is a failure of that tile alone: the
-connection is not dead, because the whole frame was read and the next request uses a fresh connection. A tile is
-reported as not fetched because of dead connections only when no connection is left; the text of its error is the last
-error
-of the first connection that died.
-A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a server that trickles bytes fails too). A malformed answer is
-not repeated. All data from a server is checked and limited before it is used.
+wrong answer) is repeated on a fresh connection, five attempts in all, waiting 1, 2, 3 and 4 seconds between them (10
+seconds of waiting; an attempt that cannot connect can also wait up to the 10 second connect timeout, so a host that
+does not answer at all costs about a minute). When a connection is still failing after its five attempts (a server that
+refuses or resets it, as a server that serves one client at a time does for the others), that connection stops and its
+tile goes back to the queue for the connections that are left. A tile that fails on two connections that had delivered a
+tile, or on one that had and another one, is reported as not fetched, and the connection that reported it carries on, so
+one bad tile costs one tile, not the run. Failures on connections that never delivered a tile (a refused or reset start)
+count only together with one that had, so a refused start loses no tile. A complete answer that is wrong (not a tile,
+another tile, an unknown cell class) is a failure of that tile alone: the connection is not dead, because the whole
+frame was read and the next request uses a fresh connection. A tile is reported as not fetched because of dead
+connections only when no connection is left; the text of its error is the last error of the first connection that died.
+A server that does not deliver a whole message within 10 minutes counts as failed (the deadline covers the message, so a
+server that trickles bytes fails too). A malformed answer is not repeated. All data from a server is checked and limited
+before it is used.
 
-Use one connection per `DayZDiag_x64.exe` (`--connections` defaults to one per server): it serves one client at a
-time, and the others are refused or reset. With three or more connections to one such server a tile can also fail on
-two connections that had each delivered a tile; it is then reported as not fetched although the server may serve it, and the
+Use one connection per `DayZDiag_x64.exe` (`--connections` defaults to one per server): it serves one client at a time,
+and the others are refused or reset. With three or more connections to one such server a tile can also fail on two
+connections that had each delivered a tile; it is then reported as not fetched although the server may serve it, and the
 printed `to continue` command tries it again.
 
 A **capture** (`.dzgeo`) is a recording of the geometry that a server sent. `generate --record` writes one while it
 fetches, and `generate --capture` builds from one without any server. A capture lets you rebuild the mesh after a
 change of the generator, or on another machine, without starting the game.
 
-`generate --capture` does not load the file. It reads the world parameters and the position of every tile record
-(a few bytes per record, found by skipping over the tile data), and then reads only the tiles of the range when they
-are built. Only the tiles of `--range` are put into the index, so a range of a capture of many gigabytes needs memory in
-proportion to the tiles in that range; a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few
-seconds and about 300 MB. The format is unchanged, so existing captures work. Records that lie outside the world grid are ignored (one message says how many); a capture with more
-records than the world has tiles is refused. A library caller that opens a capture with `CaptureFile` and a `range` must pass the range of the run to `generate`:
-a run whose range is not covered by the indexed range is an error, not a mesh without those tiles. A tile that is
-cut off at the end of a capture is ignored; a malformed tile record is reported when its tile is built, as a failed
-tile, not when the file is opened.
+`generate --capture` does not load the file. It reads the world parameters and the position of every tile record (a few
+bytes per record, found by skipping over the tile data), and then reads only the tiles of the range when they are built.
+Only the tiles of `--range` are put into the index, so a range of a capture of many gigabytes needs memory in proportion
+to the tiles in that range; a 3 x 3 range of a 50 GB capture of 53,000 tiles takes a few seconds and about 300 MB. The
+format is unchanged, so existing captures work. Records that lie outside the world grid are ignored (one message says
+how many); a capture with more records than the world has tiles is refused. A library caller that opens a capture with
+`CaptureFile` and a `range` must pass the range of the run to `generate`: a run whose range is not covered by the
+indexed range is an error, not a mesh without those tiles. A tile that is cut off at the end of a capture is ignored; a
+malformed tile record is reported when its tile is built, as a failed tile, not when the file is opened.
 
 ## dayzmake navmesh probe
 
@@ -186,7 +187,9 @@ be built is *failed* and raises the warning `navmesh-tile-failed`; it does not s
 runs over the whole mesh at the end, so a resumed run (below) filters the merged mesh. When the seed finds no
 polygon the filter is skipped with the warning `navmesh-seed`.
 
-Memory: the tiles fetched but not yet built or applied wait in queues whose length is limited, not their size. A tile record can be large (a frame may be up to 1 GiB) and nothing limits the total bytes, so a world with huge tiles needs memory in proportion; `--record` keeps each fetched tile until it has been written.
+Memory: the tiles fetched but not yet built or applied wait in queues whose length is limited, not their size. A tile
+record can be large (a frame may be up to 1 GiB) and nothing limits the total bytes, so a world with huge tiles needs
+memory in proportion; `--record` keeps each fetched tile until it has been written.
 
 The target is written **even when the run was partial**. The exit status is 0 when every tile was handled, and 1 when
 a tile failed, a tile could not be fetched, or a checkpoint or `--record` write failed.
@@ -194,9 +197,10 @@ a tile failed, a tile could not be fetched, or a checkpoint or `--record` write 
 A run that was **stopped** (a checkpoint or `--record` write failed), or that had tiles it could not fetch and no tile
 that failed to build, ends with the command that continues it. The command repeats every option of the run except
 `--record` (with `-f` it would overwrite the first recording) and `--base`, which becomes the target, so the rest is
-built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail
-again. The printed command is quoted for a POSIX shell (single quotes around anything but letters, digits and
-`_@%+=:,./-`); that works in bash and zsh; PowerShell and `cmd.exe` users adapt the quotes (`'\''` does not work in PowerShell). With a server that closes every connection, one tile (five attempts, 1+2+3+4 s between them, 10 seconds in all) gives:
+built with the same settings. A tile that failed to *build* is not offered for a retry, because it would fail again. The
+printed command is quoted for a POSIX shell (single quotes around anything but letters, digits and `_@%+=:,./-`); that
+works in bash and zsh; PowerShell and `cmd.exe` users adapt the quotes (`'\''` does not work in PowerShell). With a
+server that closes every connection, one tile (five attempts, 1+2+3+4 s between them, 10 seconds in all) gives:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,0,0 --threads 2 lost.nm
@@ -255,9 +259,10 @@ dayzmake navmesh info [-v] [--json] [--tiles] <source>
 | `--json` | off | Print one JSON object instead of text. |
 | `--tiles` | off | List every tile: `x z ref polys verts offmesh parts obstacles`. |
 
-The summary gives the file version as read (7 or 9; `generate` always writes 9), the grid and the size of a tile, the number of tile slots (`max tiles`), the
-number of tiles and the totals of polygons, vertices and off-mesh connections (the jump, climb and ladder links).
-`ref` is the tile reference in hex, `parts` the door and object parts of the tile and `obstacles` its tree obstacles.
+The summary gives the file version as read (7 or 9; `generate` always writes 9), the grid and the size of a tile, the
+number of tile slots (`max tiles`), the number of tiles and the totals of polygons, vertices and off-mesh connections
+(the jump, climb and ladder links). `ref` is the tile reference in hex, `parts` the door and object parts of the tile
+and `obstacles` its tree obstacles.
 
 ```text
 $ dayzmake navmesh info --tiles mymap.nm
