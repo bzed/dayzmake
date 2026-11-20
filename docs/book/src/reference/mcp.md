@@ -1,8 +1,8 @@
 # MCP server: mcp and its tools
 
-The Model Context Protocol (MCP) lets an AI assistant call tools. `dayzmake mcp` is an MCP server that offers the
-script API index and the file commands of dayzmake as tools. The [guide](../guides/mcp.md) shows how to register
-it; this page is the reference of the protocol subset and of every tool.
+The Model Context Protocol (MCP) lets an AI assistant call tools. `dayzmake mcp` is an MCP server that offers the script
+API index, the file commands and the navmesh commands of dayzmake as tools. The [guide](../guides/mcp.md) shows how to
+register it; this page is the reference of the protocol subset and of every tool.
 
 ## dayzmake mcp
 

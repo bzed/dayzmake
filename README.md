@@ -22,8 +22,6 @@ itself the successor to armake, diverged from it for DayZ modding: Arma 3
 targets are no longer the focus, while DayZ-specific behaviour (binarization
 through DayZ Tools under Proton, `product=dayz` header extensions and similar)
 is maintained here.
-
-**Status:** `paa2img` and `img2paa` work.
 <!-- ANCHOR_END: intro -->
 
 ## Changes
@@ -423,7 +421,7 @@ Commands:
     navmesh     Generate DayZ navigation meshes (.nm) from a running DayZDiag navmesh data server
                 or from a capture: probe shows the server's world parameters, generate builds the
                 mesh, info summarises a .nm file.
-    mcp         Run an MCP server on stdin/stdout (tools for the API index and the file commands).
+    mcp         Run an MCP server on stdin/stdout (tools for the API index, the file commands and navmeshes).
 
 Options:
     -v --verbose                Enable verbose output.
@@ -491,8 +489,9 @@ See `dayzmake --help` for more.
 <!-- ANCHOR: library -->
 
 The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
-(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures, with no CLI dependencies. It never
-prints; warnings go to a `WarningSink` you provide, so it is safe to use from many threads.
+(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures and navigation meshes (`.nm`, with their
+generator), with no CLI dependencies. It never prints; warnings go to a `WarningSink` you provide, so it is safe to use
+from many threads.
 
 ```
 cargo add dayzmake-core
