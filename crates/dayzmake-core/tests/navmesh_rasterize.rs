@@ -560,3 +560,18 @@ fn the_first_part_id_is_a_hide_part_too() {
     raster(&mut hf, &wall(0.0, 24.0, 25.0), &second);
     assert_eq!(hf.column(0, 0), &[in_part(span(20, 25, 14), 0)]);
 }
+
+/// The span budget: a piece past it is refused and reported by `check_span_budget`; a piece outside the
+/// grid is ignored, not counted as refused.
+#[test]
+fn a_piece_past_the_span_budget_is_refused_and_counted() {
+    let mut hf = hf4();
+    hf.set_span_limit(1);
+    hf.add_piece(&SpanPiece::new(0, 0, 0, 5, 1, 1));
+    assert!(hf.check_span_budget().is_ok());
+    hf.add_piece(&SpanPiece::new(1, 1, 0, 5, 1, 1));
+    hf.add_piece(&SpanPiece::new(-1, 0, 0, 5, 1, 1));
+    assert_eq!(hf.span_count(), 1);
+    let e = hf.check_span_budget().expect_err("over budget");
+    assert!(e.to_string().contains("too many spans (2, limit 1)"), "{e}");
+}

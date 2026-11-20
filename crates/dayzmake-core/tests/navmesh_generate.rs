@@ -580,33 +580,80 @@ fn a_base_that_does_not_match_the_world_is_refused() {
     assert_eq!(report.set.tiles.len(), 2);
 }
 
+/// A reader that counts the bytes read through it.
+struct Counting {
+    inner: io::Cursor<Vec<u8>>,
+    read: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl io::Read for Counting {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read
+            .fetch_add(n as u64, std::sync::atomic::Ordering::SeqCst);
+        Ok(n)
+    }
+}
+
+impl io::Seek for Counting {
+    fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+        self.inner.seek(to)
+    }
+}
+
+/// The records outside the range of a run are not read: the run reads the tiles of its range and
+/// the headers of the other records, not their bytes. The test counts the bytes (no memory limit, no
+/// big file: the skipped records are 4 MiB each, in memory).
 #[test]
 fn a_range_of_a_huge_capture_reads_only_its_tiles() {
-    // Five records of 300 MiB (1.5 GiB in all, sparse) outside the range: reading or parsing them would
-    // exceed the address-space limit this test is run under (`prlimit --as=2000000000`) and take
-    // minutes. Only the tiles of the range may be read.
+    use std::sync::atomic::Ordering;
     let (params, tiles) = synthetic_world();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("big.dzgeo");
-    // On the grid, outside the range (0,0 to 1,1): indexed neither by position nor by size.
+    // On the grid, outside the range (0,0 to 1,1).
     let real: Vec<_> = tiles
         .iter()
         .filter(|t| t.x < 2 && t.z < 2)
         .cloned()
         .collect();
     let fake: Vec<(i32, i32)> = vec![(2, 0), (2, 1), (2, 2), (0, 2), (1, 2)];
-    sparse_capture(&path, &params, &real, &fake, 300 << 20);
+    let filler = 4_usize << 20;
+    let mut bytes = Vec::new();
+    {
+        let mut w = CaptureWriter::new(&mut bytes, &params).expect("header");
+        for t in &real {
+            w.add(t).expect("tile");
+        }
+    }
+    let real_len = bytes.len() as u64;
+    for &(x, z) in &fake {
+        bytes.extend_from_slice(&u32::try_from(filler).expect("small").to_le_bytes());
+        bytes.extend_from_slice(&x.to_le_bytes());
+        bytes.extend_from_slice(&z.to_le_bytes());
+        bytes.resize(bytes.len() + filler - 8, 0);
+    }
+    let read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let reader = Counting {
+        inner: io::Cursor::new(bytes),
+        read: read.clone(),
+    };
     let mut options = opts();
     options.range = Some([0, 0, 1, 1]);
     let mut o = CaptureFileOptions::new();
     o.range = Some([0, 0, 1, 1]);
-    let file = CaptureFile::open(&path, &o, &mut Warnings::new()).expect("open");
+    let file = CaptureFile::from_reader(reader, &o, &mut Warnings::new()).expect("index");
     assert_eq!(file.len(), 4);
     let (from_file, _) = run(Source::CaptureFile(file), &options);
     let (from_memory, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
     assert_eq!(from_file.built, 4);
     assert_eq!(from_file.built, from_memory.built);
     assert_eq!(bytes_of(&from_file.set), bytes_of(&from_memory.set));
+    // The index read the header, the world block and the tiles of the range (real_len bytes) and
+    // 12 bytes of each filler (the buffer reads a little more), and the run read the 4 tiles again.
+    // None of the 20 MiB of skipped records was read.
+    let total = read.load(Ordering::SeqCst);
+    assert!(
+        total < 2 * real_len + 256 * 1024,
+        "read {total} bytes, the tiles are {real_len}, a skipped record is {filler}"
+    );
 }
 
 #[test]
@@ -877,4 +924,58 @@ fn a_poison_tile_with_waiting_fetchers_still_fails_alone() {
         assert_eq!((report.fetch_errors[0].0, report.fetch_errors[0].1), (1, 0));
         assert_eq!(report.built + report.empty, 8, "round {round}");
     }
+}
+
+/// A capture file that lacks a tile of the range of the run skips that tile, like a capture in memory
+/// (the tile is dealt with and not reported as failed), and the builder of the options sets the range.
+#[test]
+fn a_capture_file_missing_a_tile_of_its_range_skips_it() {
+    let (params, tiles) = synthetic_world();
+    let kept: Vec<_> = tiles
+        .iter()
+        .filter(|t| (t.x, t.z) != (1, 1))
+        .cloned()
+        .collect();
+    let mut bytes = Vec::new();
+    {
+        let mut w = CaptureWriter::new(&mut bytes, &params).expect("header");
+        for t in &kept {
+            w.add(t).expect("tile");
+        }
+    }
+    let range = Some([0, 0, 2, 2]);
+    let options_of = CaptureFileOptions::new().range(range);
+    assert_eq!(options_of.range, range);
+    let file = CaptureFile::from_reader(io::Cursor::new(bytes), &options_of, &mut Warnings::new())
+        .expect("index");
+    assert_eq!(file.len(), kept.len());
+    assert_eq!(file.indexed_range(), range);
+    let mut options = opts();
+    options.range = range;
+    let (report, _) = run(Source::CaptureFile(file), &options);
+    assert!(report.failed.is_empty(), "{:?}", report.failed);
+    assert_eq!(report.built + report.empty, kept.len());
+}
+
+/// An empty range indexes nothing and covers nothing but an empty range.
+#[test]
+fn an_empty_range_indexes_no_tile() {
+    let (params, tiles) = synthetic_world();
+    let mut bytes = Vec::new();
+    {
+        let mut w = CaptureWriter::new(&mut bytes, &params).expect("header");
+        for t in &tiles {
+            w.add(t).expect("tile");
+        }
+    }
+    // The lower bound is past the grid (3 x 3): nothing is left of the range.
+    let o = CaptureFileOptions::new().range(Some([5, 5, 6, 6]));
+    let file =
+        CaptureFile::from_reader(io::Cursor::new(bytes), &o, &mut Warnings::new()).expect("index");
+    assert!(file.is_empty());
+    assert_eq!(file.len(), 0);
+    assert_eq!(file.indexed_range(), None);
+    assert!(file.covers(Some([5, 5, 6, 6])));
+    assert!(!file.covers(Some([0, 0, 1, 1])));
+    assert!(format!("{file:?}").contains("CaptureFile"));
 }
