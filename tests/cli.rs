@@ -1770,12 +1770,14 @@ fn big_pbo(dir: &Path) {
     assert_eq!(code, 0, "{err}");
 }
 
-/// Runs `args` with stdout a pipe: reads one chunk, drops the read end while the child still has output to
-/// write, and returns (exit code, stderr). The child blocks on the full pipe until the read end goes away,
-/// so no timing is involved.
+/// Runs `args` with stdout a pipe: reads until the output contains `until` (at least one chunk), drops the
+/// read end while the child still has output to write, and returns (exit code, stderr). The caller picks
+/// `until` so that the child has passed everything before the write it means to fail and still has more
+/// than a pipe buffer to write after it; the child then blocks on the full pipe until the read end goes
+/// away, so which write fails does not depend on timing (#111).
 #[cfg(unix)]
 #[expect(clippy::unwrap_used, reason = "test helper")]
-fn run_with_closed_stdout(args: &[&str], cwd: &Path) -> (i32, String) {
+fn run_with_closed_stdout(args: &[&str], until: &[u8], cwd: &Path) -> (i32, String) {
     use std::io::Read;
     use std::process::Stdio;
 
@@ -1789,8 +1791,17 @@ fn run_with_closed_stdout(args: &[&str], cwd: &Path) -> (i32, String) {
     isolate(&mut cmd, home.path());
     let mut child = cmd.spawn().unwrap();
     let mut stdout = child.stdout.take().unwrap();
-    let mut first = [0u8; 16];
-    stdout.read_exact(&mut first).unwrap();
+    let mut seen = Vec::new();
+    let mut chunk = [0u8; 256];
+    while !seen
+        .windows(until.len().max(1))
+        .any(|w| w.starts_with(until))
+        || seen.len() < 16
+    {
+        let n = stdout.read(&mut chunk).unwrap();
+        assert!(n > 0, "the output ended before {until:?}");
+        seen.extend_from_slice(chunk.get(..n).unwrap());
+    }
     drop(stdout);
     let out = child.wait_with_output().unwrap();
     (
@@ -1804,7 +1815,7 @@ fn run_with_closed_stdout(args: &[&str], cwd: &Path) -> (i32, String) {
 fn closed_stdout_pipe_ends_cat_quietly() {
     let dir = tempfile::tempdir().unwrap();
     big_pbo(dir.path());
-    let (code, err) = run_with_closed_stdout(&["cat", "out.pbo", "big.txt"], dir.path());
+    let (code, err) = run_with_closed_stdout(&["cat", "out.pbo", "big.txt"], b"", dir.path());
     assert!(!err.contains("error"), "{err}");
     assert_eq!(code, 0, "{err}");
 }
@@ -1819,7 +1830,8 @@ fn closed_stdout_pipe_ends_inspect_quietly() {
     }
     let (code, _, err) = dayzmake(&["pack", "mod", "out.pbo"], dir.path());
     assert_eq!(code, 0, "{err}");
-    let (code, err) = run_with_closed_stdout(&["inspect", "out.pbo"], dir.path());
+    // wait for the first entry line: the child is then in the entries loop with ~400 KB left to write
+    let (code, err) = run_with_closed_stdout(&["inspect", "out.pbo"], b"nnnnnnnn", dir.path());
     assert!(!err.contains("error"), "{err}");
     assert_eq!(code, 0, "{err}");
 }
