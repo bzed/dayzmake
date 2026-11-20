@@ -630,10 +630,10 @@ fn a_range_of_a_huge_capture_reads_only_its_tiles() {
         bytes.extend_from_slice(&z.to_le_bytes());
         bytes.resize(bytes.len() + filler - 8, 0);
     }
-    let read = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let counted = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let reader = Counting {
         inner: io::Cursor::new(bytes),
-        read: read.clone(),
+        read: counted.clone(),
     };
     let mut options = opts();
     options.range = Some([0, 0, 1, 1]);
@@ -649,7 +649,7 @@ fn a_range_of_a_huge_capture_reads_only_its_tiles() {
     // The index read the header, the world block and the tiles of the range (real_len bytes) and
     // 12 bytes of each filler (the buffer reads a little more), and the run read the 4 tiles again.
     // None of the 20 MiB of skipped records was read.
-    let total = read.load(Ordering::SeqCst);
+    let total = counted.load(Ordering::SeqCst);
     assert!(
         total < 2 * real_len + 256 * 1024,
         "read {total} bytes, the tiles are {real_len}, a skipped record is {filler}"
