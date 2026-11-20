@@ -253,7 +253,7 @@ In file data/broken.p3d: warning: Cannot check textures and materials: not an ML
 
 ## navmesh-seed
 
-Raised by: `navmesh generate`.
+Raised by: `navmesh generate`, `navmesh_generate`.
 
 The island filter found no polygon near the seed position (a box that reaches 30 m in x, 30 m in height and 3 m in z to each side of it), so it was skipped and no polygon is flagged as an island. The seed is the world's `seedPosition` or the one given with `--seed`; it has to be on land, near walkable ground.
 
@@ -263,7 +263,7 @@ warning: island filter skipped: no polygon near the seed (-5000.0 10.0 -5000.0) 
 
 ## navmesh-stray-part
 
-Raised by: `navmesh generate`.
+Raised by: `navmesh generate`, `navmesh_generate`.
 
 A built tile had polygons whose door part id was beyond the list of parts of the tile. This happens for trees below sea level on a tile that also has doors. The ids were ignored (the polygons get no door part); the mesh is complete. One warning per tile.
 
@@ -273,7 +273,7 @@ warning: tile (12,40): 3 polygons had out-of-range door part ids, which were ign
 
 ## navmesh-tile-failed
 
-Raised by: `navmesh generate`.
+Raised by: `navmesh generate`, `navmesh_generate`.
 
 A tile could not be built or added to the mesh, or its data from the server was malformed. The run goes on without that tile, saves the mesh and exits with status 1; the tile is listed in the report. One warning per tile.
 
