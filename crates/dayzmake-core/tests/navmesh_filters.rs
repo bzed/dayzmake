@@ -8,7 +8,7 @@
 )]
 
 use dayzmake_core::navmesh::internals::{
-    CompactHeightfield, Heightfield, Span, build_compact, dilate_area, erode,
+    CompactHeightfield, Heightfield, NO_HIDE_PART, Span, build_compact, dilate_area, erode,
     extract_tree_obstacles, filter_ledges, filter_low_hanging, filter_low_height_multi,
     mark_box_area, mode_filter, remap_and_roof as remap,
 };
@@ -161,7 +161,7 @@ fn low_hanging_does_not_copy_the_hide_part() {
     filter_low_hanging(&mut f, 5);
     let c = f.column(0, 0);
     assert_eq!((c[1].area, c[1].sub_area, c[1].hide_part), (1, 7, 5));
-    assert_eq!((c[0].hide_part, c[2].hide_part), (3, 0));
+    assert_eq!((c[0].hide_part, c[2].hide_part), (3, NO_HIDE_PART));
 }
 
 #[test]

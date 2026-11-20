@@ -38,6 +38,9 @@ pub fn store13(v: u16) -> u16 {
 /// The largest number of columns a heightfield may have (hostile size limit).
 const MAX_COLUMNS: usize = 1 << 24;
 
+/// The [`Span::hide_part`] of a span that is in no hide part.
+pub const NO_HIDE_PART: u16 = u16::MAX;
+
 /// One solid span of a column (`rcSpan`), heights in voxels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -50,14 +53,15 @@ pub struct Span {
     pub area: u8,
     /// DayZ part id (door parts, tree indices).
     pub sub_area: u16,
-    /// The hide part (area 14 group) that the span belongs to, 0 for none. A second id layer next
-    /// to [`Span::sub_area`]: only the hide part rasterisation writes it (ruling R21), the regions
-    /// and contours do not look at it, and the link trajectory walk reads it.
+    /// The hide part (area 14 group) that the span belongs to, [`NO_HIDE_PART`] for none. A second
+    /// id layer next to [`Span::sub_area`]: only the hide part rasterisation writes it (ruling R21),
+    /// the regions and contours do not look at it, and the link trajectory walk reads it. Part 0 is
+    /// a part like any other; the id 65535 cannot be told from "none" (a tile has far fewer parts).
     pub hide_part: u16,
 }
 
 impl Span {
-    /// A span with `sub_area` 0.
+    /// A span with `sub_area` 0 and no hide part.
     #[must_use]
     pub fn new(smin: u16, smax: u16, area: u8) -> Self {
         Self {
@@ -65,7 +69,7 @@ impl Span {
             smax,
             area,
             sub_area: 0,
-            hide_part: 0,
+            hide_part: NO_HIDE_PART,
         }
     }
 }
@@ -244,7 +248,7 @@ impl Heightfield {
     /// `addSpan`: insert a span, merging it with every span it overlaps. The merged area is
     /// `max(new, old)` when the merged `smax` is within `flag_merge_threshold` of the old span's
     /// `smax`; otherwise the new area is kept. The new span has `sub_area` 0 (DayZ) and, being a
-    /// plain `addSpan`, `hide_part` 0 as well: a hide span it merges with loses its hide part. Out of
+    /// plain `addSpan`, no hide part as well: a hide span it merges with loses its hide part. Out of
     /// range columns are ignored; heights are stored in 13 bits like `rcSpan` (see [`store13`]).
     pub fn add_span(
         &mut self,
@@ -292,8 +296,8 @@ impl Heightfield {
         };
         let before = column.len();
         let mut new = Span::new(store13(smin), store13(smax), area);
-        new.hide_part = hide_part.unwrap_or(0);
-        let mut older = 0_u16;
+        new.hide_part = hide_part.unwrap_or(NO_HIDE_PART);
+        let mut older = NO_HIDE_PART;
         let mut i = 0;
         while let Some(&cur) = column.get(i) {
             if cur.smin > new.smax {
@@ -308,12 +312,12 @@ impl Heightfield {
             if (i32::from(new.smax) - i32::from(cur.smax)).abs() <= flag_merge_threshold {
                 new.area = new.area.max(cur.area);
             }
-            if older == 0 {
+            if older == NO_HIDE_PART {
                 older = cur.hide_part;
             }
             column.remove(i);
         }
-        if older != 0 && hide_part.is_some() {
+        if older != NO_HIDE_PART && hide_part.is_some() {
             new.hide_part = older;
         }
         column.insert(i, new);

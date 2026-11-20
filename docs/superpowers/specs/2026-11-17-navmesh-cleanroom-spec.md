@@ -735,7 +735,7 @@ behaviour, earlier versions swept one side):
       * If `inRange` and the solid column has spans: `last = 0`; `top = (u32)(i64)((y + traj[j].ymax - bmin.y)/ch)`,
         `bot = (u32)(i64)((y + traj[j].ymin - bmin.y)/ch)` (negative values wrap as unsigned); walk the spans in order
         keeping `prev` (the previously visited span): break if `top < s.smin`; `last = s.smax`; if `s.hidePart` is the index of a **hide part**
-        (a part of an area 14 group of the extras list, 5.1; id 0 is no part; R21: whatever the span's area, the filters
+        (a part of an area 14 group of the extras list, 5.1; part 0 is a part, the layer's mark for "none" is 65535, item 23; R21: whatever the span's area, the filters
         make hide spans unwalkable and the links over them are listed all the same), count one visit for that part id in the sample's *part visits*
         (R17); if `bot <= s.smax && s.smin <= top` then result **blocked** (state 1) and stop. After the walk (without a
         block): if `prev` exists and its area is in 2..6, result **water** and stop. (The span that makes the loop break,
@@ -1549,6 +1549,13 @@ heights in shipped tiles are on the `ch = 0.1` grid; vertices lie on the `cs`/`c
       reading `hidePart`, which trees and doors never write, does. With it every visit counts, whatever the area of
       the span is (the filters make hide spans unwalkable; 69,219 has members whose visits are all of area 0 spans, so
       counting only area 14 spans loses 2 members and gains one in a tie).
+    * **Part 0 is a part (the mark for "none" is 65535).** The layer first used 0 for "no hide part", which is also the
+      id of the first part of a tile, so a hide part 0 could never get a link, and a later part could take its spans.
+      Measured on the shipped Badlands mesh (106,929 tiles): 1,688 tiles list polygons in part 0 of their extras list,
+      all of them ground polygons and none of area 14, and no tile lists an off-mesh polygon there. So the case does
+      not occur in this data, and the change (a span's `hidePart` is 65535 when it has none, as `u16::MAX`; a tile has
+      far fewer than 65,535 parts) leaves every measured tile as it was: the 8 connections of #127 (123,239, 149,252,
+      196,77, 99,201, 172,89, 171,213, 167,244 and 194,225) and the regression sets are unchanged.
     The quarter threshold (item 19) is still needed and still a placeholder for a missing condition. On the 949 tiles R21
     gives 12 wrong connections without it (11 extra, 1 other part) and 8 with it (6 extra, 1 missing, 1 other part): it
     removes 5 false positives for the loss of 1 member (167,244). On the 11,669 connections of the first set no threshold

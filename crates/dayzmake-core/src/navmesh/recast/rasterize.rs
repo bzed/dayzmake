@@ -28,7 +28,7 @@
 
 use std::collections::BTreeMap;
 
-use super::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span, SpanPiece};
+use super::heightfield::{Heightfield, NO_HIDE_PART, SPAN_MAX_HEIGHT, Span, SpanPiece};
 use crate::navmesh::num::{ceil_i32, floor_i32, i32_to_f32, trunc_i32};
 
 /// What a rasterisation does to the spans of a cell (spec 5.3).
@@ -325,7 +325,7 @@ fn paint(s: &mut Span, p: &RasterParams) {
     s.area = p.area;
     s.sub_area = p.sub_area;
     // The first hide part keeps the span (R21): a second copy of an object does not take it over.
-    if p.mode == RasterMode::PaintOrAdd && s.hide_part == 0 {
+    if p.mode == RasterMode::PaintOrAdd && s.hide_part == NO_HIDE_PART {
         s.hide_part = p.sub_area;
     }
 }

@@ -12,8 +12,8 @@
 )]
 
 use dayzmake_core::navmesh::internals::{
-    Heightfield, RasterMode, RasterOutcome, RasterParams, Span, SpanPiece, rasterize_part,
-    rasterize_triangle, walkable,
+    Heightfield, NO_HIDE_PART, RasterMode, RasterOutcome, RasterParams, Span, SpanPiece,
+    rasterize_part, rasterize_triangle, walkable,
 };
 
 fn hf4() -> Heightfield {
@@ -493,12 +493,12 @@ fn hide_part_layer_follows_the_hide_rasterisation_only() {
         let mut hf = hf4();
         hf.add_span(0, 0, 0, 5, 1, 1);
         raster(&mut hf, &wall(0.0, 3.0, 12.0), &q);
-        assert_eq!(hf.column(0, 0)[0].hide_part, 0, "{mode:?}");
+        assert_eq!(hf.column(0, 0)[0].hide_part, NO_HIDE_PART, "{mode:?}");
     }
-    // A plain addSpan leaves it 0.
+    // A plain addSpan leaves it unset.
     let mut hf = hf4();
     hf.add_span(1, 1, 0, 5, 14, 1);
-    assert_eq!(hf.column(1, 1)[0].hide_part, 0);
+    assert_eq!(hf.column(1, 1)[0].hide_part, NO_HIDE_PART);
 }
 
 /// Ruling R21: a hide part painted or added over spans that already belong to another hide part (two
@@ -536,7 +536,7 @@ fn an_added_hide_span_keeps_the_hide_part_it_merges_with() {
     assert_eq!(hf.column(0, 0), &[in_part(span(20, 45, 14), 4)]);
 }
 
-/// A plain `addSpan` that merges with a hide span gives the merged span `hide_part` 0, like `sub_area`.
+/// A plain `addSpan` that merges with a hide span gives the merged span no hide part, like `sub_area` 0.
 #[test]
 fn a_plain_add_span_resets_the_hide_part_of_the_spans_it_merges() {
     let mut hf = hf4();
@@ -544,4 +544,19 @@ fn a_plain_add_span_resets_the_hide_part_of_the_spans_it_merges() {
     assert_eq!(hf.column(0, 0)[0].hide_part, 4);
     hf.add_span(0, 0, 24, 30, 14, 1);
     assert_eq!(hf.column(0, 0), &[span(20, 30, 14)]);
+}
+
+/// Part 0 is a hide part like any other: its spans stay in it when a later part is painted over them
+/// (the "no part" mark of the layer is not a part id).
+#[test]
+fn the_first_part_id_is_a_hide_part_too() {
+    let mut first = params(RasterMode::PaintOrAdd, 14);
+    first.sub_area = 0;
+    first.flag_merge_threshold = 1;
+    let mut second = first;
+    second.sub_area = 9;
+    let mut hf = hf4();
+    raster(&mut hf, &wall(0.0, 20.0, 25.0), &first);
+    raster(&mut hf, &wall(0.0, 24.0, 25.0), &second);
+    assert_eq!(hf.column(0, 0), &[in_part(span(20, 25, 14), 0)]);
 }

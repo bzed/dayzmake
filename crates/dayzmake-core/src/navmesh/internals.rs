@@ -13,7 +13,7 @@ pub use super::recast::contour::{
     RC_CONTOUR_TESS_AREA_EDGES, RC_CONTOUR_TESS_WALL_EDGES, build_contours,
 };
 pub use super::recast::filter::{filter_ledges, filter_low_hanging};
-pub use super::recast::heightfield::{Heightfield, SPAN_MAX_HEIGHT, Span, SpanPiece};
+pub use super::recast::heightfield::{Heightfield, NO_HIDE_PART, SPAN_MAX_HEIGHT, Span, SpanPiece};
 pub use super::recast::mesh::{PolyMesh, build_poly_mesh, build_poly_mesh_with_border_removal};
 pub use super::recast::rasterize::{
     RasterMode, RasterOutcome, RasterParams, rasterize_part, rasterize_triangle,

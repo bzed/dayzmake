@@ -22,7 +22,7 @@ use super::num::{ceil_i32, floor_i32, i32_to_f32, trunc_i32, wrap_u32};
 use super::recast::{
     compact::CompactHeightfield,
     contour::{ContourSet, RC_AREA_BORDER, RC_CONTOUR_TESS_WALL_EDGES, build_contours},
-    heightfield::Heightfield,
+    heightfield::{Heightfield, NO_HIDE_PART},
     region::build_regions_monotone,
 };
 use super::wire::{LinkClass, TileGroup, WorldParams};
@@ -493,9 +493,10 @@ impl<'a> ClassCtx<'a> {
         }))
     }
 
-    /// True when `sub` is the part id of a hide part of this tile (id 0 is no part).
+    /// True when `sub` is the part id of a hide part of this tile ([`NO_HIDE_PART`] is no part; part 0
+    /// is a part).
     fn is_hide_part(&self, sub: u16) -> bool {
-        sub != 0 && self.hide.get(usize::from(sub)).copied().unwrap_or(false)
+        sub != NO_HIDE_PART && self.hide.get(usize::from(sub)).copied().unwrap_or(false)
     }
 }
 
@@ -1453,7 +1454,7 @@ mod tests {
         // The sub area (the id that regions and trees use) is not the hide part (R21).
         let (mut hf_sub, chf_sub) = hide_wall_field(0);
         for column in hf_sub.columns_mut() {
-            for sp in column.iter_mut().filter(|sp| sp.hide_part == 0) {
+            for sp in column.iter_mut().filter(|sp| sp.hide_part == NO_HIDE_PART) {
                 sp.sub_area = 3;
             }
         }
@@ -1466,9 +1467,18 @@ mod tests {
                 .iter()
                 .all(|s| s.part.is_none())
         );
-        // Id 0 is no part, even when part 0 is a hide part.
+        // Part 0 is a hide part like any other: the id 0 is not the "no part" mark.
         let (hf0, chf0) = hide_wall_field(0);
         let ctx = ClassCtx::new(&chf0, &hf0, &class, &[true, true])
+            .unwrap()
+            .unwrap();
+        let spans = class_spans(&ctx, &[edge]).unwrap();
+        assert!(
+            !spans.is_empty() && spans.iter().all(|s| s.part == Some(0)),
+            "{spans:?}"
+        );
+        // ... but it is no hide part when the tile's part 0 is not one.
+        let ctx = ClassCtx::new(&chf0, &hf0, &class, &[false, true])
             .unwrap()
             .unwrap();
         assert!(
