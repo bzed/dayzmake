@@ -182,7 +182,8 @@ you need them.
 
 Tiles are fetched and built in parallel: `--threads` builder threads (the default is the number of cores minus one)
 and one connection per `--server` (`--connections` changes that; keep it at one per `DayZDiag_x64.exe`, which serves
-one client at a time). If fetching is the slow part, start `DayZDiag_x64.exe` on several machines and give `--server a --server b --server c`; they must load the same world.
+one client at a time). If fetching is the slow part, start `DayZDiag_x64.exe` on several machines and give
+`--server a --server b --server c`; they must load the same world.
 The output does not depend on the number of threads, connections or servers.
 
 ### When a run is interrupted
@@ -216,14 +217,16 @@ expected, and the full run does it.
 ## 4. Put the file into the mod and rebuild
 
 The world's config names its navmesh with `navmeshName` in its `CfgWorlds` class. Copy `mymap.nm` to the path that
-property gives, **inside the mod's folder tree** (for example, with the prefix `mymap` and `navmeshName = "mymap\navmesh\mymap.nm";` that is
+property gives, **inside the mod's folder tree** (for example, with the prefix `mymap` and
+`navmeshName = "mymap\navmesh\mymap.nm";` that is
 `navmesh/mymap.nm` in the addon folder), and build the PBO again:
 
 ```text
 $ dayzmake build mymap mymap.pbo
 ```
 
-`.nm` files are copied into the PBO as they are. Sign the PBO as usual (see [Keys and signatures](../reference/signing.md)).
+`.nm` files are copied into the PBO as they are. Sign the PBO as usual (see
+[Keys and signatures](../reference/signing.md)).
 Load the mod in a server and check that the log has no `Unable to load navmesh`.
 
 ## Regenerating
@@ -247,7 +250,8 @@ $ dayzmake navmesh generate --server 127.0.0.1:36533 --record mymap.dzgeo mymap.
 $ dayzmake navmesh generate --capture mymap.dzgeo --doors open -f mymap-open.nm
 ```
 
-A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO. A capture of a whole map can be tens of gigabytes; building a
+A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO.
+A capture of a whole map can be tens of gigabytes; building a
 `--range` from it reads only the tiles of that range, so a small range stays fast and small.
 
 ## Good to know
@@ -293,13 +297,13 @@ Detour builds when a tile is added to the mesh, so what is stored is not meaning
   - 1 (146,83) differs in the order of two tree obstacles, which is data as well: tree obstacles come in the
     input order of the tree parts, which holds on the other 19,875 tiles of the half with two or more of them, and no
     sort key (radius, size, position, ...) reproduces both
-    ([#128](https://github.com/bzed/dayzmake/issues/128), ruling R22).
+    ([#128](https://github.com/bzed/dayzmake/issues/128)).
 
   (One tile, 171,213, is both in the tower area and one of the #127 cases.) The three tiles of the first row that were
   fetched again without `--record` are not in the capture and are outside the comparison.
 - **Earlier blocks, all inner tiles identical:** on Livonia, tiles 128-131 x 128-131 (open terrain) and 128-131 x
-  220-223 (a dense town); on Badlands, a dense block (136-139 x 100-103) and two blocks with the irrigation tunnels (180-183 x
-  186-189 and 183-186 x 198-201), whose floors are walkable below the surface.
+  220-223 (a dense town); on Badlands, a dense block (136-139 x 100-103) and two blocks with the irrigation
+  tunnels (180-183 x 186-189 and 183-186 x 198-201), whose floors are walkable below the surface.
 
 So the claim is exact and limited: the inner tiles of the central half of Badlands and of five earlier blocks, with the
 polygon flags and the link array excluded, and with the 60 tiles above as the known differences. It does not cover the
