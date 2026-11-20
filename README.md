@@ -13,7 +13,7 @@ Documentation: <https://bzed.github.io/dayzmake/> (guides and a reference of eve
 <!-- ANCHOR: intro -->
 DayZ modding tools written in Rust: PBO packing and unpacking, config
 preprocessing and rapification, model inspection and binarization, PAA
-conversion and signature handling.
+conversion, signature handling and navigation mesh (navmesh) generation for terrain mods.
 
 ## History
 

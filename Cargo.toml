@@ -31,7 +31,7 @@ float_cmp = "deny"
 [package]
 name = "dayzmake"
 version = "3.1.0"
-description = "DayZ modding tools"
+description = "DayZ modding tools: PBO, config, models, PAA, signing, script API index and navmesh generation"
 license.workspace = true
 keywords = ["dayz", "pbo", "paa", "modding", "bohemia"]
 categories = ["command-line-utilities", "game-development"]
