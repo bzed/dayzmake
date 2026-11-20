@@ -221,6 +221,10 @@ Rebuild the binary from HEAD first; shared binaries in /var/tmp must never be le
 
 ### Task 13: Deterministic coverage (#111)
 
+> Note (history): this is the task text as it was given. The maintainer then asked to relax the pull-request check
+> (`project` threshold 1 % on pull requests, 0 % on `main`; see `codecov.yml` and AGENTS.md, section Coverage), so the
+> "do not relax its thresholds" and "threshold 0 %" wording below is superseded. It is left as it was.
+
 **Files:** found by investigation: the Makefile's coverage targets, `cargo llvm-cov` settings, CLI tests that spawn the binary (`tests/`), and `codecov.yml` (do not relax its thresholds).
 
 The same commit gave different line coverage: `src/commands/pbo.rs:51` was covered on main and missed on PR #110, with no code change, so Codecov's `project` check (threshold 0 %) failed.
