@@ -216,3 +216,21 @@ Re-run the synthetic-world examples in `docs/book/src/guides/navmesh.md` and `re
 ### Task 12: Whole central half from the capture
 
 Rebuild the binary from HEAD first; shared binaries in /var/tmp must never be left as experiment builds. Then rebuild `48,48,278,278` from `big.dzgeo` under `systemd-run --user --scope -p MemoryMax=16G -p MemorySwapMax=0` and compare the inner tiles. Target: every inner tile matches, apart from polygon flags and the link array. Report anything left over as issues.
+
+## Part 3: before the push (user decision, 2026-11-20)
+
+### Task 13: Deterministic coverage (#111)
+
+**Files:** found by investigation: the Makefile's coverage targets, `cargo llvm-cov` settings, CLI tests that spawn the binary (`tests/`), and `codecov.yml` (do not relax its thresholds).
+
+The same commit gave different line coverage: `src/commands/pbo.rs:51` was covered on main and missed on PR #110, with no code change, so Codecov's `project` check (threshold 0 %) failed.
+- Reproduce: run `make coverage` (or the CI coverage step) twice on the same commit, export lcov both times, and diff the line hits. Repeat until a flip shows; report how many runs it took.
+- Find the cause. Candidates: subprocess profiles lost (the `LLVM_PROFILE_FILE` pattern, `%p`/`%m`, merge races), a test killing the binary before it flushes its profile, timing-dependent code paths, parallel test interference.
+- Fix the cause, not the symptom. Prove it: N consecutive coverage runs (N ≥ 5) give identical lcov line data.
+- Never lower the threshold or exclude code.
+
+### Task 14: Tree obstacle order (#128)
+
+**Files:** navmesh obstacle and tree code; spec §14.
+
+Badlands tile 146,83 differs from the shipped mesh only in the order of two tree obstacle records. Decide between data (the server's answer order, as R20 for doors) and a generator sort rule. Measure candidate sort keys on every tile with two or more tree obstacles that already matches, as R20 did for doors. Fix it if a rule fits everything without regressions; otherwise record it as data in a ruling.
