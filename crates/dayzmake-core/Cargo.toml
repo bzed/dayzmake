@@ -1,6 +1,6 @@
 [package]
 name = "dayzmake-core"
-version = "0.3.0"
+version = "0.3.1"
 description = "Readers and writers for DayZ file formats: PBO, rapified config, P3D, PAA, BI keys and signatures, and navmesh generation"
 license.workspace = true
 authors.workspace = true

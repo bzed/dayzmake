@@ -38,7 +38,7 @@ compatible with GPL-2.0-or-later.
 
 ## Changes
 
-### Unreleased
+### 0.3.1
 
 - New module `navmesh` (feature `navmesh`, on by default; it adds the dependency `safe_arch` on x86 and x86_64):
   `navmesh::client` (the data-server client with `Host` and `RetryPolicy`), `navmesh::wire` (world parameters and tile
