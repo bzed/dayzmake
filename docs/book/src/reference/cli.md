@@ -1,7 +1,7 @@
 # Command line
 
-`dayzmake <command> [options] [arguments]`. The commands fall into groups; each group has its own page with one
-section per command.
+`dayzmake <command> [options] [arguments]`. The commands are in groups. Each group has its own page with one
+section for each command.
 
 | Group | Commands | Page |
 |---|---|---|
@@ -27,38 +27,39 @@ An unknown command or option prints `Invalid arguments.` followed by the usage t
 
 | Option | Meaning |
 |---|---|
-| `-v`, `--verbose` | Lifts the limit of ten warnings per warning name. `api` also prints a `# <index>: <build>` line per index. |
+| `-v`, `--verbose` | Remove the limit of ten warnings for each warning name. `api` also prints a `# <index>: <build>` line for each index. |
 | `-f`, `--force` | Overwrite the target if it exists. Without it, an existing target is an error: `Target file "x" already exists. Use --force to overwrite.` |
 | `-w <name>`, `--warning <name>` | Mute the warning with this name. Repeatable. See [Warnings](warnings.md). |
-| `-i <folder>`, `--include <folder>` | A folder that is searched for absolute includes. Repeatable. See [Config files and the preprocessor](../guides/configs.md). |
+| `-i <folder>`, `--include <folder>` | A folder that dayzmake searches for absolute includes. Repeatable. See [Config files and the preprocessor](../guides/configs.md). |
 
-`-w` and `-i` are accepted only by the commands whose synopsis names them.
+Only the commands that have `-w` or `-i` in their synopsis accept these options.
 
 ## Input and output
 
-Commands that take `[<source>]` read standard input when it is omitted, and commands that take `[<target>]`
-write standard output when it is omitted. This works for `rapify`, `preprocess`, `derapify`, `inspect`, `cat`,
-`build` and `pack` (the PBO goes to standard output). `build` and `pack` with `-k` need a real target, because a
-signature cannot be made of a stream: `error: Cannot sign a pbo that is piped to stdout.`
+A command that takes `[<source>]` reads standard input when you omit it. A command that takes `[<target>]` writes
+to standard output when you omit it. This works for `rapify`, `preprocess`, `derapify`, `inspect`, `cat`, `build`
+and `pack` (the PBO goes to standard output). `build` and `pack` with `-k` need a real target, because dayzmake
+cannot sign a stream: `error: Cannot sign a pbo that is piped to stdout.`
 
-Targets are written atomically: dayzmake writes a temporary file next to the target and renames it when the
-command succeeded, so a failed command leaves no half-written file.
+dayzmake writes targets atomically. It writes a temporary file next to the target and renames it when the command
+succeeds. A failed command does not leave a half-written file.
 
 ## Exit status and messages
 
 - `0`: the command succeeded. Warnings do not change the status.
 - `1`: the command failed. The message is `error: <what failed>` on standard error. Invalid arguments also give 1.
-- A reader that closes standard output early (`dayzmake inspect big.pbo | head`) ends the command quietly with
+- If a reader closes standard output early (`dayzmake inspect big.pbo | head`), the command ends quietly with
   status 0.
 
-Warnings go to standard error as `[In file <file>:<line>: ]warning: <message> [<name>]`. A warning name is shown
-at most ten times; the rest is summarised at the end with a hint to mute it with `-w` or to use `-v`. Colours are
-used when standard output is a terminal (the messages themselves go to standard error); `NO_COLOR=1` and
-`CLICOLOR=0` switch them off and `CLICOLOR_FORCE=1` forces them (see [Environment and files](environment.md)).
+dayzmake writes warnings to standard error as `[In file <file>:<line>: ]warning: <message> [<name>]`. It shows a
+warning name at most ten times. At the end, it gives a summary of the rest, with a hint to mute the warning with
+`-w` or to use `-v`. dayzmake uses colours when standard output is a terminal (the messages themselves go to
+standard error). `NO_COLOR=1` and `CLICOLOR=0` switch them off. `CLICOLOR_FORCE=1` forces them (see
+[Environment and files](environment.md)).
 
 ## Help text
 
-The usage text is the source of truth for the grammar and is printed by `dayzmake --help`:
+The usage text is the source of truth for the grammar. `dayzmake --help` prints it:
 
 <div class="synopsis">
 

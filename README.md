@@ -17,11 +17,10 @@ conversion, signature handling and navigation mesh (navmesh) generation for terr
 
 ## History
 
-dayzmake is a fork of [armake2](https://github.com/KoffeinFlummi/armake2)
-itself the successor to armake, diverged from it for DayZ modding: Arma 3
-targets are no longer the focus, while DayZ-specific behaviour (binarization
-through DayZ Tools under Proton, `product=dayz` header extensions and similar)
-is maintained here.
+dayzmake is a fork of [armake2](https://github.com/KoffeinFlummi/armake2),
+which is itself the successor of armake. dayzmake diverged from armake2 for DayZ modding.
+Arma 3 targets are no longer the focus. This project maintains the DayZ-specific behaviour
+(binarization through DayZ Tools under Proton, `product=dayz` header extensions and similar).
 <!-- ANCHOR_END: intro -->
 
 ## Changes
@@ -32,9 +31,30 @@ is maintained here.
 With dayzmake-core 0.3.1.
 
 
-- New command group `navmesh` for navigation meshes of terrain mods: `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`, `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`, `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`; `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`), and `navmesh info` summarises a `.nm` file (`--tiles`, `--json`). The output is the same for any number of threads. New warnings `navmesh-tile-failed`, `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` gets the module `navmesh` (feature `navmesh`, on by default). The MCP server gets the tools `navmesh_probe`, `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers (0 is the default). A tile that needs more than 2^26 heightfield spans fails instead of exhausting memory, `--base` must match the world's grid and tile size, `navmesh info` shows the file version read (7 or 9), and the MCP `sea_level` takes a number or a string.
-- `navmesh generate --capture` does not load the whole capture: it indexes the file and reads only the tiles of the range (memory in proportion to the range, not to the file; a 3 x 3 range of a 50 GB capture ran in 6 s and 300 MB). `dayzmake-core` gets `capture::CaptureFile` and `Source::CaptureFile`; the capture format is unchanged.
-- `navmesh generate`: a data-server connection that is refused or reset is retried five times with 10 seconds of waiting (1, 2, 3 and 4 s between the tries), and when it still fails its tile goes back to the queue for the other connections instead of failing; a tile that fails on two working connections, or gets a wrong answer, is reported as not fetched without taking the connections down. `--record` may not name the `--capture` file. Only the tiles of `--range` are indexed from a capture (library: `CaptureFileOptions`; a run for a range wider than the indexed one is refused).
+- New command group `navmesh` for navigation meshes of terrain mods:
+  - `navmesh probe` shows the world parameters (and one tile) of the navmesh data server of `DayZDiag_x64.exe`.
+  - `navmesh generate` builds the `.nm` file from that server or from a capture (`--capture`, `--record`; `--range`,
+    `--base`/`--skip-existing` and `--checkpoint` to resume; `--threads`, `--connections`, several `--server`;
+    `--doors`, `--sea-level`, `--no-links`, `--no-island-filter`, `--seed`).
+  - `navmesh info` summarises a `.nm` file (`--tiles`, `--json`).
+
+  The output is the same for any number of threads. There are new warnings `navmesh-tile-failed`,
+  `navmesh-stray-part` and `navmesh-seed`. See the guide *Navigation meshes for a terrain mod*. `dayzmake-core` has the
+  new module `navmesh` (feature `navmesh`, on by default). The MCP server has the new tools `navmesh_probe`,
+  `navmesh_generate` and `navmesh_info`. `--threads` and `--connections` take at most 256 and refuse negative numbers
+  (0 is the default). A tile that needs more than 2^26 heightfield spans fails and does not use all memory. `--base`
+  must match the grid and tile size of the world. `navmesh info` shows the file version that it read (7 or 9). The MCP
+  argument `sea_level` takes a number or a string.
+- `navmesh generate --capture` does not load the whole capture. It indexes the file and reads only the tiles of the
+  range. The memory use depends on the range, not on the file. A 3 x 3 range of a 50 GB capture ran in 6 s and 300 MB.
+  `dayzmake-core` has the new items `capture::CaptureFile` and `Source::CaptureFile`. The capture format did not
+  change.
+- `navmesh generate`: if a data-server connection is refused or reset, dayzmake tries it again five times, with 10
+  seconds of waiting in total (1, 2, 3 and 4 s between the tries). If the connection still fails, the tile goes back
+  to the queue for the other connections, and does not fail. If a tile fails on two working connections, or gets a
+  wrong answer, dayzmake reports it as not fetched. It does not take the connections down. `--record` cannot name the
+  `--capture` file. From a capture, dayzmake indexes only the tiles of `--range` (library: `CaptureFileOptions`).
+  dayzmake refuses a run for a range that is wider than the indexed range.
 
 ### 3.1.0
 
@@ -127,9 +147,9 @@ With dayzmake-core 0.2.2.
 
 ### 3.0.1
 
-- Releases carry `SHA256SUMS` and `SHA512SUMS` of all archives with GPG signatures, and the public key
-  (`dayzmake-release-key.asc`); see *Verifying downloads*.
-- The documentation is published as a web site with guides and a reference of every command, option, MCP tool and
+- Releases have `SHA256SUMS` and `SHA512SUMS` of all archives with GPG signatures, and the public key
+  (`dayzmake-release-key.asc`). See *Verifying downloads*.
+- The documentation is a web site with guides and a reference of every command, option, MCP tool and
   warning: <https://bzed.github.io/dayzmake/>.
 - `pack` no longer warns that models were not binarized; only `build` does (#72, fixed in dayzmake-core 0.2.1).
 
@@ -259,9 +279,9 @@ hostile config input. `dayzmake` 3.0.0 needs `dayzmake-core` 0.2.0.
 ## Building
 <!-- ANCHOR: building -->
 
-The build requires `cargo`, Rust's package manager. No system libraries are needed: everything, including the RSA
-code for `sign` and `keygen`, is pure Rust.
-To compile and run, use:
+To build dayzmake, you need `cargo`, the package manager of Rust. You do not need system libraries. All code,
+also the RSA code for `sign` and `keygen`, is pure Rust.
+To compile and run dayzmake, use:
 
 ```
 cargo run
@@ -285,18 +305,19 @@ ed25519, expires 2029-11-15
 6624 41B3 6A57 85AD 18FB  8667 DF75 3D99 D064 EB7E
 ```
 
-The public key is a release asset (`dayzmake-release-key.asc`) and is published at
-<https://bzed.github.io/dayzmake/release-key.asc>. Get it from the site or from a release, and compare the
-fingerprint with the one above (and with the one in the repository's `AGENTS.md`) before you trust it.
+The public key is a release asset (`dayzmake-release-key.asc`). It is also published at
+<https://bzed.github.io/dayzmake/release-key.asc>. Get it from the site or from a release. Before you trust it,
+compare its fingerprint with the fingerprint above and with the fingerprint in `AGENTS.md` of the repository.
 
-Download the archive you want together with the checksum files and the key, from the release page or with the
-GitHub CLI (without a tag it downloads the latest release):
+Download the archive you want, the checksum files and the key. Use the release page or the GitHub CLI. Without a
+tag, the GitHub CLI downloads the latest release:
 
 ```
 gh release download -R bzed/dayzmake -p '*debian-trixie*' -p 'SHA*' -p 'dayzmake-release-key.asc'
 ```
 
-On Linux or macOS, in the folder with the downloaded files (the Linux archive is named like `dayzmake-v3.2.0-debian-trixie-x86_64.tar.gz`):
+On Linux or macOS, run these commands in the folder with the downloaded files. The Linux archive has a name like
+`dayzmake-v3.2.0-debian-trixie-x86_64.tar.gz`:
 
 ```
 gpg --import dayzmake-release-key.asc
@@ -310,16 +331,20 @@ s=$(gpg --status-fd 1 --verify SHA256SUMS.asc SHA256SUMS 2>/dev/null)
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-The check must print `signature OK`. Do not rely on the `Good signature` text or the exit status of a plain
-`gpg --verify`: gpg prints that text, and exits with 0, for a signature of a key that has expired since. Only the
-`GOODSIG` status line means that the signature is good and its key is neither expired nor revoked, and `VALIDSIG`
-names the key that made it. The check also demands that the file holds exactly one signature and that no
-`EXPSIG`, `EXPKEYSIG`, `REVKEYSIG`, `BADSIG` or `ERRSIG` line appears, so a second, bad signature cannot hide behind a good one. The warning that the key is not certified with a trusted signature is expected as long
-as you have not signed it yourself, so the check ignores it; the fingerprint is what counts. `sha256sum -c --ignore-missing` checks
-the archives you downloaded and ignores the ones you did not (on macOS use `shasum -a 256 -c --ignore-missing`).
-`SHA512SUMS` works the same way with `sha512sum`.
+The check must print `signature OK`. Do not trust the `Good signature` text or the exit status of a plain
+`gpg --verify`. For a signature of a key that has expired since, gpg prints that text and exits with 0. Only the
+`GOODSIG` status line means that the signature is good and that its key is not expired and not revoked. `VALIDSIG`
+names the key that made the signature. The check also demands that the file has exactly one signature. It demands
+that no `EXPSIG`, `EXPKEYSIG`, `REVKEYSIG`, `BADSIG` or `ERRSIG` line appears. Thus a second, bad signature cannot
+hide behind a good one.
 
-On Windows, in PowerShell with [Gpg4win](https://www.gpg4win.org/) installed, check the signature and compare the
+gpg gives a warning that the key is not certified with a trusted signature. This warning is normal until you sign
+the key yourself. The check ignores it, because the fingerprint is what counts.
+
+`sha256sum -c --ignore-missing` checks the archives that you downloaded and ignores the other archives. On macOS,
+use `shasum -a 256 -c --ignore-missing`. `SHA512SUMS` works in the same way with `sha512sum`.
+
+On Windows, use PowerShell with [Gpg4win](https://www.gpg4win.org/) installed. Check the signature, and compare the
 hash of your download with its line in `SHA256SUMS`:
 
 ```
@@ -348,8 +373,8 @@ cargo test
 ```
 
 The end-to-end DayZ test harness builds a small test mod, binarizes it, packs
-it into a PBO, signs it, and boots a local DayZ server (Steam app 223350, plus
-app 1042420 with `--both`) to prove the mod loads and runs:
+it into a PBO and signs it. Then it starts a local DayZ server (Steam app 223350, plus
+app 1042420 with `--both`) to show that the mod loads and runs:
 
 ```
 testharness/run.sh --both
@@ -486,32 +511,43 @@ Options:
 
 See `dayzmake --help` for more.
 
-`build` and `pack` pack only regular files (and links to them). Files excluded with `-x` are skipped silently. A file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device name) is skipped with an `unsafe-path` warning, and FIFOs, devices and sockets with an `unsupported-file` warning. Entry names compare case-insensitively: if two files map to the same name (`A.txt` and `a.txt`, or `config.cpp` and `config.bin` in `build`, where the `.cpp` becomes `config.bin`), the first in sorted order is packed and the other is skipped with a `duplicate-entry` warning naming both; an entry generated from source (the rapified `config.cpp`, a `.p3do`) wins over a plain `config.bin` or `.p3d` of the same name. Model extensions (`.p3d`, `.rtm`) are matched case-insensitively, and `.p3do` files are packed as `.p3d` (a colliding `m.p3d` and `m.p3do` is reported, and the `.p3do` wins). A file that cannot be opened or read fails the build with an error naming it.
+`build` and `pack` pack only regular files and links to them. They skip the files that `-x` excludes, without a message.
+They skip a file whose name is not valid as a PBO entry name (not UTF-8, control characters, `:`, a Windows device
+name) and give an `unsafe-path` warning. They skip FIFOs, devices and sockets and give an `unsupported-file` warning.
+
+Entry names compare case-insensitively. Two files can map to the same name: `A.txt` and `a.txt`, or `config.cpp` and
+`config.bin` in `build` (there the `.cpp` becomes `config.bin`). Then the first file in sorted order is packed. The
+other file is skipped with a `duplicate-entry` warning that names both files. An entry that is generated from source
+(the rapified `config.cpp`, a `.p3do`) wins over a plain `config.bin` or `.p3d` of the same name.
+
+Model extensions (`.p3d`, `.rtm`) are matched case-insensitively. `.p3do` files are packed as `.p3d`. If `m.p3d` and
+`m.p3do` collide, dayzmake reports it and the `.p3do` wins. A file that cannot be opened or read fails the build with
+an error that names the file.
 
 ## Using dayzmake-core as a library
 <!-- ANCHOR: library -->
 
-The file-format code lives in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
-(`crates/dayzmake-core`): PBO, configs, P3D, PAA, BI keys and signatures and navigation meshes (`.nm`, with their
-generator), with no CLI dependencies. It never prints; warnings go to a `WarningSink` you provide, so it is safe to use
-from many threads.
+The code for the file formats is in the [`dayzmake-core`](https://crates.io/crates/dayzmake-core) crate
+(`crates/dayzmake-core`). It handles PBO, configs, P3D, PAA, BI keys and signatures, and navigation meshes (`.nm`,
+with their generator). It has no CLI dependencies. It never prints. Warnings go to a `WarningSink` that you provide,
+so you can safely use it from many threads.
 
 ```
 cargo add dayzmake-core
 ```
 
 Features: `sign` (BI keys and signatures), `image` (PAA from and to images) and `navmesh` (the navmesh generator:
-the data-server client, the tile builder and the `.nm` reader and writer), all on by
-default; `default-features = false` builds without them. The
+the data-server client, the tile builder and the `.nm` reader and writer). All features are on by default.
+`default-features = false` builds without them. The
 [API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
-The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects may link it. `dayzmake-core` is versioned
-independently of the CLI.
+The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects can link it. `dayzmake-core` has its own version
+number, independent of the CLI.
 
 <!-- ANCHOR_END: library -->
 ## Script API index
 
-`dayzmake api` answers questions about the DayZ script API (classes, members, enums, base class chains, where a
-declaration lives, compile-time defines) from the installed game, without extracting anything.
+`dayzmake api` answers questions about the DayZ script API from the installed game. It does not extract anything.
+It knows classes, members, enums, base class chains, the place of a declaration and compile-time defines.
 
 ```
 dayzmake api class PlayerBase --max 40        # members of a class
@@ -529,29 +565,30 @@ dayzmake api config CfgVehicles/Hatchback_02   # a config class: chain, resolved
 dayzmake api update                           # rebuild the cache now
 ```
 
-- **Branch:** stable by default, `--experimental` for the experimental branch. The two branches have separate
-  indexes and caches. The install is found through Steam (`STEAM_ROOT` first; on Windows then the registry's `SteamPath`, `%ProgramFiles(x86)%\Steam` and `%ProgramFiles%\Steam`); `--dayz <dir>` names a DayZ client or
-  server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
-- **Mods:** without `-m` only vanilla is queried. `-m cf,cot` (aliases `cf`, `cot`, `dabs`, `expansion`), a Steam
-  workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`) or a mod directory adds mods;
-  `-m aliases` means the four aliases that are installed, `-m all` every installed mod that has scripts (`api config`
-  also counts a mod that has only a config). The first run indexes each mod once, which can take a while; later runs
-  use the cache. A mod contributes the
-  scripts of every `addons/*.pbo` (the `.c` files, with the `defines[]` of its `config.cpp`/`config.bin`).
-  Results from several indexes are tagged with the index name.
+- **Branch:** the default is stable. Use `--experimental` for the experimental branch. The two branches have separate
+  indexes and caches. dayzmake finds the install through Steam. It checks `STEAM_ROOT` first. On Windows it then
+  checks the `SteamPath` of the registry, `%ProgramFiles(x86)%\Steam` and `%ProgramFiles%\Steam`. `--dayz <dir>` names
+  a DayZ client or server directory (`<dir>/dta/scripts.pbo`) and skips the Steam search.
+- **Mods:** without `-m`, dayzmake queries only vanilla. These values of `-m` add mods: `-m cf,cot` (aliases `cf`,
+  `cot`, `dabs`, `expansion`), a Steam workshop id, a mod name (`meta.cpp` name or `@dir`, see `dayzmake api mods`)
+  or a mod directory. `-m aliases` means the four aliases that are installed. `-m all` means every installed mod that
+  has scripts (`api config` also counts a mod that has only a config). The first run indexes each mod once. This can
+  take a while. Later runs use the cache. A mod contributes the scripts of every `addons/*.pbo` (the `.c` files, with
+  the `defines[]` of its `config.cpp`/`config.bin`). Dayzmake tags results from several indexes with the index name.
 - **Output:** text, at most `--max` lines (default 120). `--json` prints JSON instead (errors stay on stderr as
-  text); `-v` first prints one `# <index>: <build>` line per index.
-- **Cache:** one JSON file per index in `$DAYZMAKE_CACHE`, else `$XDG_CACHE_HOME/dayzmake/api`, else
-  `~/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`). It is rebuilt automatically when the size or
-  modification time of a PBO changes or the index format changes; `--refresh` forces it. A corrupt file is replaced. A cache that cannot be found or written (read-only directory, no `HOME`) is a warning
-  (`api-cache`); the query still runs on the freshly built index.
-- PBO contents are untrusted: entries and prefixes with unsafe paths are skipped with a warning and nothing is
-  extracted to disk.
+  text). `-v` first prints one `# <index>: <build>` line for each index.
+- **Cache:** one JSON file for each index in `$DAYZMAKE_CACHE`, else `$XDG_CACHE_HOME/dayzmake/api`, else
+  `~/.cache/dayzmake/api` (Windows: `%LOCALAPPDATA%\dayzmake\api`). dayzmake rebuilds it automatically when the size
+  or modification time of a PBO changes, or when the index format changes. `--refresh` forces a rebuild. dayzmake
+  replaces a corrupt file. If dayzmake cannot find or write the cache (read-only directory, no `HOME`), it gives a
+  warning (`api-cache`). The query still runs on the index that dayzmake just built.
+- PBO contents are untrusted. dayzmake skips entries and prefixes with unsafe paths and gives a warning. It does not
+  extract anything to disk.
 
 ## MCP server
 
 `dayzmake mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server on stdin/stdout
-(newline-delimited JSON-RPC, tools only). Register it with Claude Code:
+(newline-delimited JSON-RPC, tools only). To register it with Claude Code, run:
 
 ```
 claude mcp add dayzmake -- dayzmake mcp
@@ -560,36 +597,61 @@ claude mcp add dayzmake -- dayzmake mcp
 Tools:
 
 - `api_class`, `api_find`, `api_subclasses`, `api_enum`, `api_chain`, `api_source`, `api_grep`, `api_defines`,
-  `api_config`, `api_update`, `api_mods`: the script API index (see above). All but `api_grep` and `api_mods` take
-  `mods`, `experimental`, `dayz` and `refresh`; `api_grep` takes the same without `refresh` (it reads the PBOs and
-  builds no index); `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`, and all but
-  `api_chain` take `max` (default 120); `api_update` takes neither. Without `mods` only vanilla is queried; no
-  tool defaults to `all`. The first `mods=all` run builds the caches and can take a while; `api_update` with
-  `mods=all` warms them.
+  `api_config`, `api_update`, `api_mods`: the script API index (see above). All tools but `api_grep` and `api_mods` take
+  `mods`, `experimental`, `dayz` and `refresh`. `api_grep` takes the same arguments without `refresh` (it reads the
+  PBOs and builds no index). `api_mods` takes `experimental`, `dayz` and `json`. The queries also take `json`. All
+  queries but `api_chain` take `max` (default 120). `api_update` takes neither. Without `mods`, the tools query only
+  vanilla. No tool uses `all` as default. The first `mods=all` run builds the caches and can take a while.
+  `api_update` with `mods=all` warms the caches.
 - `pbo_inspect`, `pbo_cat`, `pbo_unpack`, `extract`, `pbo_pack`, `pbo_build`, `pbo_sign`, `pbo_verify`, `key_generate`,
   `config_rapify`, `config_derapify`, `config_preprocess`, `paa_to_image`, `image_to_paa`, `binarize`: the file
-  commands with the arguments of their CLI counterparts. No tool overwrites a file unless `force` is set.
+  commands with the arguments of their CLI counterparts. No tool overwrites a file unless you set `force`.
 - `navmesh_probe`, `navmesh_generate`, `navmesh_info`: `dayzmake navmesh probe`, `generate` and `info`. `navmesh_generate`
-  reports no progress and returns when the run is over, which takes many minutes for a whole map (use `range`).
+  reports no progress and returns when the run is over. A whole map takes many minutes (use `range`).
 
-The tools take file paths as given (relative to the server's working directory) and act with the permissions of
-the user running the server: they can read, create and, with `force`, overwrite any file that user can. Only
-register the server with a client you trust to do that. Output is capped at 200 000 bytes; `api_source` (with `cat`) and `pbo_cat` take `offset` and `length`
-(bytes) to fetch the rest, and `api_source` takes `target` to write the files instead. Warnings come first in
-the result, so a cut never drops them, and failures are results with `isError: true`.
+The tools take file paths as given (relative to the working directory of the server). They act with the permissions
+of the user who runs the server. They can read and create any file that this user can, and with `force` they can
+overwrite it. Register the server only with a client that you trust to do this.
+
+The output is limited to 200 000 bytes. To get the rest, `api_source` (with `cat`) and `pbo_cat` take `offset` and
+`length` (bytes). `api_source` also takes `target` to write the files instead. Warnings come first in the result, so
+a cut never removes them. A failure is a result with `isError: true`.
 
 ## Inspecting models and checking their textures
 
-`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD it also lists the LODs, textures, materials, properties and selections. For a binarized ODOL version 56 (the version of the game's models) it lists the skeleton, the bounding box, the LODs with vertex and face counts, textures, materials, proxies, properties, selections and animations; a damaged v56 model is an error. For other ODOL versions and for BMTR only the format and version are shown, with a note that only v56 is decoded. Without a model header, `inspect` treats the input as a PBO.
+`dayzmake inspect <file.p3d>` shows the format and version of a model. For an editable MLOD, it also lists the LODs,
+textures, materials, properties and selections. For a binarized ODOL version 56 (the version of the models of the
+game), it lists the skeleton, the bounding box, the LODs with vertex and face counts, textures, materials, proxies,
+properties, selections and animations. A damaged v56 model is an error. For other ODOL versions and for BMTR,
+`inspect` shows only the format and version, with a note that dayzmake decodes only v56. If the input has no model
+header, `inspect` treats it as a PBO.
 
-`build` checks every MLOD model it is about to binarize (also without `--proton-binarize`) and warns about textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute with `-w`). References starting with the addon's prefix are looked up in the source folder, ignoring case. Other references (vanilla `dz\...`, other mods) are only checked if they exist below an `-i` folder or the current directory; if they don't, they are not reported because there is no way to tell whether they are wrong. Procedural textures (`#(argb,...)`) are skipped.
+`build` checks every MLOD model before it binarizes the model (also without `--proton-binarize`). It warns about
+textures and materials that are not in the addon (`missing-texture`, `missing-material`; mute them with `-w`).
+`build` looks up references that start with the prefix of the addon in the source folder, and ignores the case.
+It checks other references (vanilla `dz\...`, other mods) only if they exist below an `-i` folder or the current
+directory. If they do not exist, `build` does not report them, because it cannot know if they are wrong. `build`
+skips procedural textures (`#(argb,...)`).
 
 ## Navigation meshes
 
 `dayzmake navmesh generate` builds the navmesh (`.nm`) of a terrain mod. It asks the navmesh data server of
 `DayZDiag_x64.exe` (started with `-server -startNavmeshDataServer`, port 36533) for the geometry of the world, tile by
-tile, builds the mesh with a Rust port of Recast and Detour including the changes DayZ made to them, and writes the file
-atomically. `navmesh probe` shows the world parameters of a server, `navmesh info` summarises a `.nm` file. The builder has been compared with the navmeshes shipped with DayZ 1.30, using live `DayZDiag_x64.exe` captures: of the 52,441 inner tiles of the central half of Badlands (tiles 49-277), 52,381 are byte-identical to the shipped mesh, and the other 60 have known causes (44 animated-tower, 8 door-order and 1 tree-obstacle-order tiles, which are data; 8 tiles with an off-mesh connection with a different hide-part membership than in the shipped mesh, #127; one tile is in two of these groups). Five earlier blocks of Livonia and Badlands, including the irrigation tunnels, match on every inner tile. Edge tiles, the polygon flags of the island filter and the polygon link array and its size are not compared. See [Validation](https://bzed.github.io/dayzmake/guides/navmesh.html#validation) in the guide.
+tile. It builds the mesh with a Rust port of Recast and Detour, including the changes that DayZ made to them. It
+writes the file atomically. `navmesh probe` shows the world parameters of a server. `navmesh info` summarises a `.nm`
+file.
+
+We compared the builder with the navmeshes that ship with DayZ 1.30, with live `DayZDiag_x64.exe` captures. The
+central half of Badlands has 52,441 inner tiles (tiles 49-277). Of these, 52,381 are byte-identical to the shipped
+mesh. The other 60 have known causes:
+
+- 44 animated-tower, 8 door-order and 1 tree-obstacle-order tiles, which are data.
+- 8 tiles with an off-mesh connection that has a different hide-part membership than in the shipped mesh (#127).
+- One tile is in two of these groups.
+
+Five earlier blocks of Livonia and Badlands, including the irrigation tunnels, match on every inner tile. We did not
+compare edge tiles, the polygon flags of the island filter, and the polygon link array and its size. See
+[Validation](https://bzed.github.io/dayzmake/guides/navmesh.html#validation) in the guide.
 
 ```
 dayzmake navmesh probe
@@ -599,38 +661,60 @@ dayzmake navmesh generate --base mymap.nm --skip-existing -f mymap.nm           
 dayzmake navmesh info --tiles mymap.nm
 ```
 
-When a run is stopped, or tiles could not be fetched and none failed to build, it ends with the command that continues
-it; the command repeats the first run's options except `--record` (a repeated recording would be overwritten) and
-`--base`, and is quoted for a POSIX shell (PowerShell and `cmd.exe` users adapt the quotes). The same input
-gives the same bytes for any number of threads and connections; a failed tile does not stop the run
-(the file is saved and the exit status is 1). On x86 and x86_64 the generator uses the same approximate reciprocal square
-root as DayZ; other processors (and Intel versus AMD) may classify a slope that is almost exactly the maximum slope differently. The guide
-walks through a terrain mod, DayZDiag under Windows and Proton included:
-<https://bzed.github.io/dayzmake/guides/navmesh.html>, and the reference is at
+A run can stop, or tiles can fail to be fetched while none fail to build. Then the run ends with the command that
+continues it. The command repeats the options of the first run, but not `--record` (a repeated recording would be
+overwritten) and not `--base`. It is quoted for a POSIX shell. In PowerShell and `cmd.exe`, change the quotes.
+
+The same input gives the same bytes for any number of threads and connections. A failed tile does not stop the run
+(the file is saved and the exit status is 1). On x86 and x86_64, the generator uses the same approximate reciprocal
+square root as DayZ. Other processors (and Intel versus AMD) can classify a slope that is almost exactly the maximum
+slope in a different way.
+
+The guide explains the work for a terrain mod, with DayZDiag under Windows and Proton:
+<https://bzed.github.io/dayzmake/guides/navmesh.html>. The reference is at
 <https://bzed.github.io/dayzmake/reference/navmesh.html>.
 
 <!-- ANCHOR: thirdparty -->
 ## Third-party code
 
 The `navmesh` module of `dayzmake-core` contains Rust ports of
-[Recast and Detour](https://github.com/recastnavigation/recastnavigation) by Mikko Mononen (zlib licence), altered
-for DayZ. The files keep the original copyright line and the zlib notice, and say that they were ported to Rust and
-altered and are not the original software. The zlib licence is compatible with GPL-2.0-or-later.
+[Recast and Detour](https://github.com/recastnavigation/recastnavigation) by Mikko Mononen (zlib licence). We altered
+them for DayZ. The files keep the original copyright line and the zlib notice. They also say that they were ported to
+Rust and altered, and that they are not the original software. The zlib licence is compatible with
+GPL-2.0-or-later.
 <!-- ANCHOR_END: thirdparty -->
 
 ## Binarizing models on Linux
 
-BI's `binarize.exe` only runs on Windows, so on Linux `build` copies `.p3d`/`.rtm` files as-is (with the `non-windows-binarization` warning). With `--proton-binarize` (and for `dayzmake binarize`) dayzmake runs the DayZ Tools `binarize.exe` under Proton instead. Config and rvmat rapification is unchanged. Files that are already binarized (`ODOL` models, `BMTR` animations) never reach `binarize.exe`; they are copied as-is with the `prebinarized-file` warning, which names the format and version (e.g. `ODOL v56`). Any version is accepted; dayzmake does not know which ones the game loads.
+The `binarize.exe` of BI runs only on Windows. Thus on Linux, `build` copies `.p3d`/`.rtm` files as they are (with the
+`non-windows-binarization` warning). With `--proton-binarize` (and for `dayzmake binarize`), dayzmake runs the
+`binarize.exe` of DayZ Tools under Proton instead. The rapification of configs and rvmat files does not change.
 
-Requirements: DayZ Tools (Steam app 830640) and any Proton installed through Steam.
+Files that are already binarized (`ODOL` models, `BMTR` animations) never reach `binarize.exe`. dayzmake copies them as
+they are and gives the `prebinarized-file` warning, which names the format and version (for example `ODOL v56`).
+dayzmake accepts any version. It does not know which versions the game loads.
+
+Requirements: DayZ Tools (Steam app 830640) and any Proton that is installed through Steam.
 
 - `STEAM_ROOT`: Steam directory. Default: first of `~/.steam/debian-installation`, `~/.steam/steam`, `~/.local/share/Steam` that has `steamapps/common`.
 - `DAYZ_TOOLS`: DayZ Tools directory. Default: `<steam>/steamapps/common/DayZ Tools` (uses `Bin/Binarize/binarize.exe`).
 - `PROTON`: Proton directory (containing the `proton` script). Default: `Proton Hotfix`, `Proton - Experimental`, `Proton Experimental`, then any `Proton*` in `steamapps/common`.
 - `BIOUTPUT=1`: show the output of Proton/binarize.exe.
 
-dayzmake builds a throw-away sandbox in the temp directory (a copy of `Binarize`, a fresh Wine prefix and an output folder) once per run and removes it at the end. Wine's default `Z:` drive maps to `/`, and `binarize.exe` walks directory trees from the drive root, so it would run for minutes on a real home directory; the sandbox therefore points `Z:` at itself. The first model of a run is slow because the Wine prefix has to be created (up to a few minutes on a cold start). Nothing in the Steam installation is modified.
+Once in each run, dayzmake builds a throw-away sandbox in the temp directory (a copy of `Binarize`, a fresh Wine
+prefix and an output folder). It removes the sandbox at the end. The default `Z:` drive of Wine maps to `/`, and
+`binarize.exe` walks directory trees from the drive root. On a real home directory it would run for minutes. Thus the
+sandbox points `Z:` at itself. The first model of a run is slow, because dayzmake must create the Wine prefix (up to a
+few minutes on a cold start). dayzmake does not change anything in the Steam installation.
 
-`binarize.exe` resolves texture and material paths (`my\mod\data\x_ca.paa`) relative to the project root, and only sets a model's alpha flags if it can read the texture. dayzmake therefore gives the sandbox a `P:` drive with the addon linked at its PBO prefix (`P:\my\mod` → the source folder) and runs `binarize.exe` from `P:\`. Paths outside the addon (vanilla `dz\...`) stay unresolved and are reported as `binarize-missing-texture`. The source folder is linked, not copied, so `binarize.exe` can read and in principle write it; its output goes to the sandbox, and the source is not modified.
+`binarize.exe` resolves texture and material paths (`my\mod\data\x_ca.paa`) relative to the project root. It sets the
+alpha flags of a model only if it can read the texture. Thus dayzmake gives the sandbox a `P:` drive with the addon
+linked at its PBO prefix (`P:\my\mod` → the source folder), and runs `binarize.exe` from `P:\`. Paths outside the
+addon (vanilla `dz\...`) stay unresolved. dayzmake reports them as `binarize-missing-texture`. The source folder is
+linked, not copied. Thus `binarize.exe` can read it and, in principle, write it. Its output goes to the sandbox, and
+the source does not change.
 
-`dayzmake binarize <source> <target>` has no PBO to take the prefix from: it treats the model's folder as the addon and uses the folder name as the prefix. That only works for a model in the addon root of a single-component prefix; for anything else (a model in `data\`, or a prefix like `my\mod`) use `build --proton-binarize`, which takes the prefix from `$PBOPREFIX$`.
+`dayzmake binarize <source> <target>` has no PBO from which to take the prefix. It treats the folder of the model as
+the addon and uses the folder name as the prefix. This works only for a model in the addon root of a prefix with one
+component. For all other cases (a model in `data\`, or a prefix like `my\mod`), use `build --proton-binarize`. It
+takes the prefix from `$PBOPREFIX$`.

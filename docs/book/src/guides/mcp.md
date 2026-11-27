@@ -1,8 +1,8 @@
 # Using dayzmake from an MCP client
 
-The Model Context Protocol (MCP) lets an AI assistant call tools on your machine. `dayzmake mcp` is an MCP server
-that offers the script API index and the file commands of dayzmake as tools, so that an assistant can look up
-real DayZ classes and members instead of guessing them, and can inspect, build and sign PBOs for you.
+The Model Context Protocol (MCP) lets an AI assistant call tools on your machine. `dayzmake mcp` is an MCP server.
+It offers the script API index and the file commands of dayzmake as tools. An assistant can use them to look up real
+DayZ classes and members, so it does not guess. It can also inspect, build and sign PBOs for you.
 
 ## Register the server
 
@@ -12,7 +12,7 @@ With Claude Code:
 $ claude mcp add dayzmake -- dayzmake mcp
 ```
 
-The command after `--` is run by the client; it must be on the `PATH` of the client, or you give the full path
+The client runs the command after `--`. The command must be on the `PATH` of the client, or you give the full path
 (`-- /home/me/.cargo/bin/dayzmake mcp`). For another MCP client, configure a server of the `stdio` kind with the
 command `dayzmake` and the argument `mcp`. A typical JSON configuration looks like this:
 
@@ -24,20 +24,19 @@ command `dayzmake` and the argument `mcp`. A typical JSON configuration looks li
 }
 ```
 
-The server speaks newline-delimited JSON-RPC on standard input and output and ends when the client closes
-them. It has no network access and needs no configuration.
+The server uses newline-delimited JSON-RPC on standard input and output. It ends when the client closes them. It
+has no network access and needs no configuration.
 
 ## A safety note
 
-The tools take file paths as given, relative to the folder the server was started in, and act with your
-permissions. They can read your files, create files and, when the assistant passes `force`, overwrite them.
-No tool overwrites anything without `force`, but `pbo_unpack`, `pbo_build` and the others do create files.
-Register the server only with a client you trust to do that, and prefer to start the client in your project
-folder.
+The tools use file paths as given, relative to the folder where the server started, and they have your
+permissions. They can read your files and create files. When the assistant passes `force`, they can overwrite
+files. No tool overwrites a file without `force`, but `pbo_unpack`, `pbo_build` and the other tools do create files.
+Register the server only with a client that you trust to do this. Start the client in your project folder.
 
 ## What to ask
 
-The tools are described to the assistant, so ordinary requests work:
+The assistant gets a description of each tool, so ordinary requests work:
 
 - "Which methods does `PlayerBase` have that are called `OnRPC`?" (`api_find`, `api_class`)
 - "What do `Entity`'s subclasses override?" (`api_subclasses`, `api_class`)
@@ -53,18 +52,19 @@ The tools are described to the assistant, so ordinary requests work:
   (`navmesh_generate` with `capture` and `target`, then `navmesh_info`; a whole map from a live server takes many
   minutes, so ask for a `range` first)
 
-The script API tools are vanilla-only by default. Say "including my mods" (the assistant passes `mods=all`) or
-name a mod ("with CF") to include them. The first run with `mods=all` builds the caches and can take a while;
-`api_update` with `mods=all` does it ahead of time.
+By default, the script API tools query only vanilla. To include mods, say "including my mods" (the assistant
+passes `mods=all`) or name a mod ("with CF"). The first run with `mods=all` builds the caches and can take a while.
+To build the caches before you need them, use `api_update` with `mods=all`.
 
 ## What the assistant sees
 
-Each call returns text. Warnings come first (`warnings:` and one line each), then the output. Long output is cut
-at 200000 bytes with a note that tells the assistant which `offset` continues. A failure is a result marked as
-an error, so the assistant sees the message and can correct the call; the server keeps running.
+Each call returns text. The warnings come first (`warnings:` and one line each), then the output. The server cuts
+long output at 200000 bytes and adds a note. The note tells the assistant which `offset` continues the output. A
+failure is a result with an error mark. The assistant sees the message and can correct the call. The server keeps
+running.
 
-A real exchange of one request and its reply, as the client sends it (see the [reference](../reference/mcp.md)
-for a full session and every tool):
+This is a real exchange of one request and its reply, as the client sends it. For a full session and each tool, see
+the [reference](../reference/mcp.md):
 
 ```text
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"api_class","arguments":{"name":"PlayerBase","mods":"My Mod"}}}
@@ -82,5 +82,5 @@ api_find
 …
 ```
 
-(`jq` is only used to print the names.) Use `dayzmake mcp -v` to lift the ten-warnings-per-name limit in the tool
-results.
+(`jq` only prints the names.) To remove the limit of ten warnings for each name in the tool results, use
+`dayzmake mcp -v`.

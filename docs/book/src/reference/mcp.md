@@ -1,8 +1,8 @@
 # MCP server: mcp and its tools
 
-The Model Context Protocol (MCP) lets an AI assistant call tools. `dayzmake mcp` is an MCP server that offers the script
-API index, the file commands and the navmesh commands of dayzmake as tools. The [guide](../guides/mcp.md) shows how to
-register it; this page is the reference of the protocol subset and of every tool.
+The Model Context Protocol (MCP) lets an AI assistant call tools. `dayzmake mcp` is an MCP server. It offers the
+script API index, the file commands and the navmesh commands of dayzmake as tools. The [guide](../guides/mcp.md)
+shows how to register it. This page is the reference of the protocol subset and of every tool.
 
 ## dayzmake mcp
 
@@ -18,37 +18,40 @@ dayzmake mcp [-v]
 
 | Option | Default | Meaning |
 |---|---|---|
-| `-v`, `--verbose` | off | Lift the limit of ten warnings per name in each tool call. |
+| `-v`, `--verbose` | off | Remove the limit of ten warnings for each name in each tool call. |
 
 Behaviour:
 
-- Transport: newline-delimited JSON-RPC 2.0 on standard input and output, one JSON object per line. Standard
-  output carries nothing but JSON-RPC replies; progress notes of tools (for example the Proton sandbox) go to
-  standard error. The server runs until its standard input ends and then exits with status 0.
-- Methods: `initialize` (answers with the protocol version it was asked for if it is `2025-06-18`, `2025-03-26`
-  or `2024-11-05`, else `2025-06-18`; capabilities are `{"tools": {}}`), `ping`, `tools/list` and `tools/call`.
-  Notifications get no reply. Resources, prompts and sampling are not offered.
-- Requests are handled one after the other. A request line may be at most 16 MiB; a longer one is answered with
-  `request line too long` and skipped.
-- Tool arguments are JSON objects; a missing required argument, or an argument of the wrong type, gives a tool
-  error result such as `argument "pbo" must be a string`.
-- The tools take file paths as given, relative to the working directory of the server, and act with the
-  permissions of the user who runs it: they can read, create and, with `force`, overwrite any file that user can.
-  No tool overwrites a file unless `force` is true. Register the server only with a client you trust to do that.
+- Transport: newline-delimited JSON-RPC 2.0 on standard input and output, with one JSON object on each line.
+  Standard output has only JSON-RPC replies. Progress notes of tools (for example the Proton sandbox) go to
+  standard error. The server runs until its standard input ends. Then it exits with status 0.
+- Methods: `initialize`, `ping`, `tools/list` and `tools/call`.
+  - `initialize` answers with the protocol version that the client asks for, if it is `2025-06-18`, `2025-03-26` or
+    `2024-11-05`. Otherwise it answers with `2025-06-18`. The capabilities are `{"tools": {}}`.
+  - Notifications get no reply.
+  - The server does not offer resources, prompts and sampling.
+- The server handles requests one after the other. A request line can have 16 MiB at most. The server answers a
+  longer line with `request line too long` and skips it.
+- Tool arguments are JSON objects. A missing required argument, or an argument of the wrong type, gives a tool error
+  result such as `argument "pbo" must be a string`.
+- The tools take file paths as given, relative to the working directory of the server. They act with the permissions
+  of the user who runs the server. They can read, create and, with `force`, overwrite any file that this user can.
+  No tool overwrites a file unless `force` is true. Register the server only with a client that you trust to do
+  this.
 
 See also: [Using dayzmake from an MCP client](../guides/mcp.md), [Script API: api](api.md).
 
 ## Results and errors
 
 A successful `tools/call` returns `{"content": [{"type": "text", "text": "..."}], "isError": false}`. A tool that
-fails returns the same shape with `isError: true` and the error message as the text; the server keeps running.
+fails returns the same shape with `isError: true` and the error message as the text. The server keeps running.
 
-- Warnings of the call come first: `warnings:` and one line per warning, a blank line, then the output. A cut
-  never drops them. Each call has its own ten-per-name limit.
-- Output is capped at 200000 bytes. A cut result ends with `[truncated: showing bytes A-B of N; call again with
-  offset=B]`. The `offset` and `length` arguments exist on `pbo_cat` and `api_source`; other tools return their
-  whole (short) output.
-- A panic in a tool is caught and reported as `internal error: the tool "<name>" panicked`.
+- The warnings of the call come first: `warnings:` and one line for each warning, then a blank line, then the output.
+  A cut never removes them. Each call has its own limit of ten warnings for each name.
+- The output has a limit of 200000 bytes. A cut result ends with
+  `[truncated: showing bytes A-B of N; call again with offset=B]`. The `offset` and `length` arguments exist on
+  `pbo_cat` and `api_source`. The other tools return their whole (short) output.
+- The server catches a panic in a tool and reports it as `internal error: the tool "<name>" panicked`.
 
 Protocol errors are JSON-RPC errors:
 
@@ -59,8 +62,8 @@ Protocol errors are JSON-RPC errors:
 | `-32601` | Unknown method (`method not found: <method>`). |
 | `-32602` | `tools/call` with bad parameters or an unknown tool (`unknown tool "<name>"`). |
 
-A session with the real server (the lines starting with `>` are requests, the other lines replies; `mymod.pbo`
-is the PBO of the [first mod guide](../guides/first-mod.md)):
+This is a session with the real server. The lines that start with `>` are requests. The other lines are replies.
+`mymod.pbo` is the PBO of the [first mod guide](../guides/first-mod.md).
 
 ```text
 > {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"doc","version":"1"}}}
@@ -82,9 +85,9 @@ is the PBO of the [first mod guide](../guides/first-mod.md)):
 
 ## Tools
 
-The API tools take the same `mods`, `experimental`, `dayz` and `refresh` arguments, and `json` and `max` where the
-CLI command has `--json` and `--max`; without `mods` only vanilla is queried and no tool defaults to `all`. The
-file tools take the arguments of their CLI counterparts, with `force` for `--force`.
+The API tools take the same `mods`, `experimental`, `dayz` and `refresh` arguments. They also take `json` and `max`
+where the CLI command has `--json` and `--max`. Without `mods`, a tool queries only vanilla. No tool uses `all` as
+a default. The file tools take the arguments of their CLI counterparts, with `force` for `--force`.
 
 ### api_class
 
@@ -190,7 +193,7 @@ Files and lines that declare a class or enum; with cat the full source files, wi
 | `refresh` | boolean | no | Rebuild the cached index first. |
 | `target` | string | no | With cat: write the files to this file instead of returning them (cannot be combined with context or lines). |
 
-Result: The locations, as `dayzmake api src`; with `cat` the source files, which can be long: use `offset` and `length` to page, or `target` to write them to a file (`target` together with `context` or `lines`, or without `cat`, is an error).
+Result: The locations, as `dayzmake api src`. With `cat`, the source files, which can be long. Use `offset` and `length` to page, or `target` to write them to a file. `target` together with `context` or `lines`, or without `cat`, gives an error.
 
 ### api_grep
 
@@ -290,11 +293,11 @@ Read one entry of a PBO: returned as text if it is UTF-8, otherwise write it to 
 | `offset` | integer (&ge; 0) | no | Start at this byte of the output (default 0). A cut-off reply names the offset that fetches the rest. |
 | `target` | string | no | Write the entry to this file instead of returning it (required for binary data). |
 
-Result: The entry as text when it is UTF-8, or `wrote <target> (<n> bytes)` with `target`. A binary entry without `target` is an error: `the entry is not UTF-8 text (291 bytes); pass target to write it to a file`. Large entries are cut at 200000 bytes with a note that names the `offset` that continues.
+Result: The entry as text when it is UTF-8, or `wrote <target> (<n> bytes)` with `target`. A binary entry without `target` gives an error: `the entry is not UTF-8 text (291 bytes); pass target to write it to a file`. The tool cuts large entries at 200000 bytes and adds a note that names the `offset` to continue with.
 
 ### pbo_unpack
 
-Unpack a PBO into a folder, all of it or the entries selected by `only` and `exclude`. Unsafe entry names are skipped with a warning.
+Unpack a PBO into a folder, all of it or the entries that `only` and `exclude` select. The tool skips unsafe entry names and gives a warning.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
@@ -335,7 +338,7 @@ Pack a folder into a PBO without binarizing or rapifying.
 | `headerext` | array of strings | no | Header extensions as key=value. |
 | `key` | string | no | Private key (.biprivatekey): sign the PBO after packing. |
 
-Result: `wrote <target>`, or `wrote and signed <target>` when `key` was given.
+Result: `wrote <target>`, or `wrote and signed <target>` when you give `key`.
 
 ### pbo_build
 
@@ -352,7 +355,7 @@ Build a PBO from a folder, rapifying configs and binarizing models.
 | `key` | string | no | Private key (.biprivatekey): sign the PBO after packing. |
 | `proton_binarize` | boolean | no | Linux: binarize models with DayZ Tools' binarize.exe under Proton. |
 
-Result: `wrote <target>`. Warnings of the build come first in the text.
+Result: `wrote <target>`. The warnings of the build come first in the text.
 
 ### config_rapify
 
@@ -443,7 +446,7 @@ Sign a PBO with a private key.
 | `signature` | string | no | Signature file (default `<pbo>.<key>.bisign`). |
 | `v2` | boolean | no | Write an older v2 signature. |
 
-Result: `signed`; the signature is written to `signature`, by default `<pbo>.<key>.bisign`.
+Result: `signed`. The tool writes the signature to `signature`, by default `<pbo>.<key>.bisign`.
 
 ### pbo_verify
 
@@ -455,7 +458,7 @@ Verify the signature of a PBO with a public key.
 | `public_key` | string | yes | Public key file (.bikey). |
 | `signature` | string | no | Signature file (default `<pbo>.<key>.bisign`). |
 
-Result: `signature is valid`, or an error result that says what does not match.
+Result: `signature is valid`, or an error result that tells what does not match.
 
 ### binarize
 
@@ -467,7 +470,7 @@ Binarize a model with BI's binarize.exe (Windows; on Linux through Proton).
 | `target` | string | yes | File to write. |
 | `force` | boolean | no | Overwrite existing target files. |
 
-Result: `wrote <target>`, or an error when DayZ Tools or Proton cannot be found (see [Binarizing models](binarize.md)).
+Result: `wrote <target>`, or an error when the tool cannot find DayZ Tools or Proton (see [Binarizing models](binarize.md)).
 
 ### navmesh_probe
 
@@ -479,11 +482,11 @@ Ask the navmesh data server of `DayZDiag_x64.exe` (started with `-startNavmeshDa
 | `tile` | string | no | Also fetch this tile and summarise it, as `"x,z"`. |
 | `json` | boolean | no | Return JSON instead of text. |
 
-Result: the text of `dayzmake navmesh probe` (JSON with `json`), or an error that names the server and how to start it. See [navmesh](navmesh.md).
+Result: the text of `dayzmake navmesh probe` (JSON with `json`), or an error that names the server and tells how to start it. See [navmesh](navmesh.md).
 
 ### navmesh_generate
 
-Build the navmesh (`.nm`) of a terrain mod from a navmesh data server or a capture and save it to `target`. A whole map can take many minutes, and the call returns only when the run is over; use `range` for a part. The mesh is saved even when some tiles failed, and the call then reports an error that says so.
+Build the navmesh (`.nm`) of a terrain mod from a navmesh data server or a capture and save it to `target`. A whole map can take many minutes. The call returns only when the run is over. Use `range` for a part. The tool saves the mesh even when some tiles failed, and the call then reports an error that says so.
 
 | Argument | Type | Required | Meaning |
 |---|---|---|---|
@@ -504,7 +507,7 @@ Build the navmesh (`.nm`) of a terrain mod from a navmesh data server or a captu
 | `no_island_filter` | boolean | no | Do not flag polygons that the seed cannot reach. |
 | `force` | boolean | no | Overwrite existing target and record files. |
 
-Result: the summary of `dayzmake navmesh generate` (`built <n> tiles, ...`, `wrote <target>`), after the warnings; no progress is reported. A run that was stopped or that lost tiles is an error result that starts with the same summary, then (when a continuation makes sense) has the `navmesh_generate` arguments that continue it (`to continue with navmesh_generate: target=..., base=..., skip_existing=true, force=true, ...`), and ends with `failed: <reason>`; the partial mesh is saved all the same. More than 256 `threads` or `connections` is an error. See [navmesh](navmesh.md).
+Result: the summary of `dayzmake navmesh generate` (`built <n> tiles, ...`, `wrote <target>`), after the warnings. The tool reports no progress. A run that stopped or that lost tiles gives an error result. This result starts with the same summary. Then, when a continuation is possible, it has the `navmesh_generate` arguments that continue the run (`to continue with navmesh_generate: target=..., base=..., skip_existing=true, force=true, ...`). It ends with `failed: <reason>`. The tool saves the partial mesh in all cases. More than 256 `threads` or `connections` gives an error. See [navmesh](navmesh.md).
 
 ### navmesh_info
 

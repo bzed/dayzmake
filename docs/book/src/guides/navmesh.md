@@ -1,47 +1,48 @@
 # Navigation meshes for a terrain mod
 
-A custom terrain needs a **navmesh** so that infected, animals and AI can walk on it. The game cannot compute one
-from the terrain files alone: it asks a running `DayZDiag_x64.exe` for the geometry of the world, and
-`dayzmake navmesh generate` does that and builds the `.nm` file. This guide goes from a built terrain mod to a navmesh
-in the mod. The [reference](../reference/navmesh.md) lists every command and option.
+A custom terrain needs a **navmesh**. Infected, animals and AI use it to walk on the terrain. The game cannot
+calculate a navmesh from the terrain files alone. It asks a running `DayZDiag_x64.exe` for the geometry of the world.
+`dayzmake navmesh generate` does this and builds the `.nm` file. This guide goes from a built terrain mod to a
+navmesh in the mod. The [reference](../reference/navmesh.md) lists each command and option.
 
-The generator has been compared with the navmeshes shipped with DayZ 1.30 (see [Validation](#validation) at the end).
-Check the first mesh you build in the game before you ship it all the same.
+We compared the generator with the navmeshes that ship with DayZ 1.30 (see [Validation](#validation) at the end).
+Even so, check the first mesh that you build in the game before you ship it.
 
-> The `dayzmake` outputs shown here are real: they were produced against a test server that serves a small synthetic
-> world. The Linux command line that starts the game was run with DayZ 1.30 under GE-Proton11-1 (the example below
-> names `Proton - Experimental` as a generic path; any Proton build should do, GE-Proton11-1 is the one tested). The
-> Windows command line has the same options but was not run on Windows. Neither is part of the automated tests,
-> because they need DayZ.
+> The `dayzmake` outputs in this guide are real. We made them against a test server that serves a small synthetic
+> world. We ran the Linux command line that starts the game with DayZ 1.30 under GE-Proton11-1. The example below
+> names `Proton - Experimental` as a generic path. Each Proton build should work, but GE-Proton11-1 is the build that
+> we tested. The Windows command line has the same options, but we did not run it on Windows. The automated tests do
+> not include either command line, because they need DayZ.
 
 ## What you need
 
-- A built **terrain mod**: the PBOs of your world (see [A first mod](first-mod.md) for building PBOs). It already
-  loads in the game, only without a navmesh, or with an old one.
-- **DayZ** (the client, Steam app 221100), which contains `DayZDiag_x64.exe`, the diagnostic build that has the
-  navmesh data server.
-- On Linux, **Proton** (see [Binarizing models on Linux](binarize-linux.md) for installing it through Steam).
-- A few gigabytes of free memory for the game and, for a large map, time: the tiles of a big world take minutes to
-  hours (see *Speed* below).
+- A built **terrain mod**: the PBOs of your world (see [A first mod](first-mod.md) to build PBOs). The mod already
+  loads in the game, but without a navmesh or with an old navmesh.
+- **DayZ** (the client, Steam app 221100). It contains `DayZDiag_x64.exe`, the diagnostic build that has the navmesh
+  data server.
+- On Linux, **Proton** (see [Binarizing models on Linux](binarize-linux.md) to install it through Steam).
+- A few gigabytes of free memory for the game. For a large map, you also need time: the tiles of a big world take
+  minutes to hours (see *Speed* below).
 
 ## 1. Start the data server
 
-`DayZDiag_x64.exe` is started like a dedicated server with the extra option `-startNavmeshDataServer`. It loads
-your world and then listens on TCP port **36533** for requests for geometry. The port is fixed by the game; the
-normal game port is not, and must not be the default, so that a real server on the same machine is not disturbed.
+Start `DayZDiag_x64.exe` like a dedicated server, with the extra option `-startNavmeshDataServer`. It loads your
+world and then listens on TCP port **36533** for requests for geometry. The game sets this port and you cannot change
+it. The normal game port is different. Do not use the default game port. Then a real server on the same machine is
+not disturbed.
 
 ### The server files (both systems)
 
-Keep the files of the data server in a folder of your own, **outside the game installation**: here `C:\dayz-navmesh`
-on Windows and `~/dayz-navmesh` on Linux. It holds
+Keep the files of the data server in a folder of your own, **outside the game installation**. Here the folder is
+`C:\dayz-navmesh` on Windows and `~/dayz-navmesh` on Linux. It holds
 
-- `serverDZ_navmesh.cfg`: a copy of the stock `serverDZ.cfg` that does not check signatures and does not start
-  BattlEye, so it has the lines `verifySignatures = 0;` and `BattlEye = 0;`, and whose mission `template` names your
+- `serverDZ_navmesh.cfg`: a copy of the stock `serverDZ.cfg`. It does not check signatures and does not start
+  BattlEye, so it has the lines `verifySignatures = 0;` and `BattlEye = 0;`. The mission `template` names your
   mission, for example `template="dayzOffline.mymap";`;
-- the mission, in the folder `mpmissions` of that folder: a **complete copy** of a mission folder, in which only
-  `init.c` is replaced by an empty `main()`. For a stock map this is a copy of its own stock mission under its own
-  name (`DayZServer/mpmissions/dayzOffline.enoch`, `dayzOffline.nasdara`); for your terrain it is a copy of your
-  mod's own full mission (`dayzOffline.<yourworld>`):
+- the mission, in the folder `mpmissions` of that folder: a **complete copy** of a mission folder. In the copy,
+  replace only `init.c` with an empty `main()`. For a stock map, copy its own stock mission under its own name
+  (`DayZServer/mpmissions/dayzOffline.enoch`, `dayzOffline.nasdara`). For your terrain, copy the full mission of your
+  mod (`dayzOffline.<yourworld>`):
 
 ```text
 void main()
@@ -49,12 +50,12 @@ void main()
 }
 ```
 
-Do not shorten the mission to the `init.c` alone: a folder that contains only `init.c` makes the server log
-`[Server] :: termination in: 10` and exit about 7 seconds after the start, before the data server opens.
+Do not shorten the mission to the `init.c` alone. If the folder contains only `init.c`, the server logs
+`[Server] :: termination in: 10` and exits about 7 seconds after the start, before the data server opens.
 
 ### On Windows
 
-Start the server from the DayZ folder, with full paths, your mod and a game port that is not 2302:
+Start the server from the DayZ folder. Use full paths, your mod and a game port that is not 2302:
 
 ```text
 DayZDiag_x64.exe -server -startNavmeshDataServer -config=C:\dayz-navmesh\serverDZ_navmesh.cfg -mission=C:\dayz-navmesh\mpmissions\dayzOffline.mymap -profiles=C:\dayz-navmesh\profiles -port=2402 -dologs -adminlog -nosplash -nopause "-mod=@MyTerrain"
@@ -62,15 +63,15 @@ DayZDiag_x64.exe -server -startNavmeshDataServer -config=C:\dayz-navmesh\serverD
 
 `@MyTerrain` is the folder of your mod in the DayZ folder. `-profiles=` puts the RPT and the script logs into that
 folder. A stock DLC map such as Badlands (`dayzOffline.nasdara`) needs no `-mod`. Keep the window open while you
-generate, and wait for the data server before you use it (see *Check the connection* below).
+generate. Wait for the data server before you use it (see *Check the connection* below).
 
 ### On Linux, under Proton
 
 <!-- verified: GE-Proton11-1, DayZ 1.30 -->
 
-The Windows program runs through Proton, from the **client** installation (`steamapps/common/DayZ`), which has
-`DayZDiag_x64.exe`. Run it the way Steam would, with the environment of the game. The program is a Windows program:
-it sees the Linux file system as drive `Z:`, so `/home/you/dayz-navmesh/serverDZ_navmesh.cfg` is written
+Run the Windows program through Proton, from the **client** installation (`steamapps/common/DayZ`). That
+installation has `DayZDiag_x64.exe`. Run it as Steam does, with the environment of the game. The program is a Windows
+program. It sees the Linux file system as drive `Z:`. So write `/home/you/dayz-navmesh/serverDZ_navmesh.cfg` as
 `Z:\home\you\dayz-navmesh\serverDZ_navmesh.cfg`.
 
 ```text
@@ -88,27 +89,27 @@ cd "$STEAM_COMPAT_INSTALL_PATH"
     -port=2402 -dologs -adminlog -nosplash -nopause "-mod=@MyTerrain"
 ```
 
-For a stock map such as Badlands leave out `-mod`.
+For a stock map such as Badlands, leave out `-mod`.
 
-Some points that are easy to get wrong:
+These points are easy to get wrong:
 
 - **The mod must be inside the DayZ folder.** A `-mod=` path outside it fails with `Cannot open file`. Make a
-  symbolic link `@MyTerrain` in `steamapps/common/DayZ` that points to your mod folder, and **remove it when you
-  are done**. Do not change or delete any other file of the installation.
-- The server files stay in your own folder (see above); give `-config=`, `-mission=` and `-profiles=` as `Z:\`
-  paths, as shown. A plain Linux path does not work for the Windows program. With `-profiles=` the RPT and the
-  script logs end up in that folder.
-- Use a game port other than the default 2302 (`-port=2402` above). The data server port 36533 cannot be changed.
-- Start only one game at a time, and stop `DayZDiag_x64.exe` when you have your navmesh.
+  symbolic link `@MyTerrain` in `steamapps/common/DayZ` that points to your mod folder. **Remove the link when you
+  are done.** Do not change or delete other files of the installation.
+- Keep the server files in your own folder (see above). Give `-config=`, `-mission=` and `-profiles=` as `Z:\`
+  paths, as shown. The Windows program does not accept a plain Linux path. With `-profiles=`, the RPT and the
+  script logs go to that folder.
+- Use a game port other than the default 2302 (`-port=2402` above). You cannot change the data server port 36533.
+- Start only one game at a time. Stop `DayZDiag_x64.exe` when you have your navmesh.
 
 ## 2. Check the connection with `probe`
 
-The data server opens port 36533 about 25 seconds after the start. A connection made while the world is still
-loading can be reset (`Connection reset by peer`), so run `probe` until it answers instead of connecting as soon as
-the port shows up.
+The data server opens port 36533 about 25 seconds after the start. A connection that you make while the world is
+loading can be reset (`Connection reset by peer`). Run `probe` until it answers. Do not connect as soon as the port
+appears.
 
-`dayzmake navmesh probe` connects, asks for the world parameters and prints them. If it works, the data server is up
-and the world is the one you expect (the size and the tile grid):
+`dayzmake navmesh probe` connects, asks for the world parameters and prints them. If it works, the data server is
+up. Check that the world is the world that you expect (the size and the tile grid):
 
 ```text
 $ dayzmake navmesh probe
@@ -121,11 +122,11 @@ cell class 1: 500 cells over 50.00 m (cs 0.100) [unk 500 0]
 link 0: typeId -1 len 1.80 height 1.20 centre 0.40 dropdown 0.00..0.00 agent h 1.50 step 0.45 r 0.30 flags 0x100 area 48
 ```
 
-(This is the synthetic test world; a real map is much larger, for example 15360 by 15360 m.) The game may be on
-another machine: `dayzmake navmesh probe --server 192.168.1.20`. `--tile 1,1` also fetches one tile, which shows
-that the geometry arrives.
+(This is the synthetic test world. A real map is much larger, for example 15360 by 15360 m.) The game can be on
+another machine: `dayzmake navmesh probe --server 192.168.1.20`. `--tile 1,1` also fetches one tile. This shows that
+the geometry arrives.
 
-When the server is not running the answer tells you what to do:
+When the server does not run, the error tells you what to do:
 
 ```text
 $ dayzmake navmesh probe --server 127.0.0.1:9
@@ -134,7 +135,7 @@ error: cannot connect to 127.0.0.1:9: Connection refused (os error 111); start D
 
 ## 3. Generate
 
-First try a few tiles to see that everything works, then the whole world:
+First build a few tiles to see that everything works. Then build the whole world:
 
 ```text
 $ dayzmake navmesh generate --range 0,0,2,0 test.nm
@@ -142,7 +143,7 @@ $ dayzmake navmesh generate mymap.nm
 ```
 
 `--range x0,z0,x1,z1` limits the run to a block of tiles (columns and rows from 0). `--record <file>` also saves
-the geometry that arrives (see *Regenerating*). Progress goes to standard error; the summary of a run on the
+the geometry that arrives (see *Regenerating*). Progress goes to standard error. The summary of a run on the
 synthetic world looks like this:
 
 ```text
@@ -152,13 +153,13 @@ island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote mymap.nm
 ```
 
-What the lines say: tiles *built* have walkable ground; *empty* ones have none (open sea, for example); *failed*
-ones could not be built or fetched and are listed (the first twenty) and exit status 1 is the result. The *island
-filter* flags polygons that cannot be reached from the world's seed position (a spot that must be walkable, like
-the middle of a town) as isolated, so that the AI does not wander onto separate pieces. `--seed x,y,z` chooses
-another spot, and `--no-island-filter` switches it off.
+This is what the lines mean. Tiles *built* have walkable ground. *Empty* tiles have none (open sea, for example).
+*Failed* tiles could not be built or fetched. dayzmake lists them (the first twenty), and the exit status is 1. The
+*island filter* marks polygons as isolated when they cannot be reached from the seed position of the world. The seed
+position is a spot that must be walkable, like the middle of a town. The filter stops the AI from walking onto
+separate pieces. `--seed x,y,z` selects another spot, and `--no-island-filter` switches the filter off.
 
-`info` shows what you got:
+`info` shows what you made:
 
 ```text
 $ dayzmake navmesh info mymap.nm
@@ -166,31 +167,30 @@ navmesh version 9, grid 3 x 3 tiles of 50.0 x 50.0 m, max tiles 9
 tiles 9, polys 85, verts 159, off-mesh connections 12
 ```
 
-An existing target is never overwritten without `-f`; this is checked before the first tile is fetched, so you do
-not lose a long run to it:
+dayzmake does not overwrite an existing target without `-f`. It checks this before it fetches the first tile, so you
+do not lose a long run:
 
 ```text
 $ dayzmake navmesh generate --capture world.dzgeo mymap.nm
 error: Target file "mymap.nm" already exists. Use --force to overwrite.
 ```
 
-Options that change the mesh: `--doors closed|open|enabled` (the door state that is baked in; the default is
-`closed`), `--no-links` (no jump, climb or ladder links) and `--sea-level <m>`. Leave them alone unless you know
-you need them.
+These options change the mesh: `--doors closed|open|enabled` (the door state in the mesh; the default is `closed`),
+`--no-links` (no jump, climb or ladder links) and `--sea-level <m>`. Do not use them unless you need them.
 
 ### Speed
 
-Tiles are fetched and built in parallel: `--threads` builder threads (the default is the number of cores minus one)
-and one connection per `--server` (`--connections` changes that; keep it at one per `DayZDiag_x64.exe`, which serves
-one client at a time). If fetching is the slow part, start `DayZDiag_x64.exe` on several machines and give
-`--server a --server b --server c`; they must load the same world.
+dayzmake fetches and builds tiles in parallel. It uses `--threads` builder threads (the default is the number of
+cores minus one) and one connection for each `--server`. `--connections` changes the number of connections. Keep it
+at one for each `DayZDiag_x64.exe`, because the program serves one client at a time. If the fetching is slow, start
+`DayZDiag_x64.exe` on several machines and give `--server a --server b --server c`. They must load the same world.
 The output does not depend on the number of threads, connections or servers.
 
 ### When a run is interrupted
 
-The mesh is written even when the run was partial, and `--checkpoint <n>` writes it after every `n` tiles, so a
-long run can be killed without losing much. Each checkpoint rewrites the whole file, so give a large `n` (hundreds
-or thousands of tiles), not a small one. To continue, give the file as the base and skip what it has:
+dayzmake writes the mesh also when the run is partial. `--checkpoint <n>` writes the mesh after each `n` tiles. Then
+you can stop a long run and not lose much. Each checkpoint rewrites the whole file, so give a large `n` (hundreds or
+thousands of tiles) and not a small `n`. To continue, give the file as the base and skip the tiles that it has:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --range 0,0,2,0 --threads 2 --record rec.dzgeo part.nm
@@ -203,72 +203,74 @@ island filter: seed (60.0 10.0 60.0) -> 84 reachable, 1 isolated polys
 wrote part.nm
 ```
 
-The second run built only the six tiles the first did not, and filtered islands over the whole mesh. The result is the
-same as an uninterrupted run. When a run is **stopped** (a checkpoint or `--record` file that cannot be written) or
-some tiles **could not be fetched** (and none failed to build), the summary ends with the command to continue, for
-example `to continue: dayzmake navmesh generate --base mymap.nm --skip-existing -f --server a --range 0,0,9,9 mymap.nm`.
-It repeats every option of the first run (`--doors`, `--sea-level`, `--no-links`, `--seed`, ...) except `--record`
-and `--base`: the options must stay the same, or the rest of the mesh would be built differently from the first part,
-and a repeated `--record` with `-f` would overwrite the first recording. A tile that failed to *build* is not offered
-for a retry, because it would fail again; look at the error that was listed for it. A short run before the full
-one (`--range`) shows a warning that the island filter was skipped when the seed is not in the built tiles: that is
-expected, and the full run does it.
+The second run built only the six tiles that the first run did not build. It filtered islands over the whole mesh.
+The result is the same as the result of an uninterrupted run. Sometimes a run **stops** (dayzmake cannot write a
+checkpoint or a `--record` file). Sometimes dayzmake **cannot fetch** some tiles (and none failed to build). Then the
+summary ends with the command to continue, for example
+`to continue: dayzmake navmesh generate --base mymap.nm --skip-existing -f --server a --range 0,0,9,9 mymap.nm`.
+The command repeats each option of the first run (`--doors`, `--sea-level`, `--no-links`, `--seed`, ...) except
+`--record` and `--base`. Keep the options the same. If you change them, dayzmake builds the rest of the mesh in a
+different way from the first part. A repeated `--record` with `-f` overwrites the first recording. If a tile failed
+to *build*, dayzmake does not offer a retry, because the tile fails again. Look at the error that dayzmake listed for
+it. A short run before the full run (`--range`) shows a warning that dayzmake skipped the island filter, when the
+seed is not in the built tiles. This is normal, and the full run does the filtering.
 
 ## 4. Put the file into the mod and rebuild
 
-The world's config names its navmesh with `navmeshName` in its `CfgWorlds` class. Copy `mymap.nm` to the path that
-property gives, **inside the mod's folder tree** (for example, with the prefix `mymap` and
-`navmeshName = "mymap\navmesh\mymap.nm";` that is
-`navmesh/mymap.nm` in the addon folder), and build the PBO again:
+The config of the world gives the name of its navmesh with `navmeshName` in its `CfgWorlds` class. Copy `mymap.nm`
+to the path that this property gives, **inside the folder tree of the mod**. For example, with the prefix `mymap` and
+`navmeshName = "mymap\navmesh\mymap.nm";`, the path is `navmesh/mymap.nm` in the addon folder. Then build the PBO
+again:
 
 ```text
 $ dayzmake build mymap mymap.pbo
 ```
 
-`.nm` files are copied into the PBO as they are. Sign the PBO as usual (see
-[Keys and signatures](../reference/signing.md)).
-Load the mod in a server and check that the log has no `Unable to load navmesh`.
+`build` copies `.nm` files into the PBO as they are. Sign the PBO as usual (see
+[Keys and signatures](../reference/signing.md)). Load the mod in a server. Make sure that the log does not have
+`Unable to load navmesh`.
 
 ## Regenerating
 
-**After a change of the terrain** (new roads, objects, buildings, heightmap) the navmesh is out of date: generate it
-again from a fresh `DayZDiag_x64.exe` that loads the new mod. To change only an area, build only its tiles into the
+**After a change of the terrain** (new roads, objects, buildings, heightmap), the navmesh is out of date. Generate it
+again from a new `DayZDiag_x64.exe` that loads the new mod. To change only an area, build only its tiles into the
 old file:
 
 ```text
 $ dayzmake navmesh generate --base mymap.nm --range 10,20,14,24 -f mymap.nm
 ```
 
-The new tiles replace those of their cells; the other tiles stay, and a tile that became empty is removed.
+The new tiles replace the tiles of their cells. The other tiles stay. dayzmake removes a tile that became empty.
 
-**Regenerating offline.** With `--record` the geometry that came from the game is saved in a `.dzgeo` file. Later you
-can build again from it without starting the game, for example with another door state or after an update of dayzmake:
+**Regenerating offline.** With `--record`, dayzmake saves the geometry from the game in a `.dzgeo` file. Later you
+can build again from this file and not start the game. You can do this, for example, with another door state or after
+an update of dayzmake:
 
 ```text
 $ dayzmake navmesh generate --server 127.0.0.1:36533 --record mymap.dzgeo mymap.nm
 $ dayzmake navmesh generate --capture mymap.dzgeo --doors open -f mymap-open.nm
 ```
 
-A capture holds the geometry of a whole world, so it is large; keep it with your mod's sources, not in the PBO. A
-capture of a whole map can be tens of gigabytes; building a `--range` from it reads only the tiles of that range, so a
-small range stays fast and small.
+A capture holds the geometry of a whole world, so it is large. Keep it with the sources of your mod, not in the PBO.
+A capture of a whole map can be tens of gigabytes. If you build a `--range` from it, dayzmake reads only the tiles of
+that range. So a small range stays fast and small.
 
 ## Good to know
 
-- On x86 and x86_64 computers the generator uses the same approximate reciprocal square root as DayZ, so the mesh
-  is what DayZ itself would make. On other processors (ARM) it uses an exact division instead: a slope that is
-  almost exactly the maximum slope can then be classified differently, and the file differs in a few polygons.
-  The approximate instruction itself can also give different results on Intel and AMD CPUs, so two x86 machines
-  can differ in such a polygon too. All of them are valid meshes.
-- Objects with moving parts (for example the top of a tall tower that turns slowly) are sent in the pose they have
-  when the tile is requested, so the same object has a different pose in each tile, and in a mesh that
-  shipped with the game it had yet another one. The tiles around such an object can differ in a few polygons and in
-  the height bound in their header (`bmax` y); this is a property of the data, and the mesh is valid. The same goes for
-  the order of several door objects in one tile, which the game does not always send in the same order, and which
+- On x86 and x86_64 computers, the generator uses the same approximate reciprocal square root as DayZ. So the mesh
+  is the mesh that DayZ itself makes. On other processors (ARM), it uses an exact division. Then a slope that is
+  almost exactly the maximum slope can get a different class, and the file differs in a few polygons. The approximate
+  instruction can also give different results on Intel and AMD CPUs, so two x86 machines can differ in such a
+  polygon too. All of these meshes are valid.
+- The game sends an object with moving parts (for example the top of a tall tower that turns slowly) in the pose that
+  it has when the tile is requested. So the same object has a different pose in each tile, and it had another pose in
+  a mesh that shipped with the game. The tiles around such an object can differ in a few polygons and in the height
+  bound in their header (`bmax` y). This is a property of the data, and the mesh is valid. The same is true for the
+  order of several door objects in one tile. The game does not always send them in the same order, and the order
   decides which of two overlapping door footprints a cell belongs to.
-- The generator never modifies the game, the server or your mod: it only reads from the data server and writes
-  the files you name.
-- Warnings are explained in [Warnings](../reference/warnings.md): `navmesh-tile-failed`, `navmesh-stray-part` and
+- The generator never changes the game, the server or your mod. It only reads from the data server and writes the
+  files that you name.
+- [Warnings](../reference/warnings.md) explains these warnings: `navmesh-tile-failed`, `navmesh-stray-part` and
   `navmesh-seed`.
 
 ## Validation

@@ -1,11 +1,12 @@
 # Keys and signatures: keygen, sign, verify
 
-DayZ servers accept a PBO from a client only when it carries a signature (`.bisign`) made with a private key
-whose public key (`.bikey`) is in the server's `keys` folder. dayzmake uses Bohemia's file formats: a 1024-bit RSA
-key pair and version 2 or 3 signatures. Everything is implemented in Rust, with no system libraries.
+A DayZ server accepts a PBO from a client only if the PBO has a signature (`.bisign`). The signature must come from
+a private key, and the public key (`.bikey`) must be in the `keys` folder of the server. dayzmake uses the file
+formats of Bohemia: a 1024-bit RSA key pair and version 2 or 3 signatures. dayzmake does all of this in Rust and
+uses no system libraries.
 
-Key files and signatures are untrusted input like every other file: dayzmake checks their lengths and the key
-name before it writes a file name from it.
+Key files and signatures are untrusted input, like every other file. dayzmake checks their lengths and the key name
+before it makes a file name from the key name.
 
 ## dayzmake keygen
 
@@ -21,7 +22,7 @@ dayzmake keygen [-v] [-f] <keyname>
 
 | Argument | Meaning |
 |---|---|
-| `<keyname>` | The path of the key without extension. The file name part is the name of the key (it is stored in both files and appears in signature names), so use a name such as `mymod_1` or your own handle. |
+| `<keyname>` | The path of the key without extension. The file name part is the name of the key. dayzmake stores it in both files, and it appears in signature names. Use a name such as `mymod_1` or your own handle. |
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -30,11 +31,11 @@ dayzmake keygen [-v] [-f] <keyname>
 
 Behaviour:
 
-- Writes `<keyname>.biprivatekey` and `<keyname>.bikey` next to each other; the folder of `<keyname>` must exist.
-- The private key is created readable by its owner only (mode `0600`). Keep it out of version control and never
-  publish it; publish the `.bikey` with the mod.
-- Without `-f`, an existing file of either name is an error and nothing is written.
-- The key size is 1024 bits, which is what DayZ expects.
+- It writes `<keyname>.biprivatekey` and `<keyname>.bikey` next to each other. The folder of `<keyname>` must exist.
+- Only the owner can read the private key (mode `0600`). Do not put it in version control. Do not publish it.
+  Publish the `.bikey` with the mod.
+- Without `-f`, an existing file of either name is an error, and dayzmake writes nothing.
+- The key size is 1024 bits. DayZ expects this size.
 
 Examples:
 
@@ -64,7 +65,7 @@ dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
 | Argument | Meaning |
 |---|---|
 | `<privatekey>` | The `.biprivatekey`. |
-| `<pbo>` | The PBO to sign; it is only read. |
+| `<pbo>` | The PBO to sign. dayzmake only reads it. |
 | `<signature>` | The signature file to write. Default: next to the PBO, `<pbo name>.<keyname>.bisign` (`mymod.pbo` signed with `mykey` gives `mymod.pbo.mykey.bisign`). |
 
 | Option | Default | Meaning |
@@ -75,13 +76,13 @@ dayzmake sign [-v] [-f] [--v2] <privatekey> <pbo> [<signature>]
 
 Behaviour:
 
-- A version 3 signature covers the script and text-like entries (`.c`, `.sqf`, `.hpp`, `.cfg`, ...), which is
-  what current DayZ versions check. A version 2 signature covers everything except textures, models and sounds,
-  and is only needed for old servers or tools.
-- A key name that is not usable as a file name part (path separators, `:`, control characters) is refused;
-  pass `<signature>` explicitly then.
-- The signature is written atomically.
-- `build -k` and `pack -k` do the same after packing.
+- A version 3 signature covers the script and text-like entries (`.c`, `.sqf`, `.hpp`, `.cfg`, ...). Current DayZ
+  versions check these entries. A version 2 signature covers everything except textures, models and sounds. You
+  need it only for old servers or tools.
+- dayzmake refuses a key name that you cannot use as a part of a file name (path separators, `:`, control
+  characters). In that case, give `<signature>` in the command.
+- dayzmake writes the signature atomically.
+- `build -k` and `pack -k` do the same after they pack the PBO.
 
 Examples:
 
@@ -126,11 +127,11 @@ dayzmake verify [-v] <publickey> <pbo> [<signature>]
 
 Behaviour:
 
-- Prints nothing and exits with status 0 when the signature is valid.
-- Exits with status 1 and an error when it is not. The key a signature was made with is stored in the signature
-  and compared first, so a wrong key is reported as such. If the PBO changed after signing, the first hash that
-  differs is printed with the signed and the real value.
-- The version of the signature (2 or 3) is read from the signature file.
+- If the signature is valid, dayzmake prints nothing and exits with status 0.
+- If the signature is not valid, dayzmake exits with status 1 and prints an error. The signature stores the key
+  that made it, and dayzmake compares this key first, so it reports a wrong key as a wrong key. If the PBO changed
+  after signing, dayzmake prints the first hash that is different, with the signed value and the real value.
+- dayzmake reads the version of the signature (2 or 3) from the signature file.
 
 Examples:
 
@@ -165,4 +166,4 @@ No such file or directory (os error 2)
 ```
 
 See also: [sign](#dayzmake-sign), [Verifying downloads](../verifying.md) (for the GPG signatures of dayzmake itself,
-which are unrelated to BI keys).
+which have no relation to BI keys).

@@ -1,8 +1,8 @@
 # Textures: paa2img, img2paa
 
-PAA is DayZ's texture format. These commands convert between PAA and ordinary image files. They are available
-when dayzmake is built with the `image` feature, which the released binaries have. The examples start from a
-64 by 64 PNG named `tex.png`.
+PAA is the texture format of DayZ. These commands convert between PAA and ordinary image files. They are
+available when dayzmake has the `image` feature. The released binaries have it. The examples start from a 64 by 64
+PNG named `tex.png`.
 
 ## dayzmake paa2img
 
@@ -19,7 +19,7 @@ dayzmake paa2img [-v] [-f] <source> <target>
 | Argument | Meaning |
 |---|---|
 | `<source>` | The PAA file. |
-| `<target>` | The image to write. The format follows the extension: `png`, `jpg`, `bmp`, `tga` and `gif` work. |
+| `<target>` | The image to write. The extension gives the format: `png`, `jpg`, `bmp`, `tga` and `gif` work. |
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -28,14 +28,14 @@ dayzmake paa2img [-v] [-f] <source> <target>
 
 Behaviour:
 
-- The largest mipmap is decoded to 8-bit RGBA. DXT1, DXT3, DXT5 and uncompressed RGBA PAAs are supported, with
-  or without LZO-compressed mipmaps. The 16-bit formats ARGB4444, ARGB1555 and AI88 (grey with alpha) are
-  read too: their mipmaps are LZSS-compressed, and a wrong checksum or a cut-short stream is an error.
-  Writing these formats is not supported (`img2paa -t` offers DXT1, DXT3, DXT5 and RGBA).
-- A file that starts with the PNG signature is reported as a PNG file, not as an unknown PAA.
-- The reader treats the file as untrusted: tag sizes, mipmap sizes and the number of mipmaps are limited, so a
+- dayzmake decodes the largest mipmap to 8-bit RGBA. It supports DXT1, DXT3, DXT5 and uncompressed RGBA PAAs, with
+  or without LZO-compressed mipmaps. It also reads the 16-bit formats ARGB4444, ARGB1555 and AI88 (grey with
+  alpha). Their mipmaps are LZSS-compressed. A wrong checksum or a cut-short stream is an error. dayzmake cannot
+  write these formats (`img2paa -t` offers DXT1, DXT3, DXT5 and RGBA).
+- If a file starts with the PNG signature, dayzmake reports a PNG file, not an unknown PAA.
+- The reader treats the file as untrusted. It limits the tag sizes, the mipmap sizes and the number of mipmaps, so a
   small hostile file cannot make dayzmake allocate gigabytes.
-- An extension that is not an image format is an error and nothing is written.
+- An extension that is not an image format is an error, and dayzmake writes nothing.
 
 Examples:
 
@@ -73,15 +73,16 @@ dayzmake img2paa [-v] [-f] [-c] [-t <paatype>] <source> <target>
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. |
-| `-c`, `--compress` | off | LZO-compress the mipmaps wider than 128 pixels of a DXT texture, where that makes them smaller. `img2paa` already does this for every conversion, so the option does not change the output; it is kept for compatibility with armake2. `rgba` is never compressed, and that is not an error. |
+| `-c`, `--compress` | off | LZO-compress the mipmaps of a DXT texture that are wider than 128 pixels, where this makes them smaller. `img2paa` already does this for every conversion, so the option does not change the output. It stays for compatibility with armake2. `rgba` is never compressed, and this is not an error. |
 | `-t <paatype>`, `--type <paatype>` | `dxt5` | The pixel format: `dxt1`, `dxt3`, `dxt5` or `rgba`, in any case. |
 
 Behaviour:
 
-- `dxt1` has no alpha or 1-bit alpha and is the smallest, `dxt3` has explicit 4-bit alpha, `dxt5` interpolated alpha, and `rgba` is
-  uncompressed 8-bit RGBA (about eight times the size of `dxt1`).
-- The output has a chain of mipmaps, halving the size until a side reaches 4 pixels (five levels for a 64 by 64 image). Image sizes should be powers of two, as the game expects; dayzmake
-  does not resize (a 100 by 50 image stays 100 by 50).
+- `dxt1` has no alpha or 1-bit alpha and is the smallest. `dxt3` has explicit 4-bit alpha. `dxt5` has interpolated
+  alpha. `rgba` is uncompressed 8-bit RGBA (about eight times the size of `dxt1`).
+- The output has a chain of mipmaps. Each mipmap has half the size of the one before, until a side reaches 4 pixels
+  (five levels for a 64 by 64 image). The sizes of the image must be powers of two, as the game expects. dayzmake
+  does not change the size (a 100 by 50 image stays 100 by 50).
 - An unknown type is an error: `Unsupported PAA compression type for creation: foo`.
 
 Examples (a 64 by 64 image gives these sizes):
