@@ -159,6 +159,35 @@ The lints are configured once, in `[workspace.lints]` in the root `Cargo.toml`; 
   warning without its page fails `tests/book_sources.rs`; examples and described behaviour are not checked, so
   re-run them).
 
+### Writing style: ASD-STE100
+
+Write documentation in ASD-STE100 Simplified Technical English (STE). This applies to `README.md`, the other
+`README.md` files, the book in `docs/book/`, rustdoc comments, the `USAGE` text and new design notes. Existing design
+notes in `docs/superpowers/` and dated reports (for example `docs/security-review-2026-11.md`) are records; do not
+rewrite them.
+
+The target is about 80 % compliance, not 100 %. Follow STE where it makes the text clearer. Break a rule when the
+STE text would be less exact or less clear for a modder.
+
+- Procedures: one instruction in each sentence, in the imperative ("Run `dayzmake build`."). Not more than
+  20 words in a sentence. Put the steps in a numbered list, in the sequence of the work.
+- Descriptions: not more than 25 words in a sentence. Not more than six sentences in a paragraph. Start with the
+  most important information.
+- Use the active voice and the simple tenses (present, past, future). Do not use the passive in procedures.
+- Use one word for one meaning, and use it each time. Do not use synonyms for a term, and do not use one word for
+  two meanings.
+- Use simple words from the STE dictionary where one exists ("use", not "utilise"; "start", not "initiate").
+  Do not use phrasal verbs ("set up", "carry out") when a single verb
+  exists.
+- Do not make noun clusters of more than three words. Break them up with "of", "for" or a relative clause.
+- Use articles ("the", "a") and do not leave them out to make text shorter. Do not use "-ing" forms as nouns or
+  as the start of a sentence.
+- Write warnings and cautions as a command, then the reason ("Do not edit game files. The game can fail to start.").
+
+Exceptions, not counted against the 80 %: command names, options, file names, code, file format fields, quoted
+tool output, error and warning texts (they are part of the interface), and established domain terms (PBO, rapify,
+binarize, navmesh, Enforce Script).
+
 ## Commits
 
 - One logical change per commit, with `make check` passing.
