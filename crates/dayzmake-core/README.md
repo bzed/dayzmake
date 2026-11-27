@@ -7,7 +7,8 @@ Readers and writers for the DayZ file formats: PBO archives, rapified configs (w
 models, PAA textures, BI keys and signatures, and navigation meshes (`.nm`) with their generator. It is the library
 behind the [`dayzmake`](https://crates.io/crates/dayzmake) command line tool, a fork of armake2.
 
-Every reader treats its input as hostile: errors instead of panics, checked arithmetic, bounded recursion.
+Every reader treats its input as hostile. It returns errors and does not panic. It uses checked arithmetic and
+limits recursion.
 
 ## Features
 
@@ -17,24 +18,24 @@ Every reader treats its input as hostile: errors instead of panics, checked arit
 | `image` | yes | `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the re-exported `image` crate |
 | `navmesh` | yes | the `navmesh` module: the navmesh data-server client and wire format, captures (`.dzgeo`), the Recast/Detour tile builder and the `.nm` reader and writer (`navmesh::generate::generate`) |
 
-Without them (`default-features = false`) the crate builds without `sign`, `image` and `navmesh`. PBO reading
-and writing, configs, P3D and PAA reading/writing stay available.
+With `default-features = false`, the crate builds without `sign`, `image` and `navmesh`. You can still read and
+write PBOs, configs, P3D and PAA.
 
 ## Usage
 
-See the [API documentation](https://docs.rs/dayzmake-core) for the entry points and examples.
+The [API documentation](https://docs.rs/dayzmake-core) shows the entry points and examples.
 
 ## Licence
 
-GPL-2.0-or-later, inherited from armake2 (KoffeinFlummi). Projects under AGPL or GPLv3 may link it; others
-need to be GPL-2.0-or-later compatible.
+GPL-2.0-or-later, from armake2 (KoffeinFlummi). Projects under AGPL or GPLv3 can link it. The licence of other
+projects must be compatible with GPL-2.0-or-later.
 
 ### Third-party code
 
 The `navmesh` module contains Rust ports of [Recast and Detour](https://github.com/recastnavigation/recastnavigation)
-by Mikko Mononen (zlib licence), altered for DayZ. The ported source files keep the original copyright line and the zlib
-notice, and say that they were ported to Rust and altered and are not the original software. The zlib licence is
-compatible with GPL-2.0-or-later.
+by Mikko Mononen (zlib licence), altered for DayZ. The ported source files keep the original copyright line and the
+zlib notice. They also say that they were ported to Rust, that they were altered and that they are not the original
+software. The zlib licence is compatible with GPL-2.0-or-later.
 
 ## Changes
 

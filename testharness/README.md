@@ -1,9 +1,9 @@
 # dayzmake DayZ test harness
 
-End-to-end test for dayzmake against the current DayZ server (1.29 stable and
-1.30 experimental): builds a small test mod, binarizes its config, packs it
-into a PBO, signs it, and boots a real DayZ server with the mod loaded to
-prove the PBO loads, the scripts compile and the code runs.
+This is an end-to-end test for dayzmake against the current DayZ server (1.29 stable and
+1.30 experimental). The test builds a small test mod, binarizes its config, packs it
+into a PBO and signs it. Then it boots a real DayZ server with the mod loaded. This proves
+that the PBO loads, the scripts compile and the code runs.
 
 ## What it does
 
@@ -34,26 +34,26 @@ testharness/run.sh --keep        # keep testharness/build for inspection
 Requirements: Rust toolchain, a Steam installation with DayZ Server
 (app 223350) for the server test, `python3` (port picking, `compare-release.sh`).
 
-The harness never writes into the Steam install: it builds its own server
-tree of symlinks in `testharness/build/server-tree-*`, picks random free
-game/query/RCon ports, and cleans up after itself.
+The harness never writes into the Steam install. It builds its own server
+tree of symlinks in `testharness/build/server-tree-*`. It picks random free
+game/query/RCon ports. It removes its own files when the run ends.
 
 ## Test mod
 
-`mod/addons/dayzmake_test/` is a minimal script-only DayZ mod: a
-`config.cpp` (`CfgPatches` + `CfgMods` with a `missionScriptModule`), a
-`$PREFIX$` file and one Enforce script that overrides
-`MissionServer.OnMissionStart()` to print a marker. It uses only APIs
-present in both 1.29 and 1.30, so the same PBO loads on both versions.
+`mod/addons/dayzmake_test/` is a minimal script-only DayZ mod. It has a
+`config.cpp` (`CfgPatches` + `CfgMods` with a `missionScriptModule`) and a
+`$PREFIX$` file. It also has one Enforce script. This script overrides
+`MissionServer.OnMissionStart()` to print a marker. The mod uses only APIs
+present in both 1.29 and 1.30. So the same PBO loads on both versions.
 
 ## Notes
 
 - On 1.30 experimental the server ends with a vanilla shutdown assertion
-  (`Leaked 'BunkerBroadcastManager'`); that is vanilla noise, not caused by
-  the test mod, and does not fail the harness.
+  (`Leaked 'BunkerBroadcastManager'`). This is vanilla noise. The test mod does
+  not cause it, and it does not fail the harness.
 - The engine logs `Can't load @dayzmake_test/Anims/cfg/skeletons.anim.xml`
-  style lines while probing each loaded mod folder for animation configs;
-  expected for a script-only mod.
+  style lines while it probes each loaded mod folder for animation configs.
+  These lines are expected for a script-only mod.
 
 ## Differential comparison against a released dayzmake
 
@@ -74,14 +74,14 @@ rm -rf /var/tmp/dayzmake-v2
 It compares, per `addons/*.pbo`: `inspect` and `unpack`; `derapify` of every unpacked `config.bin`; `inspect`
 of the first 50 `.p3d`; and every command of `tests/golden_cli.rs` on `tests/fixtures/golden/mod`, plus
 `img2paa` of 1024x1024 gradient and noise PNGs. The work folder (`mktemp -d /var/tmp/dayzmake-compare.XXXXXX`)
-is removed unless `KEEP=1`. The summary lists `N identical, M different` per category; a difference that is
+is removed unless `KEEP=1`. The summary lists `N identical, M different` for each category. A difference that is
 only the header extension block of `inspect`/`$PBOPREFIX$` in another order, or build warnings in another
-order (golden commands only), is marked `order-only`; every other byte must match, so a reordered entry list or
-config member is a plain difference. The `raw` category checks, per PBO, that the new binary lists header
+order (golden commands only), is marked `order-only`. Every other byte must match. So a reordered entry list or
+config member is a plain difference. The `raw` category checks, for each PBO, that the new binary lists header
 extensions in the order of the PBO file. A released dayzmake that predates the order fix writes them in a random
-order per run, so the number of identical `pbo` comparisons varies between runs. Exit status 1 when anything
-differs.
+order for each run. So the number of identical `pbo` comparisons varies between runs. Exit status 1 means that
+something differs.
 
-Against v2.0.0 the expected differences are: header extension order (file order now, random before), warning
-order (sorted file order now), suppression summary lines on stderr, and PBO bytes when more than one `-e` header
-extension is given.
+Against v2.0.0, these differences are expected. Header extension order changes (file order now, random before).
+Warning order changes (sorted file order now). Suppression summary lines appear on stderr. PBO bytes differ when
+more than one `-e` header extension is given.

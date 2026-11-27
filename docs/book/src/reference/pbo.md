@@ -1,15 +1,16 @@
 # PBOs: build, pack, inspect, unpack, extract, cat
 
-A PBO is the archive format of DayZ: a header with the *prefix* and other [header
+A PBO is the archive format of DayZ. It has a header with the *prefix* and other [header
 extensions](header-extensions.md), a list of entries and a checksum. `build` makes the PBO of a mod folder the way
-the game needs it, `pack` only archives, and `inspect`, `unpack` and `cat` read PBOs. PBO contents are treated as
-untrusted: entry names with `..`, drive letters or absolute paths are never written outside the target folder.
+the game needs it. `pack` only archives. `inspect`, `unpack` and `cat` read PBOs. dayzmake treats the contents of a
+PBO as untrusted. It never writes an entry name with `..`, a drive letter or an absolute path outside the target
+folder.
 
 The examples use the folder `mymod/` from [A first mod](../guides/first-mod.md).
 
 ## dayzmake build
 
-Build a PBO from a folder: rapify configs, binarize models, check model textures, pack.
+Build a PBO from a folder. The command rapifies configs, binarizes models, checks model textures and packs the files.
 
 <div class="synopsis">
 
@@ -28,38 +29,39 @@ dayzmake build [-v] [-f] [--proton-binarize] [-w <wname>]... [-i <includefolder>
 |---|---|---|
 | `-v`, `--verbose` | off | Show every warning. |
 | `-f`, `--force` | off | Overwrite `<target>` and an existing signature file. |
-| `--proton-binarize` | off | Linux: binarize `.p3d` and `.rtm` files with DayZ Tools' `binarize.exe` under Proton. Without it models are copied as they are. See [Binarizing models on Linux](../guides/binarize-linux.md). On Windows `binarize.exe` is always used. |
+| `--proton-binarize` | off | Linux: binarize `.p3d` and `.rtm` files with DayZ Tools' `binarize.exe` under Proton. Without it, dayzmake copies models as they are. See [Binarizing models on Linux](../guides/binarize-linux.md). On Windows `binarize.exe` is always used. |
 | `-w <wname>`, `--warning <wname>` | none | Mute a [warning](warnings.md) by name. |
-| `-i <includefolder>`, `--include <includefolder>` | none | Folder searched for absolute includes in configs and for textures of other mods when checking models. The current directory is only checked directly. |
-| `-x <excludepattern>`, `--exclude <excludepattern>` | none | Glob pattern of files to leave out. Repeatable. See below. |
-| `-e <headerext>`, `--headerext <headerext>` | none | Header extension `key=value`. Repeatable. See [Header extensions and prefixes](header-extensions.md). |
+| `-i <includefolder>`, `--include <includefolder>` | none | Folder to search for absolute includes in configs and for textures of other mods when it checks models. dayzmake checks the current directory directly only. |
+| `-x <excludepattern>`, `--exclude <excludepattern>` | none | Glob pattern of files to leave out. You can repeat it. See below. |
+| `-e <headerext>`, `--headerext <headerext>` | none | Header extension `key=value`. You can repeat it. See [Header extensions and prefixes](header-extensions.md). |
 | `-k <privatekey>`, `--key <privatekey>` | none | Sign the PBO with this `.biprivatekey` after writing it. |
 | `-s <signature>`, `--signature <signature>` | `<target>.<keyname>.bisign` | Where `-k` writes the signature. |
 
 Behaviour:
 
-- Files are visited in sorted order, so the same folder always gives the same bytes. No timestamps are stored.
-- `config.cpp` is rapified and stored as `config.bin`. Every other `.cpp` and every `.rvmat` is rapified and keeps
-  its name. A config that is already rapified is copied with the `prerapified-file` warning.
-- `.p3d` and `.rtm` files are binarized (with `--proton-binarize` on Linux). A model that is already binarized
-  (ODOL, BMTR) is copied with `prebinarized-file`. A `.p3do` file is packed as `.p3d`. Without
-  `--proton-binarize` on Linux, models are copied and each one raises `non-windows-binarization`.
-- Every editable (MLOD) model is checked for textures and materials that are not in the addon
+- dayzmake visits the files in sorted order, so the same folder always gives the same bytes. It stores no timestamps.
+- dayzmake rapifies `config.cpp` and stores it as `config.bin`. It rapifies every other `.cpp` and every `.rvmat`, and
+  they keep their names. It copies a config that is already rapified, with the `prerapified-file` warning.
+- dayzmake binarizes `.p3d` and `.rtm` files (with `--proton-binarize` on Linux). It copies a model that is already
+  binarized (ODOL, BMTR) with `prebinarized-file`. It packs a `.p3do` file as `.p3d`. On Linux without
+  `--proton-binarize`, it copies the models, and each one raises `non-windows-binarization`.
+- dayzmake checks every editable (MLOD) model for textures and materials that are not in the addon
   (`missing-texture`, `missing-material`). See [Textures and model checks](../guides/textures.md).
 - A file named `$NOBIN$` or `$NOBIN-NOTEST$` in the source folder switches rapification and binarization off for
-  the whole folder; the files are packed as they are.
-- `$PBOPREFIX$` (or `$PREFIX$`) is read and not stored as an entry; its first bare line is the prefix and its
-  `key=value` lines become header extensions.
-- Files that are not regular files (FIFOs, devices, sockets) are skipped with `unsupported-file`. Names that
-  are not valid as PBO entry names are skipped with `unsafe-path`. Names that collide ignoring case give
-  `duplicate-entry` and the first in sorted order wins, except that a generated entry (the rapified `config.bin`)
+  the whole folder. dayzmake packs the files as they are.
+- dayzmake reads `$PBOPREFIX$` (or `$PREFIX$`) and does not store it as an entry. Its first bare line is the prefix.
+  Its `key=value` lines become header extensions.
+- dayzmake skips files that are not regular files (FIFOs, devices, sockets) with `unsupported-file`. It skips names
+  that are not valid as PBO entry names with `unsafe-path`. Names that collide when case is ignored give
+  `duplicate-entry`. The first name in sorted order wins, but a generated entry (the rapified `config.bin`)
   wins over a plain file of the same name.
-- Exclude patterns use `*` as the only wildcard; it also matches `\`. A pattern is matched against the whole
-  path inside the PBO written with `\`, before the `config.cpp` to `config.bin` rename and case-sensitively:
-  `-x '*.psd'` leaves out every `.psd`, `-x 'data\*.png'` every PNG below `data`. Excluded files are skipped
-  silently.
-- The target and the temporary files next to it are never packed into themselves.
-- With `-k` the PBO is signed with a version 3 signature after it was written (see [sign](signing.md#dayzmake-sign)).
+- Exclude patterns use `*` as the only wildcard. It also matches `\`. dayzmake compares a pattern with the whole
+  path inside the PBO, written with `\`. It does this before the rename of `config.cpp` to `config.bin`, and the
+  comparison is case-sensitive: `-x '*.psd'` leaves out every `.psd`, and `-x 'data\*.png'` leaves out every PNG
+  below `data`. dayzmake skips excluded files without a message.
+- dayzmake never packs the target, or the temporary files next to it, into the PBO.
+- With `-k`, dayzmake signs the PBO with a version 3 signature after it writes the PBO (see
+  [sign](signing.md#dayzmake-sign)).
 
 Examples:
 
@@ -99,7 +101,7 @@ $ dayzmake build -k mykey.biprivatekey t21
 error: Cannot sign a pbo that is piped to stdout.
 ```
 
-Warnings of a model that references files outside the addon (here `t21` contains the test model `small.p3d`):
+These are the warnings for a model that references files outside the addon (here `t21` contains the test model `small.p3d`):
 
 ```text
 $ dayzmake build t21 t21.pbo
@@ -112,7 +114,7 @@ See also: [pack](#dayzmake-pack), [Header extensions and prefixes](header-extens
 
 ## dayzmake pack
 
-Pack a folder into a PBO without rapifying or binarizing anything.
+Pack a folder into a PBO. The command does not rapify or binarize anything.
 
 <div class="synopsis">
 
@@ -136,12 +138,12 @@ dayzmake pack [-v] [-f] [-x <excludepattern>]... [-e <headerext>]... [-k <privat
 | `-k <privatekey>`, `--key <privatekey>` | none | Sign the PBO afterwards. |
 | `-s <signature>`, `--signature <signature>` | `<target>.<keyname>.bisign` | Signature path for `-k`. |
 
-Behaviour: the same rules as `build` for prefixes, exclusion, ordering and unsafe names, but file contents are
-copied unchanged: `config.cpp` stays `config.cpp`, models stay as they are, and there are no model checks and no
-include handling. Use it to repack a folder that was already built, or for PBOs that hold plain data.
+Behaviour: the rules for prefixes, exclusion, ordering and unsafe names are the same as for `build`. dayzmake copies
+the file contents unchanged. `config.cpp` stays `config.cpp`, and models stay as they are. There are no model checks
+and no include handling. Use `pack` to repack a folder that you already built, or for PBOs that hold plain data.
 
-Example (the folder `w` contains a name that is not allowed, a name that differs only in case, a FIFO and a
-prefix with slashes):
+Example. The folder `w` contains a name that is not allowed, a name that differs only in case, a FIFO and a
+prefix with slashes:
 
 ```text
 $ dayzmake pack . ../w.pbo -f
@@ -151,7 +153,7 @@ warning: Skipping "data/bad:name.txt": unsafe entry name. [unsafe-path]
 In file data/pipe: warning: Skipping a file that is not a regular file (FIFO, device or socket). [unsupported-file]
 ```
 
-A missing folder is named in the error:
+The error names a folder that does not exist:
 
 ```text
 $ dayzmake pack nonexist x.pbo
@@ -163,7 +165,7 @@ See also: [build](#dayzmake-build), [unpack](#dayzmake-unpack).
 
 ## dayzmake inspect
 
-List what a PBO contains, or describe a model.
+List the contents of a PBO, or describe a model.
 
 <div class="synopsis">
 
@@ -184,27 +186,28 @@ dayzmake inspect [-v] [--json] [<source>]
 
 Behaviour:
 
-- A file that starts with a model header is described as a model; anything else is read as a PBO.
-- For a PBO: the header extensions, the number of files, and a table with name, packing method (0 stored,
-  compressed entries are listed with their packed size), original size and stored size.
-- For an editable MLOD model: format and version, the LODs with point, face, normal and UV-set counts, textures
-  and materials with the number of faces that use them, properties and named selections.
-- For a binarized ODOL v56 model: format and version, the skeleton and bone count, the property class and damage,
-  mass, bounding box, the LODs with vertex and face counts, textures and materials with the number of LODs that use
-  them (a built-in material without a name is listed as `(none)`), proxies, properties, named selections and the
-  animation classes. A v56 model that cannot be read is an error.
-  For another ODOL version, or a BMTR file, only the format and version are shown (ODOL adds a note that only v56 is
-  decoded).
-- Nothing is written; the command only reads.
+- If a file starts with a model header, `inspect` describes it as a model. It reads anything else as a PBO.
+- For a PBO, `inspect` shows the header extensions, the number of files, and a table. The table has the name, the
+  packing method (0 is stored; compressed entries show their packed size), the original size and the stored size.
+- For an editable MLOD model, `inspect` shows the format and version. It also shows the LODs with the counts of points,
+  faces, normals and UV sets, the textures and materials with the number of faces that use them, the properties and
+  the named selections.
+- For a binarized ODOL v56 model, `inspect` shows the format and version, the skeleton and the bone count, the
+  property class and damage, the mass, the bounding box and the LODs with vertex and face counts. It also shows the
+  textures and materials with the number of LODs that use them (a built-in material without a name is `(none)`), the
+  proxies, the properties, the named selections and the animation classes. A v56 model that dayzmake cannot read is
+  an error. For another ODOL version, or a BMTR file, `inspect` shows only the format and version (ODOL adds a note
+  that dayzmake decodes only v56).
+- The command only reads. It writes nothing.
 - `--json` prints one JSON object on one line, with the fields in this order:
   - `header_extensions`: an ordered array of `{key, value, key_hex, value_hex}`;
   - `prefix` and `prefix_hex`: the prefix, or both `null` when the PBO has none;
   - `entries`: an array of `{name, name_hex, packing, original_size, data_size, timestamp}` in header order.
 
-  `key`, `value`, `prefix` and `name` are the bytes decoded lossily as UTF-8 and only JSON-escaped (no
-  control-character escaping of the text output); the `*_hex` fields are the lowercase hex of the raw bytes. A
-  parser reads the hex, because the text of a name with a byte that is not UTF-8 has lost it. For a model,
-  `--json` is an error: `--json is only supported for PBOs`.
+  `key`, `value`, `prefix` and `name` are the bytes, decoded lossily as UTF-8 and only JSON-escaped (no
+  control-character escaping of the text output). The `*_hex` fields are the lowercase hex of the raw bytes. A
+  parser must read the hex, because the text of a name with a byte that is not UTF-8 has lost that byte. For a
+  model, `--json` is an error: `--json is only supported for PBOs`.
 
 Examples:
 
@@ -254,7 +257,7 @@ Selections:
 - LOD 1 (Memory): start
 ```
 
-Something that is not a PBO:
+A file that is not a PBO:
 
 ```text
 $ dayzmake inspect notpbo
@@ -279,36 +282,37 @@ dayzmake unpack [-v] [-f] [--use-prefix] [-x <excludepattern>]... [--only <patte
 | Argument | Meaning |
 |---|---|
 | `<source>` | The PBO. |
-| `<targetfolder>` | The folder to extract into; it is created when missing. |
+| `<targetfolder>` | The folder to extract into. dayzmake creates it when it does not exist. |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-v`, `--verbose` | off | Show every warning. |
 | `-f`, `--force` | off | Overwrite files that already exist in the target folder. |
 | `--use-prefix` | off | Extract into `<targetfolder>/<prefix>/` instead of directly into `<targetfolder>`. |
-| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. Repeatable. |
-| `--only <pattern>` | none | Glob pattern: write only the entries that match one. Repeatable. |
+| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. You can repeat it. |
+| `--only <pattern>` | none | Glob pattern: write only the entries that match one. You can repeat it. |
 
 Behaviour:
 
-- The header extensions are written to `$PBOPREFIX$` in the extracted folder, so that `build` or `pack` of the
-  folder gives the same prefix again. Control characters in extensions are replaced with spaces (`unsafe-header`).
-- Entry names are validated before use. Absolute paths, drive letters, `..`, empty names and names that are not
-  valid file names are skipped with a warning (`unsafe-path`); names with a leading `\` are extracted without it
-  (`leading-separator`). A name that is not UTF-8 is extracted as Windows-1252 (`non-utf8-filename`), and a second
-  entry with the same path ignoring case is skipped (`duplicate-entry`). Nothing is ever written outside the target folder, and a symbolic link in the way is
-  never followed.
-- Without `-f`, extraction stops with an error when the target folder already contains a file of the PBO, and
-  names the first one. Nothing is overwritten.
-- `--only` and `-x` select the entries to write: an entry is written when it matches at least one `--only`
-  pattern (or none is given) and no `-x` pattern, so `-x` wins. `*` stands for any run of characters, as in the
-  `-x` of `pack`. Patterns are matched against the entry path with `/` separators, without the prefix, ignoring
-  case. `$PBOPREFIX$` is always written, and the conflict check without `-f` covers only the selected entries.
-  `dayzmake unpack --only '*.c' --only '*config.bin' scripts.pbo out` extracts scripts and configs, not models
-  and textures.
-- Compressed entries are decompressed. A rapified `config.bin` stays rapified; use
+- dayzmake writes the header extensions to `$PBOPREFIX$` in the extracted folder. A later `build` or `pack` of the
+  folder then gives the same prefix again. dayzmake replaces control characters in extensions with spaces
+  (`unsafe-header`).
+- dayzmake validates entry names before it uses them. It skips absolute paths, drive letters, `..`, empty names and
+  names that are not valid file names, with a warning (`unsafe-path`). It extracts a name with a leading `\`
+  without it (`leading-separator`). It extracts a name that is not UTF-8 as Windows-1252 (`non-utf8-filename`). It
+  skips a second entry with the same path when case is ignored (`duplicate-entry`). dayzmake never writes outside
+  the target folder, and it never follows a symbolic link in the way.
+- Without `-f`, extraction stops with an error when the target folder already contains a file of the PBO. The error
+  names the first file. dayzmake overwrites nothing.
+- `--only` and `-x` select the entries to write. dayzmake writes an entry when it matches at least one `--only`
+  pattern (or no `--only` pattern exists) and no `-x` pattern, so `-x` wins. `*` stands for any run of characters,
+  as in the `-x` of `pack`. dayzmake compares the patterns with the entry path, with `/` separators and without the
+  prefix. The comparison ignores case. dayzmake always writes `$PBOPREFIX$`. The conflict check without `-f` covers
+  only the selected entries. The command `dayzmake unpack --only '*.c' --only '*config.bin' scripts.pbo out`
+  extracts scripts and configs, but not models and textures.
+- dayzmake decompresses compressed entries. A rapified `config.bin` stays rapified. Use
   [derapify](config.md#dayzmake-derapify) to read it.
-- With `--use-prefix` an unsafe prefix is an error. An empty prefix means no prefix directory.
+- With `--use-prefix`, an unsafe prefix is an error. An empty prefix means no prefix directory.
 
 Examples:
 
@@ -336,7 +340,7 @@ $ dayzmake unpack mymod.pbo out
 error: Target folder "out" already contains files of this PBO (first: "$PBOPREFIX$"). Use --force to overwrite.
 ```
 
-A PBO with an entry name that starts with a separator and a header extension that contains a line break:
+This PBO has an entry name that starts with a separator and a header extension that contains a line break:
 
 ```text
 $ dayzmake unpack odd.pbo odd-out
@@ -348,8 +352,8 @@ See also: [cat](#dayzmake-cat), [Header extensions and prefixes](header-extensio
 
 ## dayzmake extract
 
-Unpack a whole DayZ install, a mod or a single PBO into one tree organised by prefix, optionally derapified, with a
-map from prefix to PBO.
+Unpack a whole DayZ install, a mod or a single PBO into one tree, organised by prefix. Optionally, the command
+derapifies the configs. It also writes a map from prefix to PBO.
 
 <div class="synopsis">
 
@@ -362,56 +366,62 @@ dayzmake extract [-v] [-f] [--derapify] [--only <pattern>]... [-x <excludepatter
 | Argument | Meaning |
 |---|---|
 | `<source>` | A DayZ client or server folder, a mod folder (`@Foo` or a workshop folder) or a single `.pbo`. |
-| `<targetfolder>` | The folder for the tree; the parent is created when missing. |
+| `<targetfolder>` | The folder for the tree. dayzmake creates the parent folder when it does not exist. |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-v`, `--verbose` | off | Print a summary (files, PBOs). |
 | `-f`, `--force` | off | Replace an existing target folder. |
 | `--derapify` | off | Write every rapified `*.bin` as text, with the extension `.cpp`. |
-| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. Repeatable. |
-| `--only <pattern>` | none | Glob pattern: write only the entries that match one. Repeatable. |
+| `-x`, `--exclude <excludepattern>` | none | Glob pattern of entries to leave out. You can repeat it. |
+| `--only <pattern>` | none | Glob pattern: write only the entries that match one. You can repeat it. |
 
 Behaviour:
 
-- For a folder, every `*.pbo` directly in its `dta` and `addons` subfolders is read; the folder names match in any
-  case (DayZ uses `Addons`), other folders and deeper levels are not searched, and a folder without PBOs is an
-  error. PBOs are processed in sorted order of their path relative to `<source>`, so the result is deterministic.
+- For a folder, dayzmake reads every `*.pbo` directly in its `dta` and `addons` subfolders. The folder names match
+  in any case (DayZ uses `Addons`). dayzmake does not search other folders or deeper levels. A folder without PBOs
+  is an error. dayzmake processes the PBOs in sorted order of their path relative to `<source>`, so the result is
+  deterministic.
 - The entries of a PBO go to `<targetfolder>/<prefix>/<entry>`. An empty prefix means the file name of the PBO
-  without `.pbo`. Entry names are validated like those of [unpack](#dayzmake-unpack): unsafe names are skipped
-  with a warning (`unsafe-path`), and so is a PBO whose prefix is not a safe folder name or is `pbo-map.tsv`;
-  `$PBOPREFIX$` is not written, the map holds the prefixes.
-- When two PBOs write the same path, ignoring case, the later one in sorted order wins and the warning
-  `duplicate-path` names both PBOs. Two entries of one PBO with the same path give `duplicate-entry`. When one PBO has a file where another (or the same one) has a folder, the first in
-  that order is written and the later entry is skipped with the warning `extract-path-clash`; the extract does not fail.
-- `--derapify`: a `*.bin` that starts with the rapified signature (`config.bin` or any other) is written as
-  `.cpp` of the same name, in the text that [derapify](config.md#dayzmake-derapify) prints. One that cannot be
-  read stays a `.bin`, with the warning `derapify-failed`. `--only` and `-x` match the entry name in the PBO
+  without `.pbo`. dayzmake validates entry names like those of [unpack](#dayzmake-unpack). It skips unsafe names
+  with a warning (`unsafe-path`). It also skips a PBO whose prefix is not a safe folder name or is `pbo-map.tsv`.
+  dayzmake does not write `$PBOPREFIX$`, because the map holds the prefixes.
+- When two PBOs write the same path (case ignored), the later one in sorted order wins. The warning
+  `duplicate-path` names both PBOs. Two entries of one PBO with the same path give `duplicate-entry`. A PBO can
+  have a file where another PBO (or the same one) has a folder. Then dayzmake writes the first entry in that order
+  and skips the later entry with the warning `extract-path-clash`. The extract does not fail.
+- `--derapify`: dayzmake writes a `*.bin` that starts with the rapified signature (`config.bin` or any other) as
+  `.cpp` of the same name, in the text that [derapify](config.md#dayzmake-derapify) prints. A file that dayzmake
+  cannot read stays a `.bin`, with the warning `derapify-failed`. `--only` and `-x` match the entry name in the PBO
   (`config.bin`), as for `unpack`.
-- The tree is written to a staging folder next to `<targetfolder>` (same parent, named
-  `.<name>.extract-<pid>-<n>`) and replaces `<targetfolder>` with a rename when everything succeeded, then the old
-  tree is removed. A re-run therefore drops files that no longer exist, and a failure (a PBO that cannot be read)
-  leaves the old tree untouched and removes the staging folder.
-- Without `-f`, an existing `<targetfolder>` is an error. With `-f` it is replaced and deleted after the swap, but
-  only when it is an empty folder or holds a `pbo-map.tsv` at its top level, that is, looks like the result of an
-  earlier `extract`; any other folder is refused with an error that names it, so a wrong target cannot wipe a home
-  folder. It must also be a real folder (not a file or a symbolic link), must not contain the source and must not lie
-  inside it: `extract -f m m/addons` is refused, so the PBOs are never deleted. A new `<targetfolder>` inside the
-  source (`extract m m/out`) is refused as well, without `-f`, before anything is created; the paths are compared
-  with symbolic links resolved. A new `<targetfolder>` with a `..` after a folder that does not exist
-  (`elsewhere/missing/../x`) cannot be resolved and is refused with the error `Invalid target folder "<path>": cannot resolve ".." after a folder that does not exist.`
-- Everything that goes wrong with a PBO is an error that leaves the old tree alone: a PBO or entry that cannot be
-  read (truncated, a compressed entry that does not decompress) and a file that cannot be written. Only unsafe names,
-  a path clash across entries and a `.bin` that cannot be derapified are skipped, with a warning.
-- `<targetfolder>/pbo-map.tsv` has one line per PBO that was read, `prefix<TAB>path of the PBO relative to
-  <source>` with `/` separators, sorted by prefix (then by path). A PBO without prefix is listed with its file
-  name without `.pbo`. The prefix is written with `/` instead of `\` (like the folders of the tree), and then `\`, TAB, CR and
-  LF in either column are written as `\\`, `\t`, `\r` and `\n`, so every `\` in the file starts an escape and a
-  line reads back unambiguously (a prefix `dz\gear\navigation` is `dz/gear/navigation`). The prefix as stored is in
-  `inspect --json`. The PBOs whose files were skipped because of their prefix are listed too.
-- Memory: an entry that is stored uncompressed is copied from the PBO to its file in pieces. Only compressed entries
-  and, with `--derapify`, `*.bin` files that start with the rapified signature are read into memory, up to 512 MiB
-  each (a compressed entry over that is an error), so the largest PBOs extract in a small amount of memory.
+- dayzmake writes the tree to a staging folder next to `<targetfolder>`. The staging folder has the same parent and
+  the name `.<name>.extract-<pid>-<n>`. When everything succeeds, dayzmake replaces `<targetfolder>` with a rename.
+  Then it removes the old tree. A new run therefore drops files that no longer exist. If a PBO cannot be read,
+  dayzmake leaves the old tree untouched and removes the staging folder.
+- Without `-f`, an existing `<targetfolder>` is an error. With `-f`, dayzmake replaces it and deletes it after the
+  swap. This works only when the folder is empty or holds a `pbo-map.tsv` at its top level, that is, when it looks
+  like the result of an earlier `extract`. dayzmake refuses any other folder with an error that names it, so a wrong
+  target cannot wipe a home folder. The target must also be a real folder (not a file or a symbolic link). It must
+  not contain the source and must not lie inside it. `extract -f m m/addons` is refused, so the PBOs are never
+  deleted. dayzmake also refuses a new `<targetfolder>` inside the source (`extract m m/out`), without `-f`,
+  before it creates anything. It compares the paths with symbolic links resolved. dayzmake cannot resolve a new
+  `<targetfolder>` with a `..` after a folder that does not exist (`elsewhere/missing/../x`). It refuses it with
+  the error `Invalid target folder "<path>": cannot resolve ".." after a folder that does not exist.`
+- Each problem with a PBO is an error that leaves the old tree alone. These problems are a PBO or entry that
+  dayzmake cannot read (truncated, or a compressed entry that does not decompress) and a file that dayzmake cannot
+  write. dayzmake skips only unsafe names, a path clash across entries and a `.bin` that it cannot derapify, with a
+  warning.
+- `<targetfolder>/pbo-map.tsv` has one line for each PBO that dayzmake read: `prefix<TAB>path of the PBO relative to
+  <source>`, with `/` separators. The lines are sorted by prefix (then by path). A PBO without prefix is listed with
+  its file name without `.pbo`. dayzmake writes the prefix with `/` instead of `\` (like the folders of the tree).
+  Then it writes `\`, TAB, CR and LF in either column as `\\`, `\t`, `\r` and `\n`. Every `\` in the file
+  therefore starts an escape, and a line reads back without doubt (a prefix `dz\gear\navigation` is
+  `dz/gear/navigation`). `inspect --json` shows the prefix as stored. The map also lists the PBOs whose files
+  dayzmake skipped because of their prefix.
+- Memory: dayzmake copies an entry that is stored uncompressed from the PBO to its file in pieces. It reads only
+  compressed entries into memory. With `--derapify`, it also reads `*.bin` files that start with the rapified
+  signature into memory. The limit is 512 MiB for each file (a compressed entry over that limit is an error), so
+  the largest PBOs extract in a small amount of memory.
 
 Example:
 
@@ -455,9 +465,9 @@ dayzmake cat [-v] [-f] <source> <filename> [<target>]
 | `-v`, `--verbose` | off | Verbose output. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. Without a `<target>` (standard output) it has no effect. |
 
-Behaviour: the entry is decompressed when it is stored compressed. The name must match exactly (including the
-case the PBO uses); a name that is not in the PBO is an error. An existing `<target>` is not overwritten unless
-you pass `-f`.
+Behaviour: dayzmake decompresses the entry when it is stored compressed. The name must match exactly (with the
+case that the PBO uses). A name that is not in the PBO is an error. dayzmake does not overwrite an existing
+`<target>` unless you use `-f`.
 
 Examples:
 

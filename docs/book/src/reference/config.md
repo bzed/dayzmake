@@ -1,7 +1,7 @@
 # Configs: rapify, preprocess, derapify
 
-Config files (`config.cpp`, `.rvmat`, `model.cfg`) are text that DayZ reads in a binary form called *rapified*.
-These three commands convert between the two and run the preprocessor on its own. The examples use this layout
+Config files (`config.cpp`, `.rvmat`, `model.cfg`) are text. DayZ reads them in a binary form called *rapified*.
+These three commands convert between the two forms and run the preprocessor on its own. The examples use this layout
 (see [Config files and the preprocessor](../guides/configs.md) for the files):
 
 ```text
@@ -27,8 +27,8 @@ Arguments:
 
 | Argument | Meaning |
 |---|---|
-| `<source>` | The config text. Standard input when omitted; includes are then resolved against the current directory. |
-| `<target>` | The rapified file. Standard output when omitted. |
+| `<source>` | The config text. If you omit it, dayzmake reads standard input and resolves includes against the current directory. |
+| `<target>` | The rapified file. If you omit it, dayzmake writes to standard output. |
 
 Options:
 
@@ -37,37 +37,45 @@ Options:
 | `-v`, `--verbose` | off | Show every warning instead of ten per name. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. |
 | `-w <wname>`, `--warning <wname>` | none | Mute a [warning](warnings.md) by name. Repeatable. |
-| `-i <includefolder>`, `--include <includefolder>` | none | Folder searched for absolute includes (`#include "\x\y.hpp"`). Repeatable. The current directory is only checked for the exact include path, never searched. |
+| `-i <includefolder>`, `--include <includefolder>` | none | Folder that dayzmake searches for absolute includes (`#include "\x\y.hpp"`). Repeatable. For the current directory, dayzmake only checks the exact include path and does not search. |
 
-An `enum { A, B = 5, C };` block is accepted at any class level. It is no class entry: its names go, lowercase and
-in source order, into the enum table of the rapified file. Values start at 0 and count up from the last explicit
-one, as in C. A name that occurs twice is accepted without a warning, like CfgConvert; the last value counts.
+dayzmake accepts an `enum { A, B = 5, C };` block at any class level. It is not a class entry. dayzmake puts its
+names, in lowercase and in source order, into the enum table of the rapified file. Values start at 0 and count up
+from the last explicit value, as in C. A name that occurs twice does not cause a warning, as in CfgConvert. The last
+value counts.
 
-Values are computed in `f32`, as CfgConvert does. A literal is rounded to `f32` and a value outside `i32` is
-`-2147483648` (so are `2147483647`, `2147483648`, `99999999999999999999` and `-2147483649`); hex keeps its low 32
+dayzmake computes values in `f32`, as CfgConvert does. It rounds a literal to `f32`. A value outside `i32` is
+`-2147483648` (so are `2147483647`, `2147483648`, `99999999999999999999` and `-2147483649`). Hex keeps its low 32
 bits at any length (`0x1FFFFFFFFF` is `-1`) and `0X` works. An implicit value is the last explicit value plus its
 distance, added in `f32`: `A = 16777217, B, C` gives `16777216`, `16777216`, `16777218`. `__EVAL` of large numbers
-keeps its exact floats; CfgConvert's imprecise low bits are not copied.
+keeps its exact floats. dayzmake does not copy the imprecise low bits of CfgConvert.
 
 Behaviour:
 
-- Reads `<source>`, runs the preprocessor (`#include`, `#define`, `#ifdef`, `__EVAL`, `__EXEC`, macros), parses
+- It reads `<source>`, runs the preprocessor (`#include`, `#define`, `#ifdef`, `__EVAL`, `__EXEC`, macros), parses
   the result as a config and writes it rapified.
-- Relative includes (`#include "inc/common.hpp"`) are resolved against the folder of the file that contains
-  the directive. Absolute includes (starting with `\`) are searched in the `-i` folders by path suffix and
-  `$PBOPREFIX$`. A missing include is an error naming the file and line.
-- A source that is already rapified is copied unchanged with the `prerapified-file` warning.
-- Syntax errors name the line and the token that was expected. Warnings the failed parse raised on the error's own line are dropped, those of earlier lines are kept. Values that are not quoted are accepted with the
-  `unquoted-string` warning and an entry without a value with `empty-value`.
-- A value entry (not an array or a class) may end at the line end instead of `;`, as in CfgConvert: `x = 1.5` keeps its number type, `"s"` and
-  `__EVAL(...)` values are evaluated as with `;` (`1e999` is an infinity, see below), and an integer that overflows is handled as with `;` (next bullet). An entry on the last line of a file
-  that has no line end after it is a syntax error, because CfgConvert rejects it too.
-- A decimal integer is stored by size, as in CfgConvert: an `i32` is a 32-bit integer, one that fits 64 but not 32 bits (`2147483648`) is a 64-bit integer entry (entry subtype 6; `derapify` and `api config` read it), one that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`). Arrays have no 64-bit element type: there a decimal that does not fit 32 bits (`3000000000`) is a float. Followed by text the value stays an unquoted string.
-- A hex literal without a sign keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`); `0X` works like `0x`. With a sign it is a float (`-0x10` is `-16.0`).
-- A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert; one that underflows
-  (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify` keeps
-  the value bit for bit. Followed by text (`1e999x`) the value stays an unquoted string.
-- `delete`, `class X: Y`, forward declarations and `+=` array appends are supported.
+- It resolves relative includes (`#include "inc/common.hpp"`) against the folder of the file that contains
+  the directive. It searches absolute includes (they start with `\`) in the `-i` folders by path suffix and by
+  `$PBOPREFIX$`. A missing include is an error that names the file and the line.
+- If the source is already rapified, dayzmake copies it unchanged and gives the `prerapified-file` warning.
+- A syntax error names the line and the token that dayzmake expected. dayzmake drops the warnings that the failed
+  parse raised on the line of the error. It keeps the warnings of earlier lines. It accepts values that are not
+  quoted and gives the `unquoted-string` warning. It accepts an entry without a value and gives `empty-value`.
+- A value entry (not an array or a class) can end at the line end instead of `;`, as in CfgConvert. `x = 1.5` keeps
+  its number type. dayzmake evaluates `"s"` and `__EVAL(...)` values as it does with `;` (`1e999` is an infinity,
+  see below). It handles an integer that overflows as it does with `;` (next bullet). An entry on the last line of a
+  file that has no line end after it is a syntax error, because CfgConvert rejects it too.
+- dayzmake stores a decimal integer by size, as CfgConvert does. An `i32` is a 32-bit integer. A number that fits 64
+  bits but not 32 bits (`2147483648`) is a 64-bit integer entry (entry subtype 6; `derapify` and `api config` read
+  it). A number that does not fit 64 bits (`99999999999999999999`) is a float (`1e20`). Arrays have no 64-bit
+  element type. In an array, a decimal that does not fit 32 bits (`3000000000`) is a float. If text follows the
+  value, the value stays an unquoted string.
+- A hex literal without a sign keeps its low 32 bits at any length (`0x1FFFFFFFFF` is `-1`, `0x100000000` is `0`).
+  `0X` works like `0x`. With a sign, the literal is a float (`-0x10` is `-16.0`).
+- A float that does not fit an f32 (`1e999`, `-1e39`) becomes an infinity, as in CfgConvert. A float that underflows
+  (`1e-999`) becomes 0. `derapify` writes an infinity as `1e999` or `-1e999`, so `derapify` followed by `rapify`
+  keeps the value bit for bit. If text follows the value (`1e999x`), the value stays an unquoted string.
+- dayzmake supports `delete`, `class X: Y`, forward declarations and `+=` array appends.
 
 Examples:
 
@@ -87,7 +95,7 @@ class CfgVehicles {
 };
 ```
 
-A macro argument that is used as an array element is not evaluated by the preprocessor:
+The preprocessor does not evaluate a macro argument that is an array element:
 
 ```text
 $ dayzmake rapify -i ../shared config.cpp -f config.bin      # with  {ITEM_SIZE, DOUBLE(2)}
@@ -96,7 +104,7 @@ In file config.cpp:10: warning: String array element "((2)*2)" is not quoted pro
 
 Use `__EVAL(2*2)` for arithmetic, as in the config above.
 
-Existing targets are protected:
+dayzmake protects an existing target:
 
 ```text
 $ dayzmake rapify -i ../shared config.cpp config.bin
@@ -130,8 +138,8 @@ dayzmake preprocess [-v] [-f] [-w <wname>]... [-i <includefolder>]... [<source> 
 
 </div>
 
-Arguments and options are those of [rapify](#dayzmake-rapify): `<source>` defaults to standard input, `<target>`
-to standard output, and `-v`, `-f`, `-w` and `-i` mean the same.
+The arguments and options are those of [rapify](#dayzmake-rapify). `<source>` defaults to standard input and
+`<target>` defaults to standard output. The options `-v`, `-f`, `-w` and `-i` have the same meaning.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -142,12 +150,13 @@ to standard output, and `-v`, `-f`, `-w` and `-i` mean the same.
 
 Behaviour:
 
-- The output is the text after includes, macros and conditionals. Leading indentation is removed and the
-  directives leave blank lines behind.
-- `__EVAL` is not evaluated here; it is evaluated when the config is parsed by `rapify`.
-- The `include-case` warning is raised when an include only matches ignoring case, and `macro-arg-count` when
-  a macro is called with the wrong number of arguments. A `//` comment may end at the end of the file without a line
-  end, and an unterminated `/*` runs to the end of the file, as in CfgConvert, with the warning `unterminated-comment`.
+- The output is the text after includes, macros and conditionals. dayzmake removes leading indentation, and the
+  directives leave blank lines.
+- This command does not evaluate `__EVAL`. `rapify` evaluates it when it parses the config.
+- The `include-case` warning appears when an include matches only if you ignore case. The `macro-arg-count`
+  warning appears when a macro has the wrong number of arguments. A `//` comment can end at the end of the file
+  without a line end. An unterminated `/*` runs to the end of the file, as in CfgConvert, and gives the warning
+  `unterminated-comment`.
 
 Example:
 
@@ -171,7 +180,7 @@ absorbency = 0.5;
 
 ```
 
-Without `-i`, the absolute include cannot be found:
+Without `-i`, dayzmake cannot find the absolute include:
 
 ```text
 $ dayzmake preprocess config.cpp
@@ -194,23 +203,23 @@ dayzmake derapify [-v] [-f] [-d <indentation>] [<source> [<target>]]
 
 | Argument | Meaning |
 |---|---|
-| `<source>` | The rapified config (a `config.bin`). Standard input when omitted. |
-| `<target>` | The text file. Standard output when omitted. |
+| `<source>` | The rapified config (a `config.bin`). If you omit it, dayzmake reads standard input. |
+| `<target>` | The text file. If you omit it, dayzmake writes to standard output. |
 
 | Option | Default | Meaning |
 |---|---|---|
 | `-v`, `--verbose` | off | Verbose output. |
 | `-f`, `--force` | off | Overwrite an existing `<target>`. |
-| `-d <indentation>`, `--indent <indentation>` | four spaces | The string written once per nesting level. Only spaces and tabs are accepted, at most 64 characters; an empty string gives unindented output. Anything else is an error and nothing is written. |
+| `-d <indentation>`, `--indent <indentation>` | four spaces | The string that dayzmake writes once for each nesting level. Use only spaces and tabs, at most 64 characters. An empty string gives output without indentation. Anything else is an error, and dayzmake writes nothing. |
 
 Behaviour:
 
-- The input must be a rapified config; anything else is an error `Failed to read rapified config:`.
-- Macros and includes are already expanded in a rapified config, so the text is the expanded result. Comments
-  are not stored and cannot be restored.
-- The enum table of the file is printed first, as an `enum { name = value, ... };` block, with the names as stored
-  (lowercase). A table that is empty, missing or damaged produces no block and no error.
-- Class nesting depth and entry counts are limited when reading, so a hostile file cannot exhaust memory.
+- The input must be a rapified config. Anything else is the error `Failed to read rapified config:`.
+- A rapified config has the macros and includes already expanded, so the text is the expanded result. The rapified
+  file does not store comments, so dayzmake cannot restore them.
+- dayzmake prints the enum table of the file first, as an `enum { name = value, ... };` block, with the names as
+  stored (lowercase). A table that is empty, missing or damaged gives no block and no error.
+- dayzmake limits the class nesting depth and the entry counts when it reads, so a hostile file cannot use all memory.
 
 Examples:
 
@@ -229,7 +238,7 @@ class CfgVehicles {
 };
 ```
 
-`delete` and `+=` survive the round trip:
+`delete` and `+=` stay after the round trip:
 
 ```text
 $ dayzmake derapify t.bin

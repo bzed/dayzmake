@@ -1,8 +1,8 @@
 # Config files and the preprocessor
 
-DayZ configs (`config.cpp`, `.rvmat`, `model.cfg`) are written in a C-like language with a preprocessor. This
-guide shows what the preprocessor does, how includes are found and how to convert between the text and binary
-forms. The example has this layout:
+DayZ configs (`config.cpp`, `.rvmat`, `model.cfg`) use a C-like language with a preprocessor. This guide shows what
+the preprocessor does and how dayzmake finds includes. It also shows how to convert between the text form and the
+binary form. The example has this layout:
 
 ```text
 cfg/config.cpp
@@ -47,13 +47,14 @@ class CfgVehicles
 ## Two kinds of include
 
 - **Relative includes** (`"inc/common.hpp"`) are looked up next to the file that contains the `#include`.
-  Forward and backward slashes both work.
-- **Absolute includes** (`"\shared\lib\defs.hpp"`, starting with a backslash) name a path inside a PBO. The folders
-  given with `-i` are searched for a file whose path ends in that path, taking `$PBOPREFIX$` into account: the
-  folder `shared` has the prefix `shared`, so `\shared\lib\defs.hpp` is `shared/lib/defs.hpp`. The current
-  directory is only checked for the exact path, never searched, so it is safe to run dayzmake in a big folder.
+  Forward slashes and backslashes both work.
+- **Absolute includes** (`"\shared\lib\defs.hpp"`, which start with a backslash) name a path inside a PBO.
+  dayzmake searches the folders that you give with `-i` for a file whose path ends in that path. It uses
+  `$PBOPREFIX$` for this: the folder `shared` has the prefix `shared`, so `\shared\lib\defs.hpp` is
+  `shared/lib/defs.hpp`. dayzmake does not search the current directory. It only checks the exact path there, so it
+  is safe to run dayzmake in a big folder.
 
-Without `-i`, the absolute include is not found, and the error names file and line:
+Without `-i`, dayzmake does not find the absolute include. The error names the file and the line:
 
 ```text
 $ cd cfg
@@ -83,11 +84,11 @@ absorbency = 0.5;
 
 ```
 
-`ITEM_SIZE` and `BASE_WEIGHT` were replaced, `LABEL(Spare part)` became a quoted string through `#x`, and the
-two include lines left blank lines. `__EVAL(2*2)` is only evaluated when the config is parsed.
+The preprocessor replaced `ITEM_SIZE` and `BASE_WEIGHT`. `LABEL(Spare part)` became a quoted string through `#x`.
+The two include lines left blank lines. The parser calculates `__EVAL(2*2)` later, when it reads the config.
 
-If an include matches only when case is ignored, dayzmake uses it and warns (`include-case`), because the game
-treats those names case-insensitively but your Linux file system does not:
+If an include matches only when dayzmake ignores the case, dayzmake uses the file and gives a warning
+(`include-case`). The game ignores the case of these names, but your Linux file system does not:
 
 ```text
 $ dayzmake rapify inc.cpp /dev/null -f
@@ -112,16 +113,16 @@ class CfgVehicles {
 };
 ```
 
-`__EVAL` has been calculated, the macros are gone and comments are not kept. `derapify` is how you read the
-`config.bin` of any PBO (`dayzmake cat some.pbo config.bin | dayzmake derapify`). Both commands read standard input
-and write standard output when the file arguments are left out, so they work in pipelines.
+The output has the `__EVAL` result, no macros and no comments. Use `derapify` to read the `config.bin` of any PBO
+(`dayzmake cat some.pbo config.bin | dayzmake derapify`). If you leave out the file arguments, both commands read
+standard input and write standard output. You can use them in pipelines.
 
-You rarely need `rapify` yourself: `build` rapifies every `.cpp` and `.rvmat` in the folder and passes the
-include folders on (`dayzmake build -i ../shared mymod mymod.pbo`).
+You seldom need `rapify` yourself. `build` rapifies each `.cpp` and `.rvmat` in the folder and gives the include
+folders to the parser (`dayzmake build -i ../shared mymod mymod.pbo`).
 
 ## Mistakes the parser reports
 
-An unquoted value is accepted with a warning, and `delete` and `+=` are supported:
+dayzmake accepts an unquoted value and gives a warning. It supports `delete` and `+=`:
 
 ```text
 $ dayzmake rapify warn.cpp w.bin        # class A { name = hello; z = ; };
@@ -130,7 +131,7 @@ In file warn.cpp:1: warning: Entry "z" has no value; it is stored as an empty st
 $ dayzmake rapify -w unquoted-string -w empty-value warn.cpp -f w.bin
 ```
 
-A real syntax error stops the command:
+A syntax error stops the command:
 
 ```text
 $ dayzmake rapify bad.cpp        # class A { x = 1   (no final newline)
@@ -142,7 +143,7 @@ error: In line bad.cpp:1:
 Unexpected token "\n", expected: one of ".", ";", ['0'..='9'], ['e' | 'E'], [_]
 ```
 
-A macro called with the wrong number of arguments is a warning that names the line:
+A macro call with the wrong number of arguments gives a warning that names the line:
 
 ```text
 $ dayzmake rapify mac.cpp -f /dev/null        # #define M(a,b) a+b / class A { x = M(1); };
@@ -150,4 +151,4 @@ In file mac.cpp:2: warning: Macro "M" expects 2 argument(s), got 1 [macro-arg-co
 In file mac.cpp:2: warning: Entry "x" has no value; it is stored as an empty string. [empty-value]
 ```
 
-See the [reference](../reference/config.md) for every option.
+For every option, see the [reference](../reference/config.md).
