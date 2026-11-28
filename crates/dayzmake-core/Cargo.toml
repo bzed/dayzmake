@@ -24,6 +24,8 @@ sign = ["dep:rsa", "dep:getrandom", "dep:zeroize"]
 image = ["dep:image"]
 # Navmesh generation (`navmesh` module): the data-server client and wire format, the tile builder and the `.nm` reader and writer.
 navmesh = ["dep:safe_arch"]
+# `navmesh::testing`: a fake navmesh data server and the synthetic 3x3 world, for tests of programs that call `navmesh::generate`.
+navmesh-testing = ["navmesh"]
 
 [dependencies]
 byteorder = "1.5"

@@ -10,7 +10,7 @@ use dayzmake_core::navmesh::wire::{
     encode_tile_request,
 };
 
-#[path = "support/navmesh_world.rs"]
+#[path = "../src/navmesh/testing/world.rs"]
 mod navmesh_world;
 
 /// The synthetic world of spec 13.2.

@@ -2,11 +2,7 @@
 //! server and a capture of the synthetic world.
 #![cfg_attr(
     unix,
-    expect(
-        clippy::expect_used,
-        clippy::indexing_slicing,
-        reason = "a failing expect is a failing test; the shared fake server indexes a checked payload"
-    )
+    expect(clippy::expect_used, reason = "a failing expect is a failing test")
 )]
 // the CLI is run with unix-style environment variables and paths only
 #![cfg(unix)]
@@ -20,9 +16,9 @@ use dayzmake_core::navmesh::build::DoorPolicy;
 use dayzmake_core::navmesh::capture::CaptureWriter;
 use serde_json::Value;
 
-#[path = "../crates/dayzmake-core/tests/support/navmesh_server.rs"]
+#[path = "../crates/dayzmake-core/src/navmesh/testing/server.rs"]
 mod navmesh_server;
-#[path = "../crates/dayzmake-core/tests/support/navmesh_world.rs"]
+#[path = "../crates/dayzmake-core/src/navmesh/testing/world.rs"]
 mod navmesh_world;
 
 use navmesh_server::{FakeServer, Faults};
@@ -104,7 +100,7 @@ fn s(p: &Path) -> &str {
 
 fn server() -> (FakeServer, String) {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none());
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
     let addr = server.addr().to_string();
     (server, addr)
 }
@@ -471,7 +467,8 @@ fn generate_failed_tiles_exit_1_but_save_the_mesh() {
         params,
         tiles,
         Faults::always(navmesh_server::Fault::Malformed),
-    );
+    )
+    .expect("start fake server");
     let addr = server.addr().to_string();
     let nm = env.path("out.nm");
     let out = env.run(&[

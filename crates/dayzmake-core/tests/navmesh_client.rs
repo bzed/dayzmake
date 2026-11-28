@@ -3,7 +3,6 @@
 #![cfg(feature = "navmesh")]
 #![expect(
     clippy::expect_used,
-    clippy::indexing_slicing,
     reason = "test code; the workspace clippy.toml exceptions only reach the root crate"
 )]
 
@@ -18,7 +17,7 @@ use dayzmake_core::navmesh::wire::{
 };
 use dayzmake_core::warning::Warnings;
 
-#[path = "support/navmesh_server.rs"]
+#[path = "../src/navmesh/testing/server.rs"]
 mod navmesh_server;
 
 use navmesh_server::{FakeServer, Fault, Faults};
@@ -107,7 +106,7 @@ fn host_parse_and_display() {
 
 #[test]
 fn probe_world_params() {
-    let server = FakeServer::start(world(), tiles(), Faults::none());
+    let server = FakeServer::start(world(), tiles(), Faults::none()).expect("start fake server");
     let mut client = client_for(&server);
     assert_eq!(client.world_params().expect("params"), world());
     assert_eq!(server.connections(), 1);
@@ -115,7 +114,7 @@ fn probe_world_params() {
 
 #[test]
 fn tile_fetch() {
-    let server = FakeServer::start(world(), tiles(), Faults::none());
+    let server = FakeServer::start(world(), tiles(), Faults::none()).expect("start fake server");
     let mut client = client_for(&server);
     let w = client.world_params().expect("params");
     let t = client.tile(1, 0, &w).expect("tile");
@@ -129,14 +128,15 @@ fn tile_fetch() {
 #[test]
 fn tile_without_world_params_request() {
     // Secondary fetch connections send a tile request first (spec 3.1).
-    let server = FakeServer::start(world(), tiles(), Faults::none());
+    let server = FakeServer::start(world(), tiles(), Faults::none()).expect("start fake server");
     let mut client = client_for(&server);
     assert_eq!(client.tile(0, 0, &world()).expect("tile"), tile(0, 0));
 }
 
 #[test]
 fn wrong_tile_is_network_error_and_retried() {
-    let server = FakeServer::start(world(), tiles(), Faults::script(&[Fault::WrongTile]));
+    let server = FakeServer::start(world(), tiles(), Faults::script(&[Fault::WrongTile]))
+        .expect("start fake server");
     let mut client = client_for(&server);
     let t = client.tile(0, 0, &world()).expect("tile");
     assert_eq!(t, tile(0, 0));
@@ -146,7 +146,8 @@ fn wrong_tile_is_network_error_and_retried() {
 
 #[test]
 fn wrong_message_and_unknown_cell_class_are_network_errors() {
-    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::WrongMessage));
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::WrongMessage))
+        .expect("start fake server");
     let mut client = client_for(&server);
     let e = client.tile(0, 0, &world()).expect_err("fails");
     assert!(matches!(e, FetchError::Network(_)), "{e}");
@@ -157,7 +158,7 @@ fn wrong_message_and_unknown_cell_class_are_network_errors() {
 
     let mut odd = tile(0, 0);
     odd.cell_class = 7;
-    let server = FakeServer::start(world(), vec![odd], Faults::none());
+    let server = FakeServer::start(world(), vec![odd], Faults::none()).expect("start fake server");
     let mut client = client_for(&server);
     let e = client.tile(0, 0, &world()).expect_err("fails");
     assert!(matches!(e, FetchError::Network(_)), "{e}");
@@ -167,7 +168,8 @@ fn wrong_message_and_unknown_cell_class_are_network_errors() {
 
 #[test]
 fn malformed_tile_is_wire_error_not_retried() {
-    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Malformed));
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Malformed))
+        .expect("start fake server");
     let mut client = client_for(&server);
     let e = client.tile(0, 0, &world()).expect_err("fails");
     assert!(matches!(e, FetchError::Wire(_)), "{e}");
@@ -177,7 +179,8 @@ fn malformed_tile_is_wire_error_not_retried() {
 
 #[test]
 fn retries_give_up_after_five() {
-    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Close));
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Close))
+        .expect("start fake server");
     let mut client = client_for(&server);
     let e = client.tile(0, 0, &world()).expect_err("fails");
     assert!(matches!(e, FetchError::Network(_)), "{e}");
@@ -187,7 +190,8 @@ fn retries_give_up_after_five() {
 
 #[test]
 fn a_closed_connection_says_which_server_closed_it() {
-    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Close));
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Close))
+        .expect("start fake server");
     let mut client = client_for(&server);
     let e = client.tile(0, 0, &world()).expect_err("fails");
     let text = e.to_string();
@@ -205,7 +209,8 @@ fn frame_length_rules() {
         (Fault::ShortFrame, "invalid frame"),
         (Fault::HugeFrame, "invalid frame"),
     ] {
-        let server = FakeServer::start(world(), tiles(), Faults::always(fault));
+        let server =
+            FakeServer::start(world(), tiles(), Faults::always(fault)).expect("start fake server");
         let mut client = client_for(&server);
         let e = client.tile(0, 0, &world()).expect_err("fails");
         assert!(matches!(e, FetchError::Network(_)), "{e}");
@@ -230,7 +235,8 @@ fn recv_timeout_is_a_network_error() {
 #[test]
 fn recv_timeout_covers_the_whole_message() {
     // Every single read returns within the timeout; the message as a whole does not.
-    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Trickle));
+    let server = FakeServer::start(world(), tiles(), Faults::always(Fault::Trickle))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut p = policy();
     p.recv_timeout = Duration::from_millis(50);
@@ -261,7 +267,7 @@ fn connect_refused_names_host() {
 
 #[test]
 fn world_params_error_is_one_attempt() {
-    let server = FakeServer::start(world(), tiles(), Faults::none());
+    let server = FakeServer::start(world(), tiles(), Faults::none()).expect("start fake server");
     let mut client = client_for(&server);
     drop(server);
     assert!(client.world_params().is_err());
