@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 
+use dayzmake_core::error::ErrorExt;
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 
 /// What the server does with one tile request (message 3).
@@ -144,11 +145,11 @@ impl FakeServer {
     ///
     /// Returns the I/O error when the server cannot bind `127.0.0.1:0` or read its address.
     pub fn start(params: WorldParams, tiles: Vec<TileInput>, faults: Faults) -> io::Result<Self> {
-        let context = |what: &'static str| {
-            move |e: io::Error| io::Error::new(e.kind(), format!("fake server: {what}: {e}"))
-        };
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(context("bind 127.0.0.1:0"))?;
-        let addr = listener.local_addr().map_err(context("local address"))?;
+        let listener =
+            TcpListener::bind("127.0.0.1:0").prepend_error("fake server: bind 127.0.0.1:0")?;
+        let addr = listener
+            .local_addr()
+            .prepend_error("fake server: local address")?;
         let shared = Arc::new(Shared {
             params,
             tiles,
@@ -160,7 +161,10 @@ impl FakeServer {
         });
         let thread = {
             let shared = Arc::clone(&shared);
-            thread::spawn(move || accept_loop(&listener, &shared))
+            thread::Builder::new()
+                .name("navmesh-fake-server".into())
+                .spawn(move || accept_loop(&listener, &shared))
+                .prepend_error("fake server: start the accept thread")?
         };
         Ok(Self {
             addr,

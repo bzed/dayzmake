@@ -72,7 +72,7 @@ pub fn world_params() -> WorldParams {
 
 /// The rolling ground of the world: about 10 m, minus a 3 m pond hollow within 12 m of (30, 105).
 #[must_use]
-pub fn ground(x: f32, z: f32) -> f32 {
+pub(crate) fn ground(x: f32, z: f32) -> f32 {
     let mut y = 10.0 + 1.5 * (0.05 * x).sin() * (0.07 * z).cos();
     let d = ((x - 30.0) * (x - 30.0) + (z - 105.0) * (z - 105.0)).sqrt();
     if d < 12.0 {
@@ -117,7 +117,7 @@ fn quad(out: &mut Vec<V>, a: V, b: V, c: V, d: V, outward: V) {
 
 /// An axis-aligned box, outward facing.
 #[must_use]
-pub fn cuboid(min: V, max: V) -> Vec<V> {
+pub(crate) fn cuboid(min: V, max: V) -> Vec<V> {
     let mut out = Vec::new();
     let p = |x: usize, y: usize, z: usize| -> V {
         [
@@ -239,11 +239,9 @@ fn part(part_index: u32, object_id: u64, first_vertex: usize) -> TilePart {
 
 /// Terrain covering the tile and 10 m beyond it, on a 2 m grid, in server winding (faces up).
 ///
-/// # Panics
-///
-/// Panics when the tile is not 50 m wide in x and z. This is test support, not a reader of input.
+/// The tile must be 50 m wide in x and z; the function asserts that.
 #[must_use]
-pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
+pub(crate) fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
     let mut out = Vec::new();
     // Tiles are 50 m wide: 10 m on each side makes 70 m, 35 cells of 2 m.
     for (lo, hi) in tmin.iter().zip(&tmax) {
@@ -270,7 +268,7 @@ pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
 
 /// The input of tile `(x, z)`.
 #[must_use]
-pub fn tile_input(x: i32, z: i32) -> TileInput {
+pub(crate) fn tile_input(x: i32, z: i32) -> TileInput {
     let coord = |c: i32| f32::from(i16::try_from(c).unwrap_or(0)) * 50.0;
     let tmin = [coord(x), coord(z)];
     let tmax = [tmin[0] + 50.0, tmin[1] + 50.0];
@@ -392,12 +390,12 @@ pub fn synthetic_world() -> (WorldParams, Vec<TileInput>) {
 
 /// A hexagonal tree prism of radius 0.35 and 6 m height standing on `y` at `(x, z)`.
 #[must_use]
-pub fn tree_prism(x: f32, z: f32, y: f32) -> Vec<[f32; 3]> {
+pub(crate) fn tree_prism(x: f32, z: f32, y: f32) -> Vec<[f32; 3]> {
     prism(x, z, y, y + 6.0, 0.35)
 }
 
 /// A door box 1 m wide, 0.3 m deep and 2.5 m high standing on `y`, from `x` to `x + 1` at z 25.
 #[must_use]
-pub fn door_box(x: f32, y: f32) -> Vec<[f32; 3]> {
+pub(crate) fn door_box(x: f32, y: f32) -> Vec<[f32; 3]> {
     cuboid([x, y, 25.0], [x + 1.0, y + 2.5, 25.3])
 }

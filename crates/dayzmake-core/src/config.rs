@@ -303,9 +303,9 @@ peg::parser! {
             for (n, v) in v {
                 match v {
                     Some(explicit) => { base = enum_i32_to_f32(enum_f32_to_i32(explicit)); distance = 0.0; }
-                    // From 2^24 on, `+ 1.0` no longer changes an f32, so the implicit
-                    // values stop counting up there. CfgConvert counts the same way
-                    // (see the `enum_f32_count` golden), so this is kept.
+                    // After 2^24 implicit entries in a row, `+ 1.0` no longer changes the f32
+                    // `distance`, so the values stop counting up there. CfgConvert adds base and
+                    // distance in f32 too (see the `enum_f32_count` golden), so this is kept.
                     None => distance += 1.0,
                 }
                 out.push((n.to_ascii_lowercase(), enum_f32_to_i32(base + distance)));
