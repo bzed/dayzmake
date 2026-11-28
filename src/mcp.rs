@@ -1223,12 +1223,12 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
             };
             let cat = bool_arg(args, "cat")?;
             let lines = opt_str(args, "lines")?;
-            let has_target = opt_path(args, "target")?.is_some();
-            if has_target && (context.is_some() || lines.is_some()) {
+            let target = opt_path(args, "target")?;
+            if target.is_some() && (context.is_some() || lines.is_some()) {
                 // the CLI's `api src` has no target at all; here it only belongs to cat
                 return Err(error!("target cannot be combined with context or lines"));
             }
-            if has_target && !cat {
+            if target.is_some() && !cat {
                 return Err(error!("target is only used with cat"));
             }
             if let Some(range) = api::SrcRange::parse(cat, context.as_deref(), lines.as_deref())? {
@@ -1236,7 +1236,7 @@ fn api_tool_call(name: &str, args: &Args, warnings: &mut dyn WarningSink) -> Res
             }
             if cat {
                 let text = api::src_cat(&ctx, &name, json, warnings)?;
-                return match opt_path(args, "target")? {
+                return match target {
                     Some(target) => {
                         write_target(&target, text.as_bytes(), bool_arg(args, "force")?)
                     }

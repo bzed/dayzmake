@@ -71,7 +71,7 @@ Generated 2026-10-31 with DayZ Tools (Steam app 830640) under Proton Hotfix.
   files are CfgConvert's table (its order is not source order, so `golden_enum_f32` compares the values sorted by name). Enum values go through f32:
   `A = 2147483647`, `2147483648`, `4294967296`, `99999999999999999999`, `-2147483649` each followed by `B` give -2147483648 twice (`enum_f32_wide`);
   `A = 16777217, B` gives 16777216 twice, `C = 2147483520, D` 2147483520 twice, `E = 2147483584, F` -2147483648 twice (`enum_f32_round`); `enum { A = 0x1FFFFFFFFF, B = 0X10 }`
-  gives -1 and 16, `a = A` staying the string `"A"` (`enum_hex_wide`); `enum_f32_hex`: `0x7FFFFFFF, B` gives -2147483648 twice (the wrapped hex goes through f32 too),
+  gives -1 and 16 (`enum_hex_wide`); `enum_f32_hex`: `0x7FFFFFFF, B` gives -2147483648 twice (the wrapped hex goes through f32 too),
   `0xFFFFFFFF, D` gives -1, 0, `0x01000001, F` 16777216 twice, `-0x1000001, H` -16777216, -16777215; `enum_f32_neg`: `-16777217, B` gives -16777216, -16777215,
   `-2147483648, D` -2147483648 twice, `E = 16777216, F, G` 16777216, 16777216, 16777218 (the implicit value is the last explicit one plus the distance, added in f32,
   not the previous value plus 1), `H = -2147483520, I, J` -2147483520 three times; `enum_f32_count`: `A = 16777216, B1..B6, C = 5, D, E` gives 16777216, 16777216,

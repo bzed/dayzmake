@@ -295,7 +295,7 @@ peg::parser! {
 
         /// `enum { name [= int], ... }`: values count up from the last explicit one, names are stored lowercase. The
         /// values are computed in `f32` like `CfgConvert` does (`enum_literal_value`, `enum_f32_to_i32`).
-        rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {?
+        rule enum_block() -> Vec<(String, i32)> = quiet!{"enum"} whitespace()? "{" whitespace()? v:(enum_value() ** (whitespace()? "," whitespace()?)) whitespace()? ","? whitespace()? "}" {
             let mut base = 0.0_f32;
             // the first implicit value is 0, so the distance starts one below
             let mut distance = -1.0_f32;
@@ -303,11 +303,14 @@ peg::parser! {
             for (n, v) in v {
                 match v {
                     Some(explicit) => { base = enum_i32_to_f32(enum_f32_to_i32(explicit)); distance = 0.0; }
+                    // From 2^24 on, `+ 1.0` no longer changes an f32, so the implicit
+                    // values stop counting up there. CfgConvert counts the same way
+                    // (see the `enum_f32_count` golden), so this is kept.
                     None => distance += 1.0,
                 }
                 out.push((n.to_ascii_lowercase(), enum_f32_to_i32(base + distance)));
             }
-            Ok(out)
+            out
         }
 
         rule array_item(d: usize) -> Item =
