@@ -17,6 +17,7 @@ limits recursion.
 | `sign` | yes | the `sign` module (BI keys, `.bisign` creation and verification) |
 | `image` | yes | `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the re-exported `image` crate |
 | `navmesh` | yes | the `navmesh` module: the navmesh data-server client and wire format, captures (`.dzgeo`), the Recast/Detour tile builder and the `.nm` reader and writer (`navmesh::generate::generate`) |
+| `navmesh-testing` | no | `navmesh::testing`: a fake navmesh data server (`FakeServer`, `Faults`) and the synthetic 3x3 world (`synthetic_world`), for tests of programs that call `navmesh::generate::generate` with `Source::Servers` |
 
 With `default-features = false`, the crate builds without `sign`, `image` and `navmesh`. You can still read and
 write PBOs, configs, P3D and PAA.
@@ -38,6 +39,11 @@ zlib notice. They also say that they were ported to Rust, that they were altered
 software. The zlib licence is compatible with GPL-2.0-or-later.
 
 ## Changes
+
+### Unreleased (0.4.0)
+
+- Breaking: the feature `image` uses `image` 0.25 (was 0.24). The re-export `dayzmake_core::image` changes with it. Only the image formats of the 0.24 default set are enabled (no AVIF).
+- New feature `navmesh-testing` (off by default; it enables `navmesh`): the module `navmesh::testing` with `FakeServer`, `Fault`, `Faults` and `synthetic_world`. Use it to test programs that call `navmesh::generate::generate` with `Source::Servers`. The frame format stays internal: use the fake server, do not copy its wire code.
 
 ### 0.3.1
 

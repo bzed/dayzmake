@@ -2284,7 +2284,6 @@ mod from_pbo {
             .expect("hit");
         let text = line.split_once("lg\\a.c:1: ").expect("sep").1;
         let cut = text.strip_suffix(" [\u{2026}]").expect("marker");
-        assert!(cut.len() <= 512, "{}", cut.len());
         assert_eq!(cut.len(), 509);
         assert!(cut.ends_with('\u{1F600}'), "{cut}");
     }

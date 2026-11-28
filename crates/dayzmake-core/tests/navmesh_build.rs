@@ -8,7 +8,7 @@ use dayzmake_core::navmesh::build::{
 use dayzmake_core::navmesh::detour::TileData;
 use dayzmake_core::navmesh::wire::{TileGroup, TileInput, TilePart};
 
-#[path = "support/navmesh_world.rs"]
+#[path = "../src/navmesh/testing/world.rs"]
 mod navmesh_world;
 use navmesh_world::{synthetic_world, terrain, world_params};
 

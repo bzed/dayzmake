@@ -88,7 +88,7 @@ fn bi_file(name: &str) -> (Vec<u8>, usize) {
 fn mipmap_size(bytes: &[u8], hdr: usize) -> usize {
     let [a, b, c] = bytes[hdr + 4..hdr + 7].try_into().unwrap();
     let size = usize::from(a) | usize::from(b) << 8 | usize::from(c) << 16;
-    assert!(4 < size && size < 0x100_0000, "mipmap size {size}");
+    assert!(size > 4, "mipmap size {size}");
     assert!(
         hdr + 7 + size <= bytes.len(),
         "mipmap size {size} past the file"
@@ -98,7 +98,7 @@ fn mipmap_size(bytes: &[u8], hdr: usize) -> usize {
 
 /// A size as 3 bytes, little-endian.
 fn u24_le(size: usize) -> [u8; 3] {
-    assert!(size < 0x100_0000);
+    assert!(size < 0x100_0000, "size {size} does not fit in 3 bytes");
     let b = size.to_le_bytes();
     [b[0], b[1], b[2]]
 }

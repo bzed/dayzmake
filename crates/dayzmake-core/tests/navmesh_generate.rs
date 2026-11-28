@@ -3,7 +3,6 @@
 #![cfg(feature = "navmesh")]
 #![expect(
     clippy::expect_used,
-    clippy::indexing_slicing,
     reason = "test code; the workspace clippy.toml exceptions only reach the root crate"
 )]
 
@@ -21,9 +20,9 @@ use dayzmake_core::navmesh::generate::{
 use dayzmake_core::navmesh::wire::{TileInput, WorldBlock, WorldParams};
 use dayzmake_core::warning::Warnings;
 
-#[path = "support/navmesh_server.rs"]
+#[path = "../src/navmesh/testing/server.rs"]
 mod navmesh_server;
-#[path = "support/navmesh_world.rs"]
+#[path = "../src/navmesh/testing/world.rs"]
 mod navmesh_world;
 
 use navmesh_server::{FakeServer, Fault, Faults};
@@ -99,7 +98,11 @@ fn opts() -> GenerateOptions {
 
 type Watched = (io::Result<GenerateReport>, Warnings, Vec<Progress>);
 
-/// Runs `generate` on its own thread and fails the test when it does not return within 20 s (600 s under coverage), so a
+/// Time limit for one `generate` call. It catches only a real hang, such as a deadlocked scheduler that never
+/// returns. Slow runners (the Windows release job, coverage builds) take minutes on a working build.
+const WATCHDOG: Duration = Duration::from_secs(600);
+
+/// Runs `generate` on its own thread and fails the test when it does not return within `WATCHDOG`, so a
 /// deadlock in the scheduler fails a test instead of hanging CI.
 fn generate_watched(source: Source, options: &GenerateOptions) -> Watched {
     let options = options.clone();
@@ -116,15 +119,7 @@ fn generate_watched(source: Source, options: &GenerateOptions) -> Watched {
         // The receiver is gone only when the test already failed.
         let _ = tx.send((result, warnings, seen));
     });
-    // Under `cargo llvm-cov` (it sets LLVM_PROFILE_FILE) a tile build is about 100 times slower, and the
-    // tests of this file run side by side: there the limit only has to catch a real hang.
-    let limit = if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
-        600
-    } else {
-        20
-    };
-    rx.recv_timeout(Duration::from_secs(limit))
-        .expect("generate hung")
+    rx.recv_timeout(WATCHDOG).expect("generate hung")
 }
 
 fn run(source: Source, options: &GenerateOptions) -> (GenerateReport, Warnings) {
@@ -206,7 +201,7 @@ fn generate_from_server_equals_capture() {
     let mut options = opts();
     options.range = Some([0, 0, 1, 1]);
     let (from_capture, _) = run(Source::Capture(capture_of(&params, &tiles)), &options);
-    let server = FakeServer::start(params, tiles, Faults::none());
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
     options.retry = quick_retry();
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let (from_server, _) = run(Source::Servers(vec![host]), &options);
@@ -216,7 +211,8 @@ fn generate_from_server_equals_capture() {
 #[test]
 fn probe_returns_world_params() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params.clone(), tiles, Faults::none());
+    let server =
+        FakeServer::start(params.clone(), tiles, Faults::none()).expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     assert_eq!(
         probe(&host, &quick_retry()).expect("probe").world.tiles_x,
@@ -227,8 +223,9 @@ fn probe_returns_world_params() {
 #[test]
 fn threads_do_not_change_output() {
     let (params, tiles) = synthetic_world();
-    let a = FakeServer::start(params.clone(), tiles.clone(), Faults::none());
-    let b = FakeServer::start(params, tiles, Faults::none());
+    let a = FakeServer::start(params.clone(), tiles.clone(), Faults::none())
+        .expect("start fake server");
+    let b = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
     let hosts = || {
         vec![
             Host::parse(&a.addr().to_string()).expect("host"),
@@ -390,7 +387,7 @@ fn failing_checkpoint_stops_the_run_but_returns_the_report() {
 #[test]
 fn record_then_generate_from_record_is_equal() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none());
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
     let dir = tempfile::TempDir::new().expect("tmp");
     let path = dir.path().join("run.dzgeo");
     let mut options = opts();
@@ -429,7 +426,8 @@ fn report_seed_defaults_to_the_world_seed() {
 #[test]
 fn dead_connections_end_the_run_with_fetch_errors_in_plan_order() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::always(Fault::Close));
+    let server =
+        FakeServer::start(params, tiles, Faults::always(Fault::Close)).expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -461,8 +459,10 @@ fn dead_connections_end_the_run_with_fetch_errors_in_plan_order() {
 #[test]
 fn a_stopped_fetcher_hands_on_its_tile_and_the_others_continue() {
     let (params, tiles) = synthetic_world();
-    let good = FakeServer::start(params.clone(), tiles.clone(), Faults::none());
-    let bad = FakeServer::start(params, tiles, Faults::always(Fault::Close));
+    let good = FakeServer::start(params.clone(), tiles.clone(), Faults::none())
+        .expect("start fake server");
+    let bad =
+        FakeServer::start(params, tiles, Faults::always(Fault::Close)).expect("start fake server");
     let hosts = vec![
         Host::parse(&good.addr().to_string()).expect("host"),
         Host::parse(&bad.addr().to_string()).expect("host"),
@@ -483,7 +483,8 @@ fn a_stopped_fetcher_hands_on_its_tile_and_the_others_continue() {
 #[test]
 fn wire_errors_fail_the_tile_and_the_fetcher_continues() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::script(&[Fault::Malformed]));
+    let server = FakeServer::start(params, tiles, Faults::script(&[Fault::Malformed]))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -526,8 +527,8 @@ fn the_claim_window_bounds_the_reorder_buffer_and_the_output_is_unchanged() {
     // Both servers are slow for the first tile of the plan, whichever fetcher claims it, so the
     // other fetcher runs ahead until the window stops it.
     let slow = || Faults::none().slow_tile((0, 0), delay);
-    let a = FakeServer::start(params.clone(), tiles.clone(), slow());
-    let b = FakeServer::start(params.clone(), tiles.clone(), slow());
+    let a = FakeServer::start(params.clone(), tiles.clone(), slow()).expect("start fake server");
+    let b = FakeServer::start(params.clone(), tiles.clone(), slow()).expect("start fake server");
     let hosts = vec![
         Host::parse(&a.addr().to_string()).expect("host"),
         Host::parse(&b.addr().to_string()).expect("host"),
@@ -672,7 +673,8 @@ fn refused_connections_do_not_lose_their_tiles() {
     // Connections 1 to 3 (0 is the world params probe) are closed at once; with one attempt each the
     // three fetchers that got them die, and their tiles must go to the fourth.
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 3));
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 3))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -686,7 +688,8 @@ fn refused_connections_do_not_lose_their_tiles() {
 #[test]
 fn a_refused_connect_is_retried_with_backoff() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 2));
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 2))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -701,7 +704,8 @@ fn a_refused_connect_is_retried_with_backoff() {
 #[test]
 fn every_connection_dead_still_fails_the_tiles_once_each() {
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 100));
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 100))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -721,7 +725,8 @@ fn a_hand_back_reaches_fetchers_that_wait_in_the_claim_window() {
     // Window 1: only the holder of index 0 may fetch, and it gets the closed connection 1 (0 was the
     // probe). The holder of index 1 waits for the window; the hand-back of index 0 must wake it.
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 1));
+    let server = FakeServer::start(params, tiles, Faults::none().refuse_connections(1, 1))
+        .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -740,7 +745,8 @@ fn a_tile_that_gets_a_wrong_answer_fails_alone_and_the_connections_live() {
         params,
         tiles,
         Faults::none().fault_tile((1, 1), Fault::WrongMessage),
-    );
+    )
+    .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -760,7 +766,8 @@ fn a_tile_that_kills_two_connections_fails_alone() {
         params,
         tiles,
         Faults::none().fault_tile((1, 1), Fault::Close),
-    );
+    )
+    .expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -885,7 +892,7 @@ fn a_single_connection_is_not_closed_and_reopened_while_it_waits() {
     // Window 1: the fetcher waits for the assembler after every tile. With one connection nobody else
     // can use the server, so the connection stays: the probe and the fetcher, two connections in all.
     let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none());
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
     let host = Host::parse(&server.addr().to_string()).expect("host");
     let mut options = opts();
     options.retry = quick_retry();
@@ -907,7 +914,8 @@ fn a_poison_tile_with_waiting_fetchers_still_fails_alone() {
             params,
             tiles,
             Faults::none().fault_tile((1, 0), Fault::Close),
-        );
+        )
+        .expect("start fake server");
         let host = Host::parse(&server.addr().to_string()).expect("host");
         let mut options = opts();
         options.retry = quick_retry();

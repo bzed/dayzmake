@@ -4,6 +4,7 @@ use std::process::Command;
 
 use dayzmake_core::p3d::P3D;
 
+#[cfg(test)]
 #[path = "../crates/dayzmake-core/tests/support/odol_builder.rs"]
 mod odol_builder;
 

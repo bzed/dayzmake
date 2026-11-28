@@ -19,4 +19,7 @@ pub(crate) mod links;
 pub(crate) mod num;
 pub(crate) mod qsort;
 pub(crate) mod recast;
+#[cfg(feature = "navmesh-testing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "navmesh-testing")))]
+pub mod testing;
 pub mod wire;

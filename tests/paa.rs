@@ -245,3 +245,48 @@ fn img2paa_rejects_a_mipmap_of_16_mib_and_writes_no_file() {
     );
     assert!(!target.exists());
 }
+
+/// `img2paa` reads every image format of the `image` crate default set (#132).
+#[test]
+fn img2paa_reads_every_format_of_image_0_25() {
+    let dir = tempfile::tempdir().unwrap();
+    let opaque = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+        8,
+        8,
+        image::Rgb([10, 120, 200]),
+    ));
+    let alpha8 = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        8,
+        8,
+        image::Rgba([10, 120, 200, 255]),
+    ));
+    let float_img = image::DynamicImage::ImageRgb32F(image::Rgb32FImage::from_pixel(
+        8,
+        8,
+        image::Rgb([0.1, 0.5, 0.8]),
+    ));
+    let wide16 = image::DynamicImage::ImageRgba16(image::ImageBuffer::from_pixel(
+        8,
+        8,
+        image::Rgba([2570_u16, 30840, 51400, 65535]),
+    ));
+    for ext in [
+        "png", "jpg", "bmp", "tga", "tif", "webp", "gif", "ico", "qoi", "ppm", "ff", "exr", "hdr",
+    ] {
+        let src = match ext {
+            "exr" | "hdr" => &float_img,
+            "ff" => &wide16,
+            "jpg" | "ppm" => &opaque,
+            _ => &alpha8,
+        };
+        let path = dir.path().join(format!("in.{ext}"));
+        src.save(&path)
+            .unwrap_or_else(|e| panic!("encode {ext}: {e}"));
+        let out = dir.path().join(format!("out_{ext}.paa"));
+        let (code, err) = run(
+            &["img2paa", path.to_str().unwrap(), out.to_str().unwrap()],
+            dir.path(),
+        );
+        assert_eq!(code, 0, "{ext}: {err}");
+    }
+}

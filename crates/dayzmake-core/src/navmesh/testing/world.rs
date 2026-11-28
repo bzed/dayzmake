@@ -1,15 +1,18 @@
 //! The synthetic navmesh world of spec 13.2: 3 x 3 tiles of 50 x 50 m with rolling ground, a pond, a
 //! crate and a low wall, a room with a doorway and two door parts, five trees and a ladder.
 //!
-//! Self-contained (std and `dayzmake_core` only), so other test crates can include it with
-//! `#[path = ".../support/navmesh_world.rs"] mod navmesh_world;`.
+//! Self-contained (std and `dayzmake_core` only), so test crates of this workspace can also include it with
+//! `#[path = ".../src/navmesh/testing/world.rs"] mod navmesh_world;`. It is public as
+//! `dayzmake_core::navmesh::testing` with the feature `navmesh-testing`.
 //!
 //! The triangles are in server winding: `walkable(...)` (normal `cross(e2, e1)`) faces up for the
 //! terrain, and the build passes `(v0, v2, v1)` to the rasteriser.
 
 #![allow(
     dead_code,
-    reason = "shared by several test crates; not all of them use every helper"
+    clippy::field_reassign_with_default,
+    reason = "shared by several test crates; not all of them use every helper; the wire types are \
+              `non_exhaustive`, so a test crate that includes this file cannot use struct literals"
 )]
 
 use dayzmake_core::navmesh::wire::{
@@ -17,6 +20,7 @@ use dayzmake_core::navmesh::wire::{
 };
 
 /// World parameters of spec 13.2: 3 x 3 tiles, two cell classes, one link class.
+#[must_use]
 pub fn world_params() -> WorldParams {
     let mut world = WorldBlock::default();
     world.world_size_x = 150.0;
@@ -67,7 +71,8 @@ pub fn world_params() -> WorldParams {
 }
 
 /// The rolling ground of the world: about 10 m, minus a 3 m pond hollow within 12 m of (30, 105).
-pub fn ground(x: f32, z: f32) -> f32 {
+#[must_use]
+pub(crate) fn ground(x: f32, z: f32) -> f32 {
     let mut y = 10.0 + 1.5 * (0.05 * x).sin() * (0.07 * z).cos();
     let d = ((x - 30.0) * (x - 30.0) + (z - 105.0) * (z - 105.0)).sqrt();
     if d < 12.0 {
@@ -111,7 +116,8 @@ fn quad(out: &mut Vec<V>, a: V, b: V, c: V, d: V, outward: V) {
 }
 
 /// An axis-aligned box, outward facing.
-pub fn cuboid(min: V, max: V) -> Vec<V> {
+#[must_use]
+pub(crate) fn cuboid(min: V, max: V) -> Vec<V> {
     let mut out = Vec::new();
     let p = |x: usize, y: usize, z: usize| -> V {
         [
@@ -232,7 +238,10 @@ fn part(part_index: u32, object_id: u64, first_vertex: usize) -> TilePart {
 }
 
 /// Terrain covering the tile and 10 m beyond it, on a 2 m grid, in server winding (faces up).
-pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
+///
+/// The tile must be 50 m wide in x and z; the function asserts that.
+#[must_use]
+pub(crate) fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
     let mut out = Vec::new();
     // Tiles are 50 m wide: 10 m on each side makes 70 m, 35 cells of 2 m.
     for (lo, hi) in tmin.iter().zip(&tmax) {
@@ -258,7 +267,8 @@ pub fn terrain(tmin: [f32; 2], tmax: [f32; 2]) -> Vec<V> {
 }
 
 /// The input of tile `(x, z)`.
-pub fn tile_input(x: i32, z: i32) -> TileInput {
+#[must_use]
+pub(crate) fn tile_input(x: i32, z: i32) -> TileInput {
     let coord = |c: i32| f32::from(i16::try_from(c).unwrap_or(0)) * 50.0;
     let tmin = [coord(x), coord(z)];
     let tmax = [tmin[0] + 50.0, tmin[1] + 50.0];
@@ -370,6 +380,7 @@ pub fn tile_input(x: i32, z: i32) -> TileInput {
 }
 
 /// The world of spec 13.2 and the inputs of its 9 tiles, in x-then-z order.
+#[must_use]
 pub fn synthetic_world() -> (WorldParams, Vec<TileInput>) {
     let tiles = (0..3)
         .flat_map(|x| (0..3).map(move |z| tile_input(x, z)))
@@ -378,11 +389,13 @@ pub fn synthetic_world() -> (WorldParams, Vec<TileInput>) {
 }
 
 /// A hexagonal tree prism of radius 0.35 and 6 m height standing on `y` at `(x, z)`.
-pub fn tree_prism(x: f32, z: f32, y: f32) -> Vec<[f32; 3]> {
+#[must_use]
+pub(crate) fn tree_prism(x: f32, z: f32, y: f32) -> Vec<[f32; 3]> {
     prism(x, z, y, y + 6.0, 0.35)
 }
 
 /// A door box 1 m wide, 0.3 m deep and 2.5 m high standing on `y`, from `x` to `x + 1` at z 25.
-pub fn door_box(x: f32, y: f32) -> Vec<[f32; 3]> {
+#[must_use]
+pub(crate) fn door_box(x: f32, y: f32) -> Vec<[f32; 3]> {
     cuboid([x, y, 25.0], [x + 1.0, y + 2.5, 25.3])
 }

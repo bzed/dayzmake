@@ -1,11 +1,12 @@
 //! A fake navmesh data server for tests: binds `127.0.0.1:0`, serves one client connection at a time
 //! and answers message 2 with world params and message 3 from a list of tiles, with scripted faults.
 //!
-//! Self-contained (std and `dayzmake_core` only), so other test crates can include it with
-//! `#[path = ".../support/navmesh_server.rs"] mod navmesh_server;`.
+//! Self-contained (std and `dayzmake_core` only), so test crates of this workspace can also include it with
+//! `#[path = ".../src/navmesh/testing/server.rs"] mod navmesh_server;`. It is public as
+//! `dayzmake_core::navmesh::testing` with the feature `navmesh-testing`.
 //!
 //! ```ignore
-//! let server = FakeServer::start(params, vec![tile], Faults::none());
+//! let server = FakeServer::start(params, vec![tile], Faults::none())?;
 //! let host = Host::parse(&server.addr().to_string())?;
 //! // ... drive a client ...
 //! assert_eq!(server.connections(), 1);
@@ -25,10 +26,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 
+use dayzmake_core::error::ErrorExt;
 use dayzmake_core::navmesh::wire::{TileInput, WorldParams};
 
 /// What the server does with one tile request (message 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Fault {
     /// Answer with the requested tile.
     None,
@@ -63,11 +66,13 @@ pub struct Faults {
 
 impl Faults {
     /// No faults.
+    #[must_use]
     pub fn none() -> Self {
         Self::always(Fault::None)
     }
 
     /// The same fault for every request.
+    #[must_use]
     pub fn always(fault: Fault) -> Self {
         Self {
             script: Vec::new(),
@@ -79,6 +84,7 @@ impl Faults {
     }
 
     /// `script` for the first requests, then no fault.
+    #[must_use]
     pub fn script(script: &[Fault]) -> Self {
         Self {
             script: script.to_vec(),
@@ -90,18 +96,21 @@ impl Faults {
     }
 
     /// Every request for tile `(x, z)` gets `fault`; the other requests follow the other rules.
+    #[must_use]
     pub fn fault_tile(mut self, tile: (i32, i32), fault: Fault) -> Self {
         self.tile_fault = Some((tile, fault));
         self
     }
 
     /// Closes the connections `first..first + count` (counting from 0) as soon as they are accepted.
+    #[must_use]
     pub fn refuse_connections(mut self, first: usize, count: usize) -> Self {
         self.refuse = (first, count);
         self
     }
 
     /// Answers requests for tile `(x, z)` only after `delay` (a slow peer), whatever the other faults.
+    #[must_use]
     pub fn slow_tile(mut self, tile: (i32, i32), delay: std::time::Duration) -> Self {
         self.slow = Some((tile, delay));
         self
@@ -131,9 +140,16 @@ pub struct FakeServer {
 
 impl FakeServer {
     /// Starts a server for `params` and `tiles` with `faults`.
-    pub fn start(params: WorldParams, tiles: Vec<TileInput>, faults: Faults) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
-        let addr = listener.local_addr().expect("local addr");
+    ///
+    /// # Errors
+    ///
+    /// Returns the I/O error when the server cannot bind `127.0.0.1:0` or read its address.
+    pub fn start(params: WorldParams, tiles: Vec<TileInput>, faults: Faults) -> io::Result<Self> {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").prepend_error("fake server: bind 127.0.0.1:0")?;
+        let addr = listener
+            .local_addr()
+            .prepend_error("fake server: local address")?;
         let shared = Arc::new(Shared {
             params,
             tiles,
@@ -145,26 +161,32 @@ impl FakeServer {
         });
         let thread = {
             let shared = Arc::clone(&shared);
-            thread::spawn(move || accept_loop(&listener, &shared))
+            thread::Builder::new()
+                .name("navmesh-fake-server".into())
+                .spawn(move || accept_loop(&listener, &shared))
+                .prepend_error("fake server: start the accept thread")?
         };
-        Self {
+        Ok(Self {
             addr,
             shared,
             thread: Some(thread),
-        }
+        })
     }
 
     /// The address the server listens on.
+    #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
 
     /// Connections accepted so far.
+    #[must_use]
     pub fn connections(&self) -> usize {
         self.shared.connections.load(Ordering::SeqCst)
     }
 
     /// The `(x, z)` of every tile request received so far, in order.
+    #[must_use]
     pub fn requests(&self) -> Vec<(i32, i32)> {
         self.shared
             .requests
@@ -207,7 +229,7 @@ fn accept_loop(listener: &TcpListener, shared: &Shared) {
         }
         let number = shared.connections.fetch_add(1, Ordering::SeqCst);
         let (first, count) = shared.faults.refuse;
-        if number >= first && number - first < count {
+        if number >= first && number.saturating_sub(first) < count {
             // The peer may be gone: there is nothing to do if the shutdown fails.
             let _ = stream.shutdown(Shutdown::Both);
             continue;
@@ -238,18 +260,31 @@ fn accept_loop(listener: &TcpListener, shared: &Shared) {
     }
 }
 
+/// The largest request frame (length field) the server accepts. Requests are a few bytes; a larger
+/// length ends the connection instead of allocating.
+const MAX_REQUEST: u32 = 1 << 20;
+
 fn read_frame(s: &mut TcpStream) -> io::Result<(u32, Vec<u8>)> {
     let mut head = [0u8; 8];
     s.read_exact(&mut head)?;
-    let len = u32::from_le_bytes([head[0], head[1], head[2], head[3]]);
-    let id = u32::from_le_bytes([head[4], head[5], head[6], head[7]]);
-    let mut payload = vec![0u8; usize::try_from(len.saturating_sub(4)).expect("small")];
+    let [l0, l1, l2, l3, i0, i1, i2, i3] = head;
+    let len = u32::from_le_bytes([l0, l1, l2, l3]);
+    let id = u32::from_le_bytes([i0, i1, i2, i3]);
+    if !(4..=MAX_REQUEST).contains(&len) {
+        return Err(io::Error::other(format!("invalid frame length {len}")));
+    }
+    let payload_len = usize::try_from(len - 4).map_err(io::Error::other)?;
+    let mut payload = vec![0u8; payload_len];
     s.read_exact(&mut payload)?;
     Ok((id, payload))
 }
 
 fn write_frame(s: &mut TcpStream, id: u32, payload: &[u8]) -> io::Result<()> {
-    let len = u32::try_from(payload.len() + 4).expect("small");
+    let len = payload
+        .len()
+        .checked_add(4)
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| io::Error::other("frame too large"))?;
     let mut out = Vec::new();
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(&id.to_le_bytes());
@@ -269,15 +304,18 @@ fn serve(s: &mut TcpStream, shared: &Shared) -> io::Result<()> {
                 write_frame(s, 4, &body)?;
             }
             3 => {
-                let x = i32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-                let z = i32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+                let &[x0, x1, x2, x3, z0, z1, z2, z3, ..] = payload.as_slice() else {
+                    return Err(io::Error::other("short tile request"));
+                };
+                let x = i32::from_le_bytes([x0, x1, x2, x3]);
+                let z = i32::from_le_bytes([z0, z1, z2, z3]);
                 let index = {
                     let mut requests = shared
                         .requests
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner);
                     requests.push((x, z));
-                    requests.len() - 1
+                    requests.len().saturating_sub(1)
                 };
                 if let Some((tile, delay)) = shared.faults.slow
                     && tile == (x, z)
@@ -324,7 +362,12 @@ fn answer(s: &mut TcpStream, shared: &Shared, fault: Fault, x: i32, z: i32) -> i
         }
         Fault::Trickle => {
             let bytes = find(x, z).map(TileInput::encode).unwrap_or_default();
-            s.write_all(&u32::try_from(bytes.len() + 4).expect("small").to_le_bytes())?;
+            let len = bytes
+                .len()
+                .checked_add(4)
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| io::Error::other("frame too large"))?;
+            s.write_all(&len.to_le_bytes())?;
             s.write_all(&5u32.to_le_bytes())?;
             for b in bytes {
                 // Pacing a fake slow peer, not waiting for state.
@@ -333,7 +376,11 @@ fn answer(s: &mut TcpStream, shared: &Shared, fault: Fault, x: i32, z: i32) -> i
             }
         }
         Fault::WrongMessage => write_frame(s, 4, &[10, 0, 0, 0])?,
-        Fault::WrongTile => match find(x + 1, z).or_else(|| find(x, z)) {
+        Fault::WrongTile => match x
+            .checked_add(1)
+            .and_then(|next| find(next, z))
+            .or_else(|| find(x, z))
+        {
             Some(t) => write_frame(s, 5, &t.encode())?,
             None => return Ok(false),
         },

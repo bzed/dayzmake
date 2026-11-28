@@ -483,3 +483,23 @@ fn an_unknown_magic_is_still_invalid() {
         "{err}"
     );
 }
+
+/// A PNG decoded with the re-exported `image` (0.25: `ImageReader`) converts without a second decode (#132).
+#[cfg(feature = "image")]
+#[test]
+fn from_dynamic_image_takes_an_image_0_25_decoded_png() {
+    let mut png = Vec::new();
+    DynamicImage::ImageRgba8(RgbaImage::new(8, 8))
+        .write_to(
+            &mut std::io::Cursor::new(&mut png),
+            dayzmake_core::image::ImageFormat::Png,
+        )
+        .expect("encode");
+    let img = dayzmake_core::image::ImageReader::new(std::io::Cursor::new(png))
+        .with_guessed_format()
+        .expect("guess")
+        .decode()
+        .expect("decode");
+    let paa = Paa::from_dynamic_image(&img, PaaFormat::Dxt1).expect("paa");
+    assert_eq!((paa.width(), paa.height()), (8, 8));
+}

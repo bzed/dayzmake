@@ -212,6 +212,7 @@ fn mcp_stdout_is_pure_jsonrpc() {
 
 #[test]
 fn mcp_pbo_inspect_lists_an_odol_v56_model() {
+    #[cfg(test)]
     #[path = "../crates/dayzmake-core/tests/support/odol_builder.rs"]
     mod odol_builder;
     let tmp = tempfile::tempdir().expect("tmp");
@@ -266,6 +267,10 @@ fn mcp_missing_or_null_arguments_are_a_tool_error() {
     for reply in &r.replies {
         assert!(reply["error"].is_null(), "{reply}");
         assert!(is_error(reply), "{reply}");
+        assert!(
+            text(reply).contains("missing required argument \"path\""),
+            "{reply}"
+        );
     }
 }
 
@@ -1452,10 +1457,10 @@ fn mcp_config_tools_write_targets_and_sign_v2() {
 // ---- navmesh ----
 
 #[cfg(unix)]
-#[path = "../crates/dayzmake-core/tests/support/navmesh_server.rs"]
+#[path = "../crates/dayzmake-core/src/navmesh/testing/server.rs"]
 mod navmesh_server;
 #[cfg(unix)]
-#[path = "../crates/dayzmake-core/tests/support/navmesh_world.rs"]
+#[path = "../crates/dayzmake-core/src/navmesh/testing/world.rs"]
 mod navmesh_world;
 
 #[cfg(unix)]
@@ -1812,7 +1817,7 @@ mod navmesh {
     fn mcp_navmesh_probe_against_fake_server() {
         let tmp = tempfile::tempdir().expect("tmp");
         let (params, tiles) = synthetic_world();
-        let server = FakeServer::start(params, tiles, Faults::none());
+        let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
         let addr = server.addr().to_string();
         let r = run(
             &[
@@ -1846,7 +1851,7 @@ mod navmesh {
     fn mcp_navmesh_generate_from_server_with_record() {
         let tmp = tempfile::tempdir().expect("tmp");
         let (params, tiles) = synthetic_world();
-        let server = FakeServer::start(params, tiles, Faults::none());
+        let server = FakeServer::start(params, tiles, Faults::none()).expect("start fake server");
         let addr = server.addr().to_string();
         let r = run(
             &[call(

@@ -36,6 +36,7 @@
 //! - `image` (default): `Paa::from_dynamic_image`, `Paa::to_dynamic_image` and the
 //!   re-exported `image` crate.
 //! - `navmesh` (default): the `navmesh` module.
+//! - `navmesh-testing`: `navmesh::testing`, a fake navmesh data server and a synthetic world for tests.
 //!
 //! # Licence
 //!
@@ -101,6 +102,11 @@ pub mod fileid;
 pub(crate) mod io;
 /// Bohemia's LZSS compression.
 pub(crate) mod lzss;
+// Lets the files of `navmesh::testing` keep `use dayzmake_core::...` paths, so test crates can also
+// include them with `#[path]`.
+#[cfg(feature = "navmesh-testing")]
+extern crate self as dayzmake_core;
+
 #[cfg(feature = "navmesh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "navmesh")))]
 pub mod navmesh;

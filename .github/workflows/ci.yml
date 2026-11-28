@@ -42,6 +42,9 @@ jobs:
           cargo clippy -p dayzmake-core --no-default-features --features sign --lib --locked -- -D warnings
           cargo clippy -p dayzmake-core --no-default-features --features image --lib --locked -- -D warnings
           cargo test -p dayzmake-core --no-default-features --locked
+          cargo clippy -p dayzmake-core --no-default-features --features navmesh-testing --lib --locked -- -D warnings
+          cargo test -p dayzmake-core --features navmesh-testing --test navmesh_testing --locked
+          cargo test -p dayzmake-core --features navmesh-testing --doc --locked
       - name: Package check
         run: cargo package --workspace --locked
       - name: Coverage floor
