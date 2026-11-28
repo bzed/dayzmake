@@ -39,6 +39,10 @@ software. The zlib licence is compatible with GPL-2.0-or-later.
 
 ## Changes
 
+### Unreleased (0.4.0)
+
+- Breaking: the feature `image` uses `image` 0.25 (was 0.24). The re-export `dayzmake_core::image` changes with it. Only the image formats of the 0.24 default set are enabled (no AVIF).
+
 ### 0.3.1
 
 - New module `navmesh` (feature `navmesh`, on by default; it adds the dependency `safe_arch` on x86 and x86_64):
