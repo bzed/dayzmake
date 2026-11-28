@@ -212,6 +212,7 @@ fn mcp_stdout_is_pure_jsonrpc() {
 
 #[test]
 fn mcp_pbo_inspect_lists_an_odol_v56_model() {
+    #[cfg(test)]
     #[path = "../crates/dayzmake-core/tests/support/odol_builder.rs"]
     mod odol_builder;
     let tmp = tempfile::tempdir().expect("tmp");
@@ -266,6 +267,10 @@ fn mcp_missing_or_null_arguments_are_a_tool_error() {
     for reply in &r.replies {
         assert!(reply["error"].is_null(), "{reply}");
         assert!(is_error(reply), "{reply}");
+        assert!(
+            text(reply).contains("missing required argument \"path\""),
+            "{reply}"
+        );
     }
 }
 

@@ -1,5 +1,6 @@
 //! Reading a synthetic ODOL v56 model, and hostile variants of it.
 
+#[cfg(test)]
 #[path = "support/odol_builder.rs"]
 mod odol_builder;
 

@@ -535,7 +535,7 @@ fn included_readme_links_are_absolute() {
     let mut bad = Vec::new();
     for (start, end) in included_readme_ranges(&readme) {
         bad.extend(relative_link_targets(
-            readme.get(start..end).unwrap_or_default(),
+            readme.get(start..end).expect("README range in bounds"),
         ));
     }
     assert!(

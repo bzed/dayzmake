@@ -105,7 +105,7 @@ impl Out {
         self.0.len()
     }
     pub fn patch_u32(&mut self, at: usize, v: u32) {
-        self.0.splice(at..at + 4, v.to_le_bytes());
+        self.0[at..at + 4].copy_from_slice(&v.to_le_bytes());
     }
 
     /// A compressed array: the element count is written by the caller, this writes the bytes. They are LZO
