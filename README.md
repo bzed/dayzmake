@@ -26,6 +26,11 @@ Arma 3 targets are no longer the focus. This project maintains the DayZ-specific
 ## Changes
 <!-- ANCHOR: changes -->
 
+### Unreleased
+
+- `img2paa` and `paa2img` use `image` 0.25. The JPEG decoder is now `zune-jpeg`, and the decoding is not parallel.
+  The output for the same JPEG or WebP input can differ from the output of the earlier versions.
+
 ### 3.2.0
 
 With dayzmake-core 0.3.1.
@@ -536,9 +541,10 @@ so you can safely use it from many threads.
 cargo add dayzmake-core
 ```
 
-Features: `sign` (BI keys and signatures), `image` (PAA from and to images) and `navmesh` (the navmesh generator:
-the data-server client, the tile builder and the `.nm` reader and writer). All features are on by default.
-`default-features = false` builds without them. The
+Features: `sign` (BI keys and signatures), `image` (PAA from and to images), `navmesh` (the navmesh generator:
+the data-server client, the tile builder and the `.nm` reader and writer) and `navmesh-testing` (the fake data
+server and the synthetic world for tests). `sign`, `image` and `navmesh` are on by default; `navmesh-testing` is off by
+default. `default-features = false` builds without the default features. The
 [API documentation](https://docs.rs/dayzmake-core) has a complete example (key, PAA, pack, sign, verify).
 The licence is GPL-2.0-or-later, so GPLv3 and AGPLv3 projects can link it. `dayzmake-core` has its own version
 number, independent of the CLI.
