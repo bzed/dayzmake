@@ -372,7 +372,11 @@ fn answer(s: &mut TcpStream, shared: &Shared, fault: Fault, x: i32, z: i32) -> i
             }
         }
         Fault::WrongMessage => write_frame(s, 4, &[10, 0, 0, 0])?,
-        Fault::WrongTile => match find(x + 1, z).or_else(|| find(x, z)) {
+        Fault::WrongTile => match x
+            .checked_add(1)
+            .and_then(|next| find(next, z))
+            .or_else(|| find(x, z))
+        {
             Some(t) => write_frame(s, 5, &t.encode())?,
             None => return Ok(false),
         },
