@@ -41,20 +41,6 @@ fn generate_against_the_public_fake_server_builds_the_synthetic_world() {
     assert!(server.connections() >= 1);
 }
 
-#[test]
-fn fake_server_survives_a_garbage_client() {
-    let (params, tiles) = synthetic_world();
-    let server = FakeServer::start(params, tiles, Faults::none()).expect("start");
-    {
-        let mut stream = TcpStream::connect(server.addr()).expect("connect");
-        let mut frame = u32::MAX.to_le_bytes().to_vec();
-        frame.extend_from_slice(&3u32.to_le_bytes());
-        frame.extend_from_slice(&[0xde, 0xad, 0xbe]);
-        stream.write_all(&frame).expect("write");
-    }
-    generate_from(&server);
-}
-
 /// Connects with a read timeout, so a server that stops answering fails the test instead of hanging it.
 fn connect(server: &FakeServer) -> TcpStream {
     let stream = TcpStream::connect(server.addr()).expect("connect");
@@ -71,6 +57,48 @@ fn send(stream: &mut TcpStream, id: u32, payload: &[u8]) {
     frame.extend_from_slice(&id.to_le_bytes());
     frame.extend_from_slice(payload);
     stream.write_all(&frame).expect("write");
+}
+
+/// Sends a frame with a chosen length field, whatever the payload size.
+fn send_raw_length(stream: &mut TcpStream, len: u32, id: u32, payload: &[u8]) {
+    let mut frame = len.to_le_bytes().to_vec();
+    frame.extend_from_slice(&id.to_le_bytes());
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame).expect("write");
+}
+
+#[test]
+fn fake_server_survives_a_garbage_client() {
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start");
+    {
+        let mut stream = connect(&server);
+        // A length field of u32::MAX: the server must close the connection, not wait for 4 GiB.
+        send_raw_length(&mut stream, u32::MAX, 3, &[0xde, 0xad, 0xbe]);
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).expect("the server closes");
+        assert_eq!(rest, Vec::<u8>::new());
+    }
+    generate_from(&server);
+}
+
+#[test]
+fn fake_server_survives_a_short_tile_request() {
+    let (params, tiles) = synthetic_world();
+    let server = FakeServer::start(params, tiles, Faults::none()).expect("start");
+    {
+        let mut stream = connect(&server);
+        // Message 3 needs 8 payload bytes; this one has 3.
+        send(&mut stream, 3, &[1, 2, 3]);
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).expect("the server closes");
+        assert_eq!(rest, Vec::<u8>::new());
+    }
+    let mut stream = connect(&server);
+    send(&mut stream, 2, &[]);
+    let mut head = [0u8; 8];
+    stream.read_exact(&mut head).expect("reply");
+    assert_eq!(u32::from_le_bytes([head[4], head[5], head[6], head[7]]), 4);
 }
 
 #[test]
