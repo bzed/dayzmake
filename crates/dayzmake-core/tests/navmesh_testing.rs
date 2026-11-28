@@ -9,6 +9,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::time::Duration;
 
 use dayzmake_core::navmesh::client::Host;
 use dayzmake_core::navmesh::generate::{GenerateOptions, Progress, Source, generate};
@@ -54,6 +55,15 @@ fn fake_server_survives_a_garbage_client() {
     generate_from(&server);
 }
 
+/// Connects with a read timeout, so a server that stops answering fails the test instead of hanging it.
+fn connect(server: &FakeServer) -> TcpStream {
+    let stream = TcpStream::connect(server.addr()).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    stream
+}
+
 /// Sends one frame: `u32 length` (payload + 4), `u32 id`, payload.
 fn send(stream: &mut TcpStream, id: u32, payload: &[u8]) {
     let len = u32::try_from(payload.len() + 4).expect("small");
@@ -68,7 +78,7 @@ fn fake_server_survives_a_tile_request_at_the_edge_of_the_coordinate_range() {
     let (params, tiles) = synthetic_world();
     let server = FakeServer::start(params, tiles, Faults::always(Fault::WrongTile)).expect("start");
     {
-        let mut stream = TcpStream::connect(server.addr()).expect("connect");
+        let mut stream = connect(&server);
         let mut payload = i32::MAX.to_le_bytes().to_vec();
         payload.extend_from_slice(&0i32.to_le_bytes());
         send(&mut stream, 3, &payload);
@@ -78,7 +88,7 @@ fn fake_server_survives_a_tile_request_at_the_edge_of_the_coordinate_range() {
         assert_eq!(rest, Vec::<u8>::new());
     }
     // A new connection still gets the world parameters (message 4).
-    let mut stream = TcpStream::connect(server.addr()).expect("connect");
+    let mut stream = connect(&server);
     send(&mut stream, 2, &[]);
     let mut head = [0u8; 8];
     stream.read_exact(&mut head).expect("reply");
