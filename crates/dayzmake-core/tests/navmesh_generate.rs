@@ -99,7 +99,11 @@ fn opts() -> GenerateOptions {
 
 type Watched = (io::Result<GenerateReport>, Warnings, Vec<Progress>);
 
-/// Runs `generate` on its own thread and fails the test when it does not return within 20 s (600 s under coverage), so a
+/// Time limit for one `generate` call. It catches only a real hang, such as a deadlocked scheduler that never
+/// returns. Slow runners (the Windows release job, coverage builds) take minutes on a working build.
+const WATCHDOG: Duration = Duration::from_secs(600);
+
+/// Runs `generate` on its own thread and fails the test when it does not return within `WATCHDOG`, so a
 /// deadlock in the scheduler fails a test instead of hanging CI.
 fn generate_watched(source: Source, options: &GenerateOptions) -> Watched {
     let options = options.clone();
@@ -116,15 +120,7 @@ fn generate_watched(source: Source, options: &GenerateOptions) -> Watched {
         // The receiver is gone only when the test already failed.
         let _ = tx.send((result, warnings, seen));
     });
-    // Under `cargo llvm-cov` (it sets LLVM_PROFILE_FILE) a tile build is about 100 times slower, and the
-    // tests of this file run side by side: there the limit only has to catch a real hang.
-    let limit = if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
-        600
-    } else {
-        20
-    };
-    rx.recv_timeout(Duration::from_secs(limit))
-        .expect("generate hung")
+    rx.recv_timeout(WATCHDOG).expect("generate hung")
 }
 
 fn run(source: Source, options: &GenerateOptions) -> (GenerateReport, Warnings) {
